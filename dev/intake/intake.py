@@ -27,7 +27,7 @@ def validate(data, now):
         "version", "event_id", "occurred_at", "rsn", "source", "items"
     }:
         raise ValueError("invalid fields")
-    if type(data["version"]) is not int or data["version"] != 1:
+    if type(data["version"]) is not int or data["version"] not in (1, 2):
         raise ValueError("invalid version")
     if not isinstance(data["event_id"], str) or str(UUID(data["event_id"])) != data["event_id"]:
         raise ValueError("invalid event ID")
@@ -46,12 +46,15 @@ def validate(data, now):
         raise ValueError("invalid items")
     ids = set()
     for item in items:
-        if not isinstance(item, dict) or set(item) != {"item_id", "quantity"}:
+        expected = {"item_id", "quantity"} | ({"unit_price_gp"} if data["version"] == 2 else set())
+        if not isinstance(item, dict) or set(item) != expected:
             raise ValueError("invalid item fields")
         if type(item["item_id"]) is not int or not 1 <= item["item_id"] <= 1000000:
             raise ValueError("invalid item ID")
         if type(item["quantity"]) is not int or not 1 <= item["quantity"] <= 2147483647:
             raise ValueError("invalid quantity")
+        if data["version"] == 2 and (type(item["unit_price_gp"]) is not int or not 0 <= item["unit_price_gp"] <= 2147483647):
+            raise ValueError("invalid unit price")
         if item["item_id"] in ids:
             raise ValueError("duplicate item stack")
         ids.add(item["item_id"])

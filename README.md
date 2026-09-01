@@ -2,7 +2,7 @@
 
 RuneLite companion for Nocturne clan members and community event participants.
 
-## Development preview — 0.3.0
+## Development preview — 0.3.1
 
 The purple **N** sidebar shows compact loot cards: RuneLite item sprites,
 quantities, source, time and delivery status. Raid cards also show a locally
@@ -22,10 +22,11 @@ reveals them for local testing. Names are not presented as verified clan members
 ### Optional test submissions
 
 **Send drops to test intake** is off by default. When enabled, new drops send
-only your RSN, source, item IDs, quantities, timestamp and a random event UUID to
+only your RSN, source, item IDs, quantities, RuneLite unit prices, timestamp and a random event UUID to
 `https://nocturne.events/api/plugin/dev/drops`. The server also receives your IP
 address as part of the connection. No group names, credentials, screenshots,
-chat, membership data or points are sent. Item sprites come from RuneLite's
+chat, membership data or points are sent. The price is client-reported and does
+not prove a drop; Midgard remains responsible for scoring. Item sprites come from RuneLite's
 item cache; no image downloads are needed.
 
 The companion test service is in [dev/intake](dev/intake/README.md). Committing
@@ -129,7 +130,7 @@ git pull --ff-only
 ```
 
 Unit tests check bounded history, repeated drops, frozen rosters, missing names,
-late capture, solo evidence, retention, repeated raid rewards, payload privacy and
+late capture, solo evidence, retention, repeated raid rewards, captured prices, payload privacy and
 response acknowledgement. The isolated intake has its own Python tests. They cannot
 confirm RuneLite detects live game events or that the sidebar renders correctly.
 

@@ -232,7 +232,8 @@ public class NocturnePlugin extends Plugin
 			if (item.getQuantity() > 0)
 			{
 				String name = itemManager.getItemComposition(item.getId()).getName();
-				items.add(new LootItem(item.getId(), item.getQuantity(), name));
+				int unitPriceGp = itemManager.getItemPrice(item.getId());
+				items.add(new LootItem(item.getId(), item.getQuantity(), name, unitPriceGp));
 			}
 		}
 		if (items.isEmpty())

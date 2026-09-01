@@ -42,7 +42,7 @@ public interface NocturneConfig extends Config
 	@ConfigItem(
 		keyName = "submitTestDrops",
 		name = "Send drops to test intake",
-		description = "Send your RSN, loot source, item IDs, quantities and timestamps to nocturne.events. No group names. Test storage only; no points.",
+		description = "Send your RSN, loot source, item IDs, quantities, RuneLite prices and timestamps to nocturne.events. No group names. Test storage only; no points.",
 		warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
 		position = 3
 	)

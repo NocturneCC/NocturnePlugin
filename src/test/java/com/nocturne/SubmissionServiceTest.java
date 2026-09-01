@@ -19,7 +19,7 @@ public class SubmissionServiceTest
 {
 	private LootRecord record()
 	{
-		return new LootRecord("Simons Alt", "Man", List.of(new LootItem(526, 1, "Bones")),
+		return new LootRecord("Simons Alt", "Man", List.of(new LootItem(526, 1, "Bones", 32)),
 			new GroupSnapshot("Nearby", List.of("PrivateOtherPlayer"), 0, GroupSnapshot.Status.OBSERVED, ""));
 	}
 
@@ -29,10 +29,12 @@ public class SubmissionServiceTest
 		LootRecord record = record();
 		JsonObject body = SubmissionService.payload(record);
 		assertEquals(6, body.entrySet().size());
+		assertEquals(2, body.get("version").getAsInt());
 		assertEquals(record.id, body.get("event_id").getAsString());
 		assertFalse(body.toString().contains("PrivateOtherPlayer"));
 		assertFalse(body.toString().contains("Bones"));
 		assertEquals(526, body.getAsJsonArray("items").get(0).getAsJsonObject().get("item_id").getAsInt());
+		assertEquals(32, body.getAsJsonArray("items").get(0).getAsJsonObject().get("unit_price_gp").getAsInt());
 	}
 
 	@Test

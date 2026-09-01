@@ -50,10 +50,15 @@ class PreviewTest(unittest.TestCase):
         finally:
             db.close()
 
-    def add_event(self, source="Goblin", quantity=1, rsn="Simons Alt"):
+    def add_event(self, source="Goblin", quantity=1, rsn="Simons Alt", unit_price_gp=None):
         event_id = str(uuid4())
-        payload = dict(version=1, event_id=event_id, occurred_at=STAMP, rsn=rsn,
-                       source=source, items=[dict(item_id=526, quantity=quantity)])
+        item = dict(item_id=526, quantity=quantity)
+        version = 1
+        if unit_price_gp is not None:
+            version = 2
+            item["unit_price_gp"] = unit_price_gp
+        payload = dict(version=version, event_id=event_id, occurred_at=STAMP, rsn=rsn,
+                       source=source, items=[item])
         self.edit("test-drops.sqlite3", "INSERT INTO test_drops VALUES(?,?,?)", (event_id, NOW, json.dumps(payload)))
         return event_id
 
@@ -111,6 +116,22 @@ class PreviewTest(unittest.TestCase):
         self.assertEqual("needs_context", item["status"])
         self.assertIsNone(item["final_points"])
         self.assertFalse(item["would_insert"])
+
+    def test_v2_uses_captured_runelite_unit_price(self):
+        self.edit("Items.db", "UPDATE items SET latest_price=100, latest_price_checked_at=NULL")
+        self.event_id = self.add_event(quantity=3, unit_price_gp=600000)
+        item = self.item()
+        self.assertEqual("runelite_client", item["price"]["source"])
+        self.assertEqual("reported_at_capture", item["price"]["status"])
+        self.assertEqual(600000, item["price"]["unit_price_gp"])
+        self.assertEqual(3, item["base_points"])
+        self.assertEqual("needs_context", item["status"])
+
+    def test_v2_zero_price_remains_unavailable(self):
+        self.event_id = self.add_event(unit_price_gp=0)
+        item = self.item()
+        self.assertEqual("price_unavailable", item["status"])
+        self.assertIsNone(item["final_points"])
 
     def test_ambiguous_member_is_not_arbitrarily_selected(self):
         self.edit("Members.db", "INSERT INTO members VALUES(2,'Simons Alt','active')")

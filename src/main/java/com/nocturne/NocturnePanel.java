@@ -47,7 +47,7 @@ final class NocturnePanel extends PluginPanel
 		JLabel title = label("NOCTURNE", PURPLE);
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 21f));
 		header.add(title);
-		header.add(label("COMPANION  /  PREVIEW 0.3.0", MUTED));
+		header.add(label("COMPANION  /  PREVIEW 0.3.1", MUTED));
 		header.add(spacer());
 		header.add(label("CHARACTER", MUTED));
 		header.add(player);
@@ -171,8 +171,11 @@ final class NocturnePanel extends PluginPanel
 				icon.setPreferredSize(new Dimension(36, 32));
 				itemManager.getImage(item.id).addTo(icon);
 				row.add(icon, BorderLayout.WEST);
+				String price = item.unitPriceGp > 0
+					? "\n" + String.format(java.util.Locale.US, "%,d gp each", item.unitPriceGp)
+					: "\nPrice unavailable";
 				JTextArea text = note(item.quantity + " × " + item.name
-					+ (diagnostics ? " [" + item.id + "]" : ""), CARD);
+					+ (diagnostics ? " [" + item.id + "]" : "") + price, CARD);
 				text.setForeground(Color.WHITE);
 				row.add(text, BorderLayout.CENTER);
 				card.add(row);

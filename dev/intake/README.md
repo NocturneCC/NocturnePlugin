@@ -101,13 +101,20 @@ service retains its isolation from the live databases.
 
 The report checks current primary/active linked RSNs (not historical aliases),
 conflicting identities, catalogue item IDs, existing per-item external IDs, fixed
-reward catalogue entries, and market-price timestamps. Active member matching
-establishes eligibility only; it does not prove sender identity or drop legitimacy.
-A 24-hour maximum price age is the preview default and is configurable up to seven
-days. This is a freshness policy for the preview, not a rule supplied by the user.
-Prices reflect the current catalogue, not a historical price locked at drop time.
+reward catalogue entries, and prices. Active member matching establishes
+eligibility only; it does not prove sender identity or drop legitimacy.
 
-- `excluded_below_unit_threshold`: current unit price is under 500k; zero points.
+Version 2 reports carry RuneLite's unit price captured with the loot. The preview
+uses it for the 500k eligibility gate and ordinary base-point calculation. It is
+client-reported evidence, not an authenticated value or proof of a drop. A zero
+price is treated as unavailable and never becomes a zero-point award.
+
+Version 1 reports remain supported during rollout and use the existing catalogue
+price. The 24-hour maximum catalogue price age is configurable up to seven days.
+This fallback reflects the current catalogue, not a historical price locked at
+drop time.
+
+- `excluded_below_unit_threshold`: reported/fallback unit price is under 500k; zero points.
 - `price_stale`, `price_unavailable`, `price_timestamp_unavailable`: cannot safely
   value; not a zero-point result. Fix the price source before processing.
 - `needs_context`: ordinary base points can be calculated, but event eligibility,

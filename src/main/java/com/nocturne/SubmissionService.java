@@ -35,7 +35,7 @@ final class SubmissionService
 	static JsonObject payload(LootRecord record)
 	{
 		JsonObject body = new JsonObject();
-		body.addProperty("version", 1);
+		body.addProperty("version", 2);
 		body.addProperty("event_id", record.id);
 		body.addProperty("occurred_at", record.occurredAt);
 		body.addProperty("rsn", record.rsn);
@@ -46,6 +46,7 @@ final class SubmissionService
 			JsonObject entry = new JsonObject();
 			entry.addProperty("item_id", item.id);
 			entry.addProperty("quantity", item.quantity);
+			entry.addProperty("unit_price_gp", item.unitPriceGp);
 			items.add(entry);
 		}
 		body.add("items", items);

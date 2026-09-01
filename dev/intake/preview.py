@@ -103,9 +103,15 @@ def inspect_item(items_db, submissions_db, event_id, stack, member, now, max_age
         # and event applicability are not available in the current intake schema.
         result.update(status="fixed_reward_review", fixed_catalogue=[dict(row) for row in fixed], personal=True)
         return result
-    price = price_info(item, now, max_age_hours)
+    if "unit_price_gp" in stack:
+        unit_price = stack["unit_price_gp"]
+        price = {"unit_price_gp": unit_price, "source": "runelite_client",
+                 "status": "reported_at_capture" if unit_price > 0 else "price_unavailable"}
+    else:
+        # Legacy v1 reports never included a price; keep their original path.
+        price = dict(price_info(item, now, max_age_hours), source="legacy_item_database")
     result["price"] = price
-    if price["status"] != "current":
+    if price["status"] not in ("current", "reported_at_capture"):
         result["status"] = price["status"]
         return result
     base = ordinary_stack_base_points(price["unit_price_gp"], quantity)
@@ -131,6 +137,7 @@ def build_report(intake_path, database_dir, limit=10, max_age_hours=24, now=None
     root = Path(database_dir)
     result = {"mode": "read_only_preview", "max_price_age_hours": max_age_hours,
               "writes": 0, "automatic_awards_enabled": False,
+              "price_policy": "v2 uses client-reported unit price at capture; v1 uses catalogue price",
               "identity_note": "RSN matching establishes eligibility, not ownership or proof of a drop.",
               "events": []}
     with ExitStack() as stack:

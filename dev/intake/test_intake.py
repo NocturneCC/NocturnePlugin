@@ -16,10 +16,10 @@ class IntakeTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.now = datetime.now(timezone.utc).timestamp()
         self.app = create_app(self.temp.name, ["Simons Alt"], clock=lambda: self.now)
-        self.body = {"version": 1, "event_id": str(uuid4()),
+        self.body = {"version": 2, "event_id": str(uuid4()),
                      "occurred_at": datetime.fromtimestamp(self.now, timezone.utc).isoformat(),
                      "rsn": "Simons Alt", "source": "Man",
-                     "items": [{"item_id": 526, "quantity": 1}]}
+                     "items": [{"item_id": 526, "quantity": 1, "unit_price_gp": 32}]}
 
     def send(self, body=None, raw=None, **overrides):
         raw = raw if raw is not None else json.dumps(body or self.body).encode()
@@ -72,10 +72,25 @@ class IntakeTest(unittest.TestCase):
         self.assertEqual(404, self.send(PATH_INFO="/api/plugin/dev/drops/other")[0])
 
     def test_item_types_and_duplicates(self):
-        for items in [[], [{"item_id": True, "quantity": 1}], [{"item_id": 526, "quantity": 0}],
-                      [{"item_id": 526, "quantity": 1}] * 2]:
+        for items in [[], [{"item_id": True, "quantity": 1, "unit_price_gp": 1}],
+                      [{"item_id": 526, "quantity": 0, "unit_price_gp": 1}],
+                      [{"item_id": 526, "quantity": 1, "unit_price_gp": True}],
+                      [{"item_id": 526, "quantity": 1, "unit_price_gp": -1}],
+                      [{"item_id": 526, "quantity": 1, "unit_price_gp": 1}] * 2]:
             self.body["items"] = items
             self.assertEqual(400, self.send()[0])
+
+    def test_v1_remains_accepted_during_rollout(self):
+        self.body["version"] = 1
+        self.body["items"] = [{"item_id": 526, "quantity": 1}]
+        self.assertEqual(201, self.send()[0])
+
+    def test_price_field_must_match_payload_version(self):
+        self.body["items"] = [{"item_id": 526, "quantity": 1}]
+        self.assertEqual(400, self.send()[0])
+        self.body["version"] = 1
+        self.body["items"] = [{"item_id": 526, "quantity": 1, "unit_price_gp": 32}]
+        self.assertEqual(400, self.send()[0])
 
     def test_stale_and_future_timestamps_rejected(self):
         for delta in [-601, 121]:
