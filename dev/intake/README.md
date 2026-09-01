@@ -154,6 +154,27 @@ group/event context in the notes. Fixed pets, kits and jars use their personal
 catalogue points and the 200-point item cap. Low-value, unavailable-price,
 unmatched, ambiguous, legacy and already-imported reports remain intake-only.
 
+The automated service runs the importer once per minute as `randal`, the existing
+trusted owner used by Nocturne's database-writing API. Its systemd sandbox reads
+the private intake through a narrow ACL and permits SQLite journal writes in the
+database directory. The public web intake retains no access to live databases.
+
+Install it once from the checked-out development branch:
+
+```sh
+sudo python3 -B dev/intake/install_importer.py
+```
+
+The installer verifies the inspected paths, refuses to overwrite an existing
+unit, grants only `randal` read access to the private intake, runs a non-writing
+candidate preview as that account, verifies both units, and enables the timer.
+Any failure before completion removes the new units and ACL entries.
+
+Because `RegularSubmissions.db` is about 1.5 GB, timer runs use `--no-backup` for
+these reversible pending inserts. SQLite still protects each batch with an
+immediate transaction and its normal rollback journal. Manual `--apply` keeps
+the full SQLite backup unless the restricted service explicitly disables it.
+
 The preview accepts timezone-qualified ISO timestamps and the existing API's
 SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`), interpreted as UTC
 according to [SQLite's specification](https://www.sqlite.org/lang_createtable.html#the_default_clause).

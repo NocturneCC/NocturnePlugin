@@ -110,13 +110,14 @@ def backup_database(database):
     return destination
 
 
-def apply_candidates(database, candidates):
+def apply_candidates(database, candidates, backup=True):
     missing = REQUIRED_COLUMNS - schema_columns(database)
     if missing:
         raise ValueError("regular_submissions schema missing: " + ", ".join(sorted(missing)))
     if not candidates:
-        return {"inserted": 0, "duplicates": 0, "backup": None}
-    backup = backup_database(database)
+        return {"inserted": 0, "duplicates": 0, "backup": None,
+                "backup_policy": "not_needed_no_candidates"}
+    backup_path = backup_database(database) if backup else None
     columns = [
         "member_id", "rsn", "normalized_rsn", "discord_id", "item_id",
         "osrs_item_id", "item_name", "normalized_item_name", "item_price",
@@ -143,10 +144,12 @@ def apply_candidates(database, candidates):
         raise
     finally:
         db.close()
-    return {"inserted": inserted, "duplicates": duplicates, "backup": str(backup)}
+    return {"inserted": inserted, "duplicates": duplicates,
+            "backup": str(backup_path) if backup_path else None,
+            "backup_policy": "sqlite_backup" if backup else "disabled_for_pending_service"}
 
 
-def run(intake, database_dir, limit, apply=False):
+def run(intake, database_dir, limit, apply=False, backup=True):
     root = Path(database_dir)
     missing = REQUIRED_COLUMNS - schema_columns(root / "RegularSubmissions.db")
     if missing:
@@ -162,7 +165,7 @@ def run(intake, database_dir, limit, apply=False):
         "candidates": candidates,
     }
     if apply:
-        result.update(apply_candidates(root / "RegularSubmissions.db", candidates))
+        result.update(apply_candidates(root / "RegularSubmissions.db", candidates, backup=backup))
     return result
 
 
@@ -172,9 +175,14 @@ def main():
     parser.add_argument("--database-dir", default="/srv/projects/database")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--no-backup", action="store_true",
+                        help="Skip the large SQLite copy; intended only for the restricted pending-row service")
     args = parser.parse_args()
     try:
-        result = run(args.intake_db, args.database_dir, args.limit, args.apply)
+        if args.no_backup and not args.apply:
+            raise ValueError("--no-backup requires --apply")
+        result = run(args.intake_db, args.database_dir, args.limit,
+                     args.apply, backup=not args.no_backup)
     except (OSError, sqlite3.Error, ValueError) as error:
         raise SystemExit(f"Pending import stopped: {error}")
     print(json.dumps(result, indent=2))

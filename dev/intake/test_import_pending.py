@@ -123,6 +123,14 @@ class PendingImportTest(unittest.TestCase):
         self.assertIsNone(result["backup"])
         self.assertEqual([], self.rows("regular_submissions"))
 
+    def test_restricted_service_mode_skips_large_backup(self):
+        self.event(20997, 1_500_000)
+        result = run(self.intake, self.root, 50, apply=True, backup=False)
+        self.assertEqual(1, result["inserted"])
+        self.assertIsNone(result["backup"])
+        self.assertEqual("disabled_for_pending_service", result["backup_policy"])
+        self.assertFalse((self.root / "backups").exists())
+
     def test_fixed_reward_is_personal_and_capped(self):
         self.event(999, 1)
         result = self.execute()
