@@ -7,3 +7,7 @@ build
 nbactions.xml
 nb-configuration.xml
 nbproject/
+out/
+*.class
+.tmp/
+credentials.properties
