@@ -184,7 +184,8 @@ sudo python3 -B dev/intake/install_writer.py
 ```
 
 The installer first runs a read-only schema check as `randal`. It backs up the
-installed unit files under `/etc/nocturne-plugin-backups/unix-writer`, disables
+installed unit files under a unique `/etc/nocturne-plugin-backups/unix-writer-*`
+directory, disables
 and removes the obsolete timer units, verifies both replacement services, starts
 the writer, waits for its socket, then hardens and restarts the public intake.
 Any failure restores the previous intake and obsolete unit files. It does not

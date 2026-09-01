@@ -60,6 +60,9 @@ InaccessiblePaths=/srv/projects/database
         self.assertTrue(any(command.startswith("runuser -u randal") for command in flat))
         self.assertIn("systemctl enable --now nocturne-plugin-writer.service", flat)
         self.assertIn("systemctl restart nocturne-plugin-dev.service", flat)
+        verify = next(command for command in self.commands if command[0] == "systemd-analyze")
+        self.assertEqual("nocturne-plugin-dev.service", Path(verify[2]).name)
+        self.assertEqual("staging", Path(verify[2]).parent.name)
 
     def test_start_failure_restores_original_units(self):
         def failing(args):

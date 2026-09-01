@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+from uuid import uuid4
 
 
 OBSOLETE_UNITS = ("nocturne-plugin-import.service", "nocturne-plugin-import.timer")
@@ -51,10 +52,13 @@ def baseline_intake(hardened):
 def install(project=Path("/srv/projects/nocturne-plugin-intake"),
             systemd=Path("/etc/systemd/system"),
             database=Path("/srv/projects/database"),
-            backup=Path("/etc/nocturne-plugin-backups/unix-writer"),
+            backup=None,
             socket_path=Path("/run/nocturne-plugin-writer/pending.sock"),
             run=command, wait_for_socket=wait_socket):
     project, systemd, database = Path(project), Path(systemd), Path(database)
+    if backup is None:
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        backup = Path("/etc/nocturne-plugin-backups") / f"unix-writer-{stamp}-{uuid4().hex[:8]}"
     backup, socket_path = Path(backup), Path(socket_path)
     sources = project / "dev/intake"
     intake_unit = systemd / "nocturne-plugin-dev.service"
@@ -91,7 +95,10 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
         if old.exists():
             shutil.copy2(old, backup / name)
 
-    staged_intake = systemd / ".nocturne-plugin-dev.service.writer-staged"
+    staging = backup / "staging"
+    staging.mkdir(mode=0o700)
+    # systemd-analyze requires the basename itself to be a valid unit name.
+    staged_intake = staging / "nocturne-plugin-dev.service"
     created_writer = replaced_intake = False
     try:
         run(["systemctl", "disable", "--now", "nocturne-plugin-import.timer"])
@@ -105,6 +112,7 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
         staged_intake.chmod(0o644)
         run(["systemd-analyze", "verify", str(staged_intake), str(writer_unit)])
         os.replace(staged_intake, intake_unit)
+        staging.rmdir()
         replaced_intake = True
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", "--now", writer_unit.name])
@@ -120,6 +128,10 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
         if created_writer:
             writer_unit.unlink(missing_ok=True)
         staged_intake.unlink(missing_ok=True)
+        try:
+            staging.rmdir()
+        except OSError:
+            pass
         if replaced_intake:
             shutil.copy2(backup / intake_unit.name, intake_unit)
         for name in OBSOLETE_UNITS:
@@ -133,6 +145,7 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
             pass
         raise
     print("Pending writer installed and active.")
+    print(f"Previous units backed up under {backup}.")
     print("The public intake is blocked from /srv/projects/database.")
     print("Eligible reports create pending rows only; rank totals remain unchanged.")
 
