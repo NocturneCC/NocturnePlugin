@@ -84,3 +84,45 @@ records. Stop this separate service/remove its nginx location to retire the test
 See [SCORING.md](SCORING.md) for the confirmed rules and unresolved allocation
 details. The pure `scoring.py` module is tested but is not connected to this API
 or the live submission databases.
+
+## Read-only processing preview
+
+After actual game loot appears in the test intake, run this separately on Midgard:
+
+```sh
+sudo python3 -B dev/intake/preview.py --limit 10
+```
+
+This opens the intake, Members.db, Items.db and RegularSubmissions.db with
+SQLite `mode=ro` and `query_only=ON`. It does not change service permissions,
+make network requests, create missing databases, insert submissions, or update
+points. Run it with `-B` to suppress Python bytecode writes. The public intake
+service retains its isolation from the live databases.
+
+The report checks current primary/active linked RSNs (not historical aliases),
+conflicting identities, catalogue item IDs, existing per-item external IDs, fixed
+reward catalogue entries, and market-price timestamps. Active member matching
+establishes eligibility only; it does not prove sender identity or drop legitimacy.
+A 24-hour maximum price age is the preview default and is configurable up to seven
+days. This is a freshness policy for the preview, not a rule supplied by the user.
+Prices reflect the current catalogue, not a historical price locked at drop time.
+
+- `excluded_below_unit_threshold`: current unit price is under 500k; zero points.
+- `price_stale`, `price_unavailable`, `price_timestamp_unavailable`: cannot safely
+  value; not a zero-point result. Fix the price source before processing.
+- `needs_context`: ordinary base points can be calculated, but event eligibility,
+  group/recipient evidence, manual duplicate checks and an award trust policy
+  remain unresolved. No final multiplier or award is invented.
+- `identity_review`: an otherwise eligible item has an unmatched/inactive/ambiguous
+  identity; do not map historical aliases or take the first conflicting match.
+- `already_imported`: the proposed per-item external ID already exists.
+- `fixed_reward_review`: catalogue reward remains personal; do not use GP prices
+  without resolving capture type and fixed-reward event applicability.
+- `item_unknown` / `item_inactive`: catalogue lookup needs attention.
+- `synthetic_test_excluded`: setup records are omitted from scoring analysis.
+
+`would_insert` stays false in this first preview. It is diagnostic only; it does
+not claim high-value drops are ready for automatic awards. Current website
+submission pages do not read the test-intake database, so even a stored receipt
+is not a website submission. Eventually excluded low-value loot should remain
+intake-only, while qualified awards enter the existing submission workflow.
