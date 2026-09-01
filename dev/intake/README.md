@@ -134,6 +134,26 @@ submission pages do not read the test-intake database, so even a stored receipt
 is not a website submission. Eventually excluded low-value loot should remain
 intake-only, while qualified awards enter the existing submission workflow.
 
+### Pending-submission importer
+
+`import_pending.py` bridges eligible version 2 reports into the existing
+`RegularSubmissions.db` review workflow. It previews by default:
+
+```sh
+sudo python3 -B dev/intake/import_pending.py --limit 50
+```
+
+Use `--apply` only after reviewing the candidate list. Apply mode verifies the
+live table shape, backs up `RegularSubmissions.db`, opens one immediate
+transaction, checks each `runelite:<event UUID>:<item ID>` external ID, and
+inserts new rows with `status=pending` and `source_type=runelite`.
+
+It never updates `rank_totals`, approves a submission, or turns a client report
+into verified evidence. Ordinary candidates store a 1x proposal with unresolved
+group/event context in the notes. Fixed pets, kits and jars use their personal
+catalogue points and the 200-point item cap. Low-value, unavailable-price,
+unmatched, ambiguous, legacy and already-imported reports remain intake-only.
+
 The preview accepts timezone-qualified ISO timestamps and the existing API's
 SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`), interpreted as UTC
 according to [SQLite's specification](https://www.sqlite.org/lang_createtable.html#the_default_clause).

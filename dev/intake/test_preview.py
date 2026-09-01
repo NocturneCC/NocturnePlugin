@@ -20,10 +20,10 @@ class PreviewTest(unittest.TestCase):
         self.intake = self.root / "test-drops.sqlite3"
         self.create(self.intake, "CREATE TABLE test_drops(event_id TEXT PRIMARY KEY, received_at REAL, payload TEXT)")
         self.create(self.root / "Members.db", """
-            CREATE TABLE members(member_id INTEGER, rsn TEXT, status TEXT);
+            CREATE TABLE members(member_id INTEGER, rsn TEXT, discord_id TEXT, status TEXT);
             CREATE TABLE member_accounts(member_id INTEGER, rsn TEXT, is_active INTEGER);
             CREATE TABLE member_aliases(member_id INTEGER, alias_rsn TEXT);
-            INSERT INTO members VALUES(1,'Main Account','active');
+            INSERT INTO members VALUES(1,'Main Account','123','active');
             INSERT INTO member_accounts VALUES(1,'Simons Alt',1);
         """)
         self.create(self.root / "Items.db", """
@@ -134,7 +134,7 @@ class PreviewTest(unittest.TestCase):
         self.assertIsNone(item["final_points"])
 
     def test_ambiguous_member_is_not_arbitrarily_selected(self):
-        self.edit("Members.db", "INSERT INTO members VALUES(2,'Simons Alt','active')")
+        self.edit("Members.db", "INSERT INTO members VALUES(2,'Simons Alt','456','active')")
         self.edit("Items.db", "UPDATE items SET latest_price=600000")
         self.assertEqual("ambiguous", self.report()["events"][0]["member"]["status"])
         self.assertEqual("identity_review", self.item()["status"])

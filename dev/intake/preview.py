@@ -34,10 +34,12 @@ def normalize(value):
 
 def identity(db, rsn):
     rows = db.execute("""
-        SELECT member_id, rsn AS primary_rsn, status, 1 AS account_active, 'primary' AS method
+        SELECT member_id, rsn AS primary_rsn, discord_id, status,
+               1 AS account_active, 'primary' AS method
         FROM members WHERE norm_rsn(rsn)=?
         UNION ALL
-        SELECT m.member_id, m.rsn, m.status, a.is_active, 'linked_account'
+        SELECT m.member_id, m.rsn, m.discord_id, m.status,
+               a.is_active, 'linked_account'
         FROM member_accounts a JOIN members m ON m.member_id=a.member_id
         WHERE norm_rsn(a.rsn)=?
     """, (normalize(rsn), normalize(rsn))).fetchall()
@@ -51,7 +53,8 @@ def identity(db, rsn):
         return {"status": "inactive", "member_id": next(iter(ids))}
     row = active[0]
     return {"status": "matched", "member_id": row["member_id"],
-            "primary_rsn": row["primary_rsn"], "method": row["method"]}
+            "primary_rsn": row["primary_rsn"], "discord_id": row["discord_id"],
+            "method": row["method"]}
 
 
 def price_info(item, now, max_age_hours):
@@ -92,6 +95,8 @@ def inspect_item(items_db, submissions_db, event_id, stack, member, now, max_age
         result["status"] = "item_unknown"
         return result
     result["item_name"] = item["item_name"]
+    result["catalogue_item_id"] = item["item_id"]
+    result["normalized_item_name"] = item["normalized_item_name"]
     if item["is_active"] != 1:
         result["status"] = "item_inactive"
         return result
@@ -157,7 +162,8 @@ def build_report(intake_path, database_dir, limit=10, max_age_hours=24, now=None
             except (ValueError, TypeError, AttributeError, OverflowError, RecursionError):
                 event["status"] = "invalid_record"
                 continue
-            event.update(rsn=data["rsn"], source=data["source"], occurred_at=data["occurred_at"])
+            event.update(payload_version=data["version"], rsn=data["rsn"],
+                         source=data["source"], occurred_at=data["occurred_at"])
             if data["source"].startswith("Synthetic "):
                 event["status"] = "synthetic_test_excluded"
                 continue
