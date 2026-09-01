@@ -35,11 +35,11 @@ def normalize(value):
 def identity(db, rsn):
     rows = db.execute("""
         SELECT member_id, rsn AS primary_rsn, discord_id, status,
-               1 AS account_active, 'primary' AS method
+               1 AS account_active, 'primary' AS method, rsn AS matched_rsn
         FROM members WHERE norm_rsn(rsn)=?
         UNION ALL
         SELECT m.member_id, m.rsn, m.discord_id, m.status,
-               a.is_active, 'linked_account'
+               a.is_active, 'linked_account', a.rsn
         FROM member_accounts a JOIN members m ON m.member_id=a.member_id
         WHERE norm_rsn(a.rsn)=?
     """, (normalize(rsn), normalize(rsn))).fetchall()
@@ -54,7 +54,7 @@ def identity(db, rsn):
     row = active[0]
     return {"status": "matched", "member_id": row["member_id"],
             "primary_rsn": row["primary_rsn"], "discord_id": row["discord_id"],
-            "method": row["method"]}
+            "method": row["method"], "matched_rsn": row["matched_rsn"]}
 
 
 def price_info(item, now, max_age_hours):

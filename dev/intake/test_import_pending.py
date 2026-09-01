@@ -106,6 +106,7 @@ class PendingImportTest(unittest.TestCase):
         self.assertEqual(f"runelite:{event_id}:20997", row["external_id"])
         self.assertEqual((2, "test_alt", "123456789012345678"),
                          (row["member_id"], row["normalized_rsn"], row["discord_id"]))
+        self.assertEqual("Test Alt", row["rsn"])
         self.assertEqual((2, 1.0, 2, "pending", "runelite"),
                          (row["base_points"], row["multiplier"], row["final_points"],
                           row["status"], row["source_type"]))

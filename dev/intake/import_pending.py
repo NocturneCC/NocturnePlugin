@@ -32,11 +32,12 @@ def candidate(event, item):
                     and isinstance(fixed, list) and len(fixed) == 1)
     if not ordinary and not fixed_reward:
         return None
+    matched_rsn = event["member"].get("matched_rsn") or event["rsn"]
     common = {
         "external_id": item["external_id"],
         "member_id": event["member"]["member_id"],
-        "rsn": event["rsn"],
-        "normalized_rsn": normalize(event["rsn"]),
+        "rsn": matched_rsn,
+        "normalized_rsn": normalize(matched_rsn),
         "discord_id": event["member"].get("discord_id"),
         "item_id": item["catalogue_item_id"],
         "osrs_item_id": item["osrs_item_id"],

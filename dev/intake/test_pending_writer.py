@@ -84,8 +84,8 @@ class PendingWriterTest(unittest.TestCase):
         second = process_payload(payload, self.root, NOW.timestamp())
         self.assertEqual(("pending_stored", 1), (first["status"], first["inserted"]))
         self.assertEqual("duplicate", second["status"])
-        row = self.rows("SELECT status,source_type,final_points FROM regular_submissions")[0]
-        self.assertEqual(("pending", "runelite", 2), row)
+        row = self.rows("SELECT rsn,status,source_type,final_points FROM regular_submissions")[0]
+        self.assertEqual(("Test Alt", "pending", "runelite", 2), row)
         self.assertEqual([(77,)], self.rows("SELECT total_points FROM rank_totals"))
 
     def test_low_value_and_legacy_reports_are_excluded(self):
