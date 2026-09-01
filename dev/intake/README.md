@@ -62,3 +62,9 @@ Turn the plugin submission toggle off to stop new requests. Cancelling a request
 cannot undo storage that already happened. No automatic retries or disk queue
 are included in this preview. Clearing the client history does not delete server
 records. Stop this separate service/remove its nginx location to retire the test.
+
+## Scoring preparation
+
+See [SCORING.md](SCORING.md) for the confirmed rules and unresolved allocation
+details. The pure `scoring.py` module is tested but is not connected to this API
+or the live submission databases.
