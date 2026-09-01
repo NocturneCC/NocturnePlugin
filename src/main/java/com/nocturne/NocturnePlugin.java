@@ -2,6 +2,7 @@ package com.nocturne;
 
 import com.google.inject.Provides;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
 import javax.inject.Inject;
@@ -10,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
@@ -21,13 +24,15 @@ import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.loottracker.LootReceived;
+import net.runelite.http.api.loottracker.LootRecordType;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 
 @Slf4j
 @PluginDescriptor(
 	name = "Nocturne",
-	description = "View your character and locally detected NPC loot",
+	description = "View loot and locally captured raid groups",
 	tags = {"nocturne", "clan", "loot"}
 )
 public class NocturnePlugin extends Plugin
@@ -49,6 +54,7 @@ public class NocturnePlugin extends Plugin
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
+	private volatile GroupTracker groups;
 	// Panel and navigation are accessed only on Swing's event dispatch thread.
 	private NocturnePanel panel;
 	private NavigationButton navigation;
@@ -58,6 +64,7 @@ public class NocturnePlugin extends Plugin
 	{
 		Object token = new Object();
 		lifecycle = token;
+		groups = new GroupTracker(client);
 		SwingUtilities.invokeLater(() ->
 		{
 			if (lifecycle != token)
@@ -88,6 +95,7 @@ public class NocturnePlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = null;
+		groups = null;
 		SwingUtilities.invokeLater(() ->
 		{
 			if (navigation != null)
@@ -104,6 +112,13 @@ public class NocturnePlugin extends Plugin
 	public void onGameTick(GameTick event)
 	{
 		updatePlayer();
+		GroupTracker tracker = groups;
+		if (tracker != null && config.captureGroups())
+		{
+			tracker.onTick();
+			GroupSnapshot snapshot = tracker.current();
+			withPanel(view -> view.setGroup(snapshot));
+		}
 	}
 
 	@Subscribe
@@ -111,7 +126,13 @@ public class NocturnePlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
+			if (groups != null) groups.reset();
 			withPanel(view -> view.setPlayer(null));
+		}
+		else if (event.getGameState() == GameState.HOPPING)
+		{
+			if (groups != null) groups.reset();
+			withPanel(view -> view.setGroup(GroupSnapshot.unavailable("World changed; group capture reset.")));
 		}
 		else if (event.getGameState() == GameState.LOGGED_IN)
 		{
@@ -126,31 +147,64 @@ public class NocturnePlugin extends Plugin
 		{
 			boolean enabled = config.trackNpcLoot();
 			withPanel(view -> view.setTracking(enabled));
+			if ("captureGroups".equals(event.getKey()))
+			{
+				GroupTracker tracker = groups;
+				clientThread.invoke(() ->
+				{
+					if (tracker != null && groups == tracker) tracker.reset();
+				});
+				withPanel(view -> view.setGroup(GroupSnapshot.unavailable(
+					config.captureGroups() ? "Waiting for group capture." : "Group capture is off.")));
+			}
 		}
 	}
 
 	@Subscribe
 	public void onNpcLootReceived(NpcLootReceived event)
 	{
+		String source = event.getNpc() == null ? null : event.getNpc().getName();
+		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), false);
+	}
+
+	@Subscribe
+	public void onLootReceived(LootReceived event)
+	{
+		// Raid reward interfaces use LootReceived rather than an NPC death.
+		// Do not also accept generic NPC events here: that would duplicate the listener above.
+		if (event.getType() == LootRecordType.EVENT && RaidType.fromSource(event.getName()) != null)
+		{
+			recordLoot(event.getName(), event.getItems(), true);
+		}
+	}
+
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		GroupTracker tracker = groups;
+		if (tracker != null && config.captureGroups()
+			&& (event.getType() == ChatMessageType.GAMEMESSAGE || event.getType() == ChatMessageType.FRIENDSCHATNOTIFICATION))
+		{
+			tracker.onGameMessage(event.getMessage());
+		}
+	}
+
+	private void recordLoot(String source, Collection<ItemStack> stacks, boolean raidReward)
+	{
 		if (!config.trackNpcLoot() || client.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
 		}
 		Player player = client.getLocalPlayer();
-		if (player == null || player.getName() == null || event.getItems().isEmpty())
+		if (player == null || player.getName() == null || stacks.isEmpty())
 		{
 			return;
 		}
 
 		// Copy game data on the client thread; never pass NPC or Player objects to Swing.
 		String rsn = player.getName();
-		String source = event.getNpc() == null ? null : event.getNpc().getName();
-		if (source == null || source.isEmpty())
-		{
-			source = "Unknown NPC";
-		}
 		List<String> items = new ArrayList<>();
-		for (ItemStack item : event.getItems())
+		for (ItemStack item : stacks)
 		{
 			if (item.getQuantity() > 0)
 			{
@@ -162,9 +216,16 @@ public class NocturnePlugin extends Plugin
 		{
 			return;
 		}
-		LootRecord record = new LootRecord(rsn, source, items);
+		GroupTracker tracker = groups;
+		GroupSnapshot group = GroupSnapshot.unavailable("Group capture is off.");
+		if (tracker != null && config.captureGroups())
+		{
+			if (raidReward && !tracker.acceptRaidReward(source, items)) return;
+			group = tracker.forLoot(source);
+		}
+		LootRecord record = new LootRecord(rsn, source, items, group);
 		withPanel(view -> view.recordLoot(record));
-		log.debug("Nocturne detected NPC loot: {} from {}, {} item stacks", rsn, source, items.size());
+		log.debug("Nocturne detected loot: {} from {}, {} item stacks", rsn, source, items.size());
 	}
 
 	private void updatePlayer()

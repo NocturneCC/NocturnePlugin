@@ -28,6 +28,7 @@ final class NocturnePanel extends PluginPanel
 	private final JLabel tracking = label("NPC loot tracking enabled", PURPLE);
 	private final JLabel count = label("0 loot events", MUTED);
 	private final JPanel feed = new JPanel();
+	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 
 	NocturnePanel()
 	{
@@ -39,7 +40,7 @@ final class NocturnePanel extends PluginPanel
 		JLabel title = label("NOCTURNE", PURPLE);
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 21f));
 		header.add(title);
-		header.add(label("COMPANION  /  LOCAL PREVIEW", MUTED));
+		header.add(label("COMPANION  /  PREVIEW 0.2.0", MUTED));
 		header.add(spacer());
 		header.add(label("CHARACTER", MUTED));
 		header.add(player);
@@ -47,7 +48,10 @@ final class NocturnePanel extends PluginPanel
 		header.add(tracking);
 		header.add(note("Drops stay in this client. Backend connection comes later.", BACKGROUND));
 		header.add(spacer());
-		header.add(label("RECENT NPC LOOT", PURPLE));
+		header.add(label("RAID GROUP", PURPLE));
+		header.add(groupPreview);
+		header.add(spacer());
+		header.add(label("RECENT LOOT", PURPLE));
 		header.add(count);
 		add(header, BorderLayout.NORTH);
 
@@ -76,14 +80,25 @@ final class NocturnePanel extends PluginPanel
 		if (history.setPlayer(rsn))
 		{
 			player.setText(rsn == null ? "Log in to see your character" : rsn);
+			groupPreview.setText("Enter a raid to preview its roster.");
 			renderHistory();
 		}
 	}
 
 	void setTracking(boolean enabled)
 	{
-		tracking.setText(enabled ? "NPC loot tracking enabled" : "NPC loot tracking paused");
+		tracking.setText(enabled ? "Loot tracking enabled" : "Loot tracking paused");
 		tracking.setForeground(enabled ? PURPLE : MUTED);
+	}
+
+	void setGroup(GroupSnapshot group)
+	{
+		String text = group.displayText();
+		if (!text.equals(groupPreview.getText()))
+		{
+			groupPreview.setText(text);
+			revalidate();
+		}
 	}
 
 	void recordLoot(LootRecord record)
@@ -112,6 +127,7 @@ final class NocturnePanel extends PluginPanel
 			JTextArea items = note(String.join("\n", record.items), CARD);
 			items.setForeground(Color.WHITE);
 			card.add(items);
+			card.add(note(record.group.displayText(), CARD));
 			feed.add(card);
 		}
 		feed.revalidate();
