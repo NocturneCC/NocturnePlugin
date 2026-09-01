@@ -4,7 +4,7 @@ import io
 import tempfile
 import unittest
 
-from install_importer import IMPORT_USER, install
+from install_importer import IMPORT_USER, install, wait_active
 
 
 class ImporterInstallTest(unittest.TestCase):
@@ -74,6 +74,17 @@ class ImporterInstallTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.invoke()
         self.assertEqual([], self.commands)
+
+    def test_active_check_retries_transient_systemd_state(self):
+        attempts = []
+
+        def transient(args):
+            attempts.append(args)
+            if len(attempts) < 3:
+                raise RuntimeError("activating")
+
+        wait_active("example.service", run=transient, attempts=3, delay=0)
+        self.assertEqual(3, len(attempts))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 
 IMPORT_USER = "randal"
@@ -16,6 +17,18 @@ def command(args):
     result = subprocess.run(args, timeout=30)
     if result.returncode:
         raise RuntimeError("Command failed: " + " ".join(args))
+
+
+def wait_active(unit, run=command, attempts=20, delay=0.25):
+    last_error = None
+    for _ in range(attempts):
+        try:
+            run(["systemctl", "is-active", "--quiet", unit])
+            return
+        except RuntimeError as error:
+            last_error = error
+            time.sleep(delay)
+    raise RuntimeError(f"{unit} did not become active") from last_error
 
 
 def require_inspected_paths(project, systemd, state_link, database):
@@ -92,12 +105,12 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
         intake_hardened = True
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "restart", intake_service.name])
-        run(["systemctl", "is-active", "--quiet", intake_service.name])
+        wait_active(intake_service.name, run=run)
         run(["runuser", "-u", IMPORT_USER, "--",
              str(project / ".venv/bin/python"), "-B",
              str(project / "dev/intake/import_pending.py"), "--limit", "50"])
         run(["systemctl", "enable", "--now", timer.name])
-        run(["systemctl", "is-active", "--quiet", timer.name])
+        wait_active(timer.name, run=run)
     except BaseException:
         if created_timer:
             try:
