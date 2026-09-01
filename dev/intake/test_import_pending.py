@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -61,8 +62,9 @@ class PendingImportTest(unittest.TestCase):
 
     @staticmethod
     def create(path, sql):
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             db.executescript(sql)
+            db.commit()
 
     def event(self, item_id, price, quantity=1):
         event_id = str(uuid4())
@@ -71,16 +73,17 @@ class PendingImportTest(unittest.TestCase):
             "rsn": "Test Alt", "source": "Test source",
             "items": [{"item_id": item_id, "quantity": quantity, "unit_price_gp": price}],
         }
-        with sqlite3.connect(self.intake) as db:
+        with closing(sqlite3.connect(self.intake)) as db:
             db.execute("INSERT INTO test_drops VALUES(?,?,?)",
                        (event_id, NOW.timestamp(), json.dumps(payload)))
+            db.commit()
         return event_id
 
     def execute(self, apply=False):
         return run(self.intake, self.root, 50, apply=apply)
 
     def rows(self, table):
-        with sqlite3.connect(self.root / "RegularSubmissions.db") as db:
+        with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute(f"SELECT * FROM {table}")]
 
@@ -130,8 +133,9 @@ class PendingImportTest(unittest.TestCase):
 
     def test_schema_mismatch_stops_before_backup_or_write(self):
         self.event(20997, 1_500_000)
-        with sqlite3.connect(self.root / "RegularSubmissions.db") as db:
+        with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
             db.execute("ALTER TABLE regular_submissions RENAME TO unexpected")
+            db.commit()
         with self.assertRaises(ValueError):
             self.execute(apply=True)
         self.assertFalse((self.root / "backups").exists())
