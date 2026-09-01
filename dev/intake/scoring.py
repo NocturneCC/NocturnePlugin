@@ -2,7 +2,7 @@
 
 Not connected to the intake or live databases. Inputs must be resolved server-side.
 This module does not authenticate reports, establish eligibility, value items,
-or decide who participated. Fractional points must not be cast to integers.
+or decide who participated. Preserve exact intermediate shares until award rounding.
 """
 from enum import Enum
 from fractions import Fraction
@@ -35,7 +35,7 @@ def fixed_base_points(catalogue_points):
     """Use a resolved pet/kit/jar catalogue value, never a GP estimate.
 
     A missing catalogue entry is unresolved, not a zero-point result.
-    Ownership, sharing and applicability of bonuses for these awards are separate.
+    These rewards are personal; event bonus applicability is a separate policy.
     """
     return nonnegative_int(catalogue_points, "catalogue_points")
 
@@ -87,13 +87,17 @@ PER_PLAYER_ITEM_CAP = 200
 
 
 def capped_recipient_share(pool, recipient_count):
-    """Confirmed cap order: split the multiplied item pool, then cap each recipient.
+    """Split, round half-up with a one-point minimum, then cap per recipient.
 
-    Simon confirmed the cap applies to each final recipient award. This does not
-    round fractional shares. Apply independently for each item award, not to the
-    sum of a player's unrelated drops. Never use this group helper for fixed awards.
+    A zero pool stays zero. The pity point applies only to a positive qualifying
+    award. Rounding can make the sum of awards exceed the unrounded item pool.
+    Apply independently for each item award; never share fixed pet/kit/jar awards.
     """
-    return min(exact_share(pool, recipient_count), Fraction(PER_PLAYER_ITEM_CAP))
+    share = exact_share(pool, recipient_count)
+    if share == 0:
+        return 0
+    rounded = (2 * share.numerator + share.denominator) // (2 * share.denominator)
+    return min(max(1, rounded), PER_PLAYER_ITEM_CAP)
 
 
 def fixed_recipient_award(catalogue_points):
@@ -103,3 +107,16 @@ def fixed_recipient_award(catalogue_points):
     for fixed rewards remains unresolved; this helper covers the ordinary case.
     """
     return min(fixed_base_points(catalogue_points), PER_PLAYER_ITEM_CAP)
+
+
+def qualifying_quantity(unit_value_gp, quantity):
+    """Ordinary-loot eligibility is based on UNIT price, not combined stack value.
+
+    Returns the quantity eligible for scoring. This does not decide whether a
+    qualifying stack is rounded per unit or as one combined value. Never use it
+    for catalogue-based personal rewards such as pets, kits or jars.
+    """
+    nonnegative_int(unit_value_gp, "unit_value_gp")
+    if type(quantity) is not int or quantity < 1:
+        raise ValueError("quantity must be a positive integer")
+    return quantity if unit_value_gp >= 500_000 else 0

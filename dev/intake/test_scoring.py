@@ -2,7 +2,7 @@ import unittest
 from fractions import Fraction
 from scoring import (GroupKind, UnresolvedEligibility, ordinary_base_points,
                      fixed_base_points, drop_multiplier, ordinary_drop_pool, exact_share,
-                     capped_recipient_share, fixed_recipient_award)
+                     capped_recipient_share, fixed_recipient_award, qualifying_quantity)
 
 
 class ScoringTest(unittest.TestCase):
@@ -52,13 +52,35 @@ class ScoringTest(unittest.TestCase):
         # Confirmed: 1.5B all-clan five-person split awards 200 each.
         pool = ordinary_drop_pool(1500000000, qualifying_event_drop=False, group=GroupKind.ALL_CLAN)
         self.assertEqual(200, capped_recipient_share(pool, 5))
-        self.assertEqual(Fraction(225, 2), capped_recipient_share(pool, 20))
+        self.assertEqual(113, capped_recipient_share(pool, 20))
         self.assertEqual(200, capped_recipient_share(1500, 1))
         event_pool = ordinary_drop_pool(1500000000, qualifying_event_drop=True, group=GroupKind.MIXED)
         self.assertEqual(200, capped_recipient_share(event_pool, 5))
 
-    def test_fractional_shares_are_not_rounded_by_cap(self):
-        self.assertEqual(Fraction(3, 4), capped_recipient_share(Fraction(3, 2), 2))
+    def test_pity_point_for_positive_shares_and_half_up_for_larger_shares(self):
+        for pool, members, points in [(Fraction(3, 2), 2, 1), (1, 10, 1),
+                                      (Fraction(5, 2), 2, 1), (3, 2, 2),
+                                      (5, 2, 3), (0, 2, 0)]:
+            with self.subTest(pool=pool, members=members):
+                self.assertEqual(points, capped_recipient_share(pool, members))
+
+    def test_pity_point_does_not_award_ineligible_drops(self):
+        pool = ordinary_drop_pool(499999, qualifying_event_drop=True, group=GroupKind.ALL_CLAN)
+        self.assertEqual(0, capped_recipient_share(pool, 2))
+
+    def test_unit_value_gate_cannot_be_met_by_a_large_cheap_stack(self):
+        self.assertEqual(0, qualifying_quantity(100000, 100))
+        self.assertEqual(0, qualifying_quantity(499999, 3))
+        self.assertEqual(3, qualifying_quantity(500000, 3))
+        self.assertEqual(3, qualifying_quantity(600000, 3))
+
+    def test_unit_value_gate_rejects_invalid_counts_and_prices(self):
+        for count in [0, -1, True, 1.5]:
+            with self.assertRaises(ValueError):
+                qualifying_quantity(500000, count)
+        for price in [-1, True, 499999.99, None]:
+            with self.assertRaises(ValueError):
+                qualifying_quantity(price, 2)
 
     def test_fixed_reward_stays_personal_and_respects_item_cap(self):
         self.assertEqual(75, fixed_recipient_award(75))
