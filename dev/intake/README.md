@@ -8,7 +8,9 @@ POST `/api/plugin/dev/drops` accepts only the reporting RSN, item IDs/quantities
 source, timestamp, schema version and event UUID. Extra fields (including group
 names) are rejected. Test RSNs are allowlisted; **this is not authentication**.
 There is no member lookup, points processing, public read endpoint or Discord login.
-Claims remain unverified. Do not route these records into live scoring.
+Claims remain unverified. The optional local writer can route eligible reports
+into the existing review queue as pending proposals; it never approves them or
+updates rank totals.
 
 Limits: 8 KiB requests, 64 unique item stacks, recent timestamps, 20 new reports
 per RSN/minute, 10,000 rows, approximately 16 MiB SQLite file, seven-day cleanup
@@ -134,7 +136,7 @@ submission pages do not read the test-intake database, so even a stored receipt
 is not a website submission. Eventually excluded low-value loot should remain
 intake-only, while qualified awards enter the existing submission workflow.
 
-### Pending-submission importer
+### Pending-submission preview and manual importer
 
 `import_pending.py` bridges eligible version 2 reports into the existing
 `RegularSubmissions.db` review workflow. It previews by default:
@@ -154,27 +156,46 @@ group/event context in the notes. Fixed pets, kits and jars use their personal
 catalogue points and the 200-point item cap. Low-value, unavailable-price,
 unmatched, ambiguous, legacy and already-imported reports remain intake-only.
 
-The automated service runs the importer once per minute as `randal`, the existing
-trusted owner used by Nocturne's database-writing API. Its systemd sandbox reads
-the private intake through a narrow ACL and permits SQLite journal writes in the
-database directory. The public web intake retains no access to live databases.
+Manual `--apply` keeps a full SQLite backup. The automated timer/ACL importer was
+retired after its ACL changed `/var/lib/private` to a mode that conflicts with
+systemd `DynamicUser` state directories. Do not enable the obsolete
+`nocturne-plugin-import.timer` unit.
 
-Install it once from the checked-out development branch:
+### Local pending writer
+
+`pending_writer.py` replaces the retired timer with a Unix-socket handoff. The
+public intake stores and validates the report, then sends only its canonical
+payload to `/run/nocturne-plugin-writer/pending.sock`. The writer independently
+validates it again, reads the existing member/item catalogues, and may insert an
+idempotent `status=pending`, `source_type=runelite` proposal. It does not read the
+private intake database, approve submissions, update `rank_totals`, or listen on
+a TCP port.
+
+The writer runs as `randal`, matching the existing trusted database-writing API.
+Its systemd sandbox has no network namespace and permits writes only beneath the
+database directory for SQLite's database and rollback-journal operations. The
+public `DynamicUser` receives `InaccessiblePaths=/srv/projects/database`; it can
+reach the world-connectable local socket but cannot open Midgard's databases.
+
+Install once from the checked-out `development` branch:
 
 ```sh
-sudo python3 -B dev/intake/install_importer.py
+sudo python3 -B dev/intake/install_writer.py
 ```
 
-The installer verifies the inspected paths, refuses to overwrite an existing
-unit, blocks the public intake from `/srv/projects/database`, grants only `randal`
-read access to the private intake, runs a non-writing candidate preview as that
-account, verifies the units, and enables the timer. Any failure before completion
-removes the new units and ACL entries and restores the inspected intake unit.
+The installer first runs a read-only schema check as `randal`. It backs up the
+installed unit files under `/etc/nocturne-plugin-backups/unix-writer`, disables
+and removes the obsolete timer units, verifies both replacement services, starts
+the writer, waits for its socket, then hardens and restarts the public intake.
+Any failure restores the previous intake and obsolete unit files. It does not
+change ACLs or permissions under `/var/lib/private`.
 
-Because `RegularSubmissions.db` is about 1.5 GB, timer runs use `--no-backup` for
-these reversible pending inserts. SQLite still protects each batch with an
-immediate transaction and its normal rollback journal. Manual `--apply` keeps
-the full SQLite backup unless the restricted service explicitly disables it.
+Eligible ordinary and fixed-reward reports enter review with the same conservative
+1x proposal used by the manual importer. Group and event context remain unresolved.
+Low-value items, legacy payloads, synthetic tests, inactive/unmatched identities,
+unknown items and unavailable prices remain intake-only. If the writer is down,
+the intake keeps the idempotent event but returns HTTP 503; sending the same UUID
+again retries the handoff.
 
 The preview accepts timezone-qualified ISO timestamps and the existing API's
 SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`), interpreted as UTC

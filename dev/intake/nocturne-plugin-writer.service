@@ -1,14 +1,15 @@
 [Unit]
-Description=Nocturne RuneLite pending submission importer
-After=nocturne-plugin-dev.service
-Requires=nocturne-plugin-dev.service
+Description=Nocturne RuneLite pending submission writer
+After=local-fs.target
 
 [Service]
-Type=oneshot
+Type=simple
 User=randal
 Group=www-data
 WorkingDirectory=/srv/projects/nocturne-plugin-intake/dev/intake
-ExecStart=/srv/projects/nocturne-plugin-intake/.venv/bin/python -B import_pending.py --limit 500 --apply --no-backup
+ExecStart=/srv/projects/nocturne-plugin-intake/.venv/bin/python -B pending_writer.py
+RuntimeDirectory=nocturne-plugin-writer
+RuntimeDirectoryMode=0755
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -27,7 +28,11 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 CapabilityBoundingSet=
-ReadOnlyPaths=/var/lib/nocturne-plugin-dev
 ReadWritePaths=/srv/projects/database
 MemoryMax=128M
 TasksMax=24
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -119,6 +119,26 @@ class IntakeTest(unittest.TestCase):
         with patch("intake.sqlite3.connect", side_effect=sqlite3.OperationalError("locked")):
             self.assertEqual(503, self.send()[0])
 
+    def test_handoff_runs_after_storage_and_on_idempotent_repeat(self):
+        calls = []
+        self.app = create_app(self.temp.name, ["Simons Alt"],
+                              clock=lambda: self.now, handoff=calls.append)
+        self.assertEqual(201, self.send()[0])
+        self.assertEqual(200, self.send()[0])
+        self.assertEqual(2, len(calls))
+        self.assertEqual(self.body["event_id"], json.loads(calls[0])["event_id"])
+
+    def test_handoff_failure_reports_unavailable_but_keeps_idempotent_row(self):
+        def unavailable(_canonical):
+            raise OSError("writer unavailable")
+
+        self.app = create_app(self.temp.name, ["Simons Alt"],
+                              clock=lambda: self.now, handoff=unavailable)
+        self.assertEqual(503, self.send()[0])
+        with closing(sqlite3.connect(Path(self.temp.name) / "test-drops.sqlite3")) as db:
+            self.assertEqual(1, db.execute("SELECT count(*) FROM test_drops").fetchone()[0])
+        self.assertEqual(503, self.send()[0])
+
 
 if __name__ == "__main__":
     unittest.main()

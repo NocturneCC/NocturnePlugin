@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import socket
 import sqlite3
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -11,6 +12,44 @@ from uuid import UUID
 MAX_BODY = 8192
 MAX_ROWS = 10000
 RSN = re.compile(r"[A-Za-z0-9 _-]{1,12}\Z")
+
+
+def socket_handoff(socket_path, canonical, timeout=0.5):
+    """Send one canonical payload to the local pending writer.
+
+    The writer response is deliberately small and carries no member data.  A
+    failure is returned to the client so the same event UUID can be submitted
+    again; the intake row remains idempotently stored for inspection.
+    """
+    raw = canonical.encode("utf-8")
+    if len(raw) > MAX_BODY:
+        raise ValueError("handoff payload too large")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(socket_path)
+        client.sendall(raw)
+        client.shutdown(socket.SHUT_WR)
+        chunks = []
+        size = 0
+        while True:
+            chunk = client.recv(min(2049 - size, 2049))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > 2048:
+                raise ValueError("handoff response too large")
+            chunks.append(chunk)
+        response = b"".join(chunks)
+    if not response:
+        raise ValueError("empty handoff response")
+    if len(response) > 2048:
+        raise ValueError("handoff response too large")
+    receipt = json.loads(response)
+    if not isinstance(receipt, dict) or receipt.get("status") not in {
+        "pending_stored", "duplicate", "excluded"
+    }:
+        raise ValueError("invalid handoff receipt")
+    return receipt
 
 
 def normalize_rsn(value):
@@ -62,7 +101,7 @@ def validate(data, now):
     return name, json.dumps(canonical, sort_keys=True, separators=(",", ":"))
 
 
-def create_app(state_dir=None, allowed_rsns=None, clock=None):
+def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
     state_dir = state_dir or os.environ["NOCTURNE_INTAKE_STATE"]
     if allowed_rsns is None:
         allowed_rsns = os.environ["NOCTURNE_TEST_RSNS"].split(",")
@@ -70,6 +109,10 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None):
     if not allowed:
         raise ValueError("At least one test RSN is required")
     clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
+    if handoff is None:
+        socket_path = os.environ.get("NOCTURNE_PENDING_SOCKET")
+        handoff = ((lambda canonical: socket_handoff(socket_path, canonical))
+                   if socket_path else (lambda canonical: None))
     directory = Path(state_dir)
     directory.mkdir(parents=True, exist_ok=True)
     database = directory / "test-drops.sqlite3"
@@ -139,6 +182,10 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None):
                 if existing:
                     if existing[0] != canonical:
                         return error(409)
+                    try:
+                        handoff(canonical)
+                    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                        return error(503)
                     return reply(start_response, 200, {"event_id": data["event_id"], "status": "duplicate", "storage": "development"})
                 db.execute("DELETE FROM test_drops WHERE received_at < ?", (now - 7 * 86400,))
                 count = db.execute("SELECT count(*) FROM test_drops WHERE rsn=? AND received_at > ?", (name, now - 60)).fetchone()[0]
@@ -148,6 +195,10 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None):
                     return error(507)
                 db.execute("INSERT INTO test_drops VALUES (?, ?, ?, ?)", (data["event_id"], name, now, canonical))
             # Acknowledge only after the transaction commits.
+            try:
+                handoff(canonical)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return error(503)
             return reply(start_response, 201, {"event_id": data["event_id"], "status": "stored", "storage": "development"})
         except sqlite3.Error:
             return error(503)
