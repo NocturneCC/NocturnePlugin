@@ -25,7 +25,10 @@ class ImporterInstallTest(unittest.TestCase):
         (self.project / "dev/intake/import_pending.py").touch()
         (self.project / "dev/intake/nocturne-plugin-import.service").write_text("service fixture\n")
         (self.project / "dev/intake/nocturne-plugin-import.timer").write_text("timer fixture\n")
-        (self.systemd / "nocturne-plugin-dev.service").touch()
+        baseline = "[Service]\nProtectSystem=strict\n"
+        (self.project / "dev/intake/nocturne-plugin-dev.service").write_text(
+            baseline + "InaccessiblePaths=/srv/projects/database\n")
+        (self.systemd / "nocturne-plugin-dev.service").write_text(baseline)
         (self.database / "RegularSubmissions.db").touch()
         (self.state / "test-drops.sqlite3").touch()
         self.link.symlink_to(self.state)
@@ -44,12 +47,14 @@ class ImporterInstallTest(unittest.TestCase):
             self.invoke()
         self.assertEqual("service fixture\n", (self.systemd / "nocturne-plugin-import.service").read_text())
         self.assertEqual("timer fixture\n", (self.systemd / "nocturne-plugin-import.timer").read_text())
+        self.assertIn("InaccessiblePaths=/srv/projects/database",
+                      (self.systemd / "nocturne-plugin-dev.service").read_text())
         flat = [" ".join(command) for command in self.commands]
         self.assertTrue(any(command.startswith("setfacl -m u:randal:r--") for command in flat))
         self.assertIn("systemctl enable --now nocturne-plugin-import.timer", flat)
         self.assertTrue(any(command.startswith("runuser -u randal") for command in flat))
 
-    def test_failed_service_start_rolls_back_units_acl_and_user(self):
+    def test_failed_preview_rolls_back_units_acl_and_intake_hardening(self):
         def fail_start(args):
             self.fake_command(args)
             if args and args[0] == "runuser":
@@ -59,6 +64,8 @@ class ImporterInstallTest(unittest.TestCase):
             self.invoke(run=fail_start)
         self.assertFalse((self.systemd / "nocturne-plugin-import.service").exists())
         self.assertFalse((self.systemd / "nocturne-plugin-import.timer").exists())
+        self.assertEqual("[Service]\nProtectSystem=strict\n",
+                         (self.systemd / "nocturne-plugin-dev.service").read_text())
         flat = [" ".join(command) for command in self.commands]
         self.assertTrue(any(command.startswith("setfacl -x u:randal") for command in flat))
 

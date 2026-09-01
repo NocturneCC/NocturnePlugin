@@ -166,9 +166,10 @@ sudo python3 -B dev/intake/install_importer.py
 ```
 
 The installer verifies the inspected paths, refuses to overwrite an existing
-unit, grants only `randal` read access to the private intake, runs a non-writing
-candidate preview as that account, verifies both units, and enables the timer.
-Any failure before completion removes the new units and ACL entries.
+unit, blocks the public intake from `/srv/projects/database`, grants only `randal`
+read access to the private intake, runs a non-writing candidate preview as that
+account, verifies the units, and enables the timer. Any failure before completion
+removes the new units and ACL entries and restores the inspected intake unit.
 
 Because `RegularSubmissions.db` is about 1.5 GB, timer runs use `--no-backup` for
 these reversible pending inserts. SQLite still protects each batch with an

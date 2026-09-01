@@ -46,6 +46,7 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
     project, systemd = Path(project), Path(systemd)
     state_link, private_root, database = Path(state_link), Path(private_root), Path(database)
     state, intake = require_inspected_paths(project, systemd, state_link, database)
+    intake_service = systemd / "nocturne-plugin-dev.service"
     service = systemd / "nocturne-plugin-import.service"
     timer = systemd / "nocturne-plugin-import.timer"
     if service.exists() or timer.exists():
@@ -53,7 +54,16 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
     if which("setfacl") is None:
         raise ValueError("setfacl is unavailable; install the Debian acl package first")
     sources = project / "dev/intake"
+    hardened_intake = (sources / intake_service.name).read_text()
+    hardening_line = "InaccessiblePaths=/srv/projects/database\n"
+    if hardened_intake.count(hardening_line) != 1:
+        raise ValueError("Repository intake unit is missing the expected database isolation")
+    original_intake = hardened_intake.replace(hardening_line, "", 1)
+    if intake_service.read_text() != original_intake:
+        raise ValueError("Installed intake unit differs from the inspected version")
     created_service = created_timer = False
+    intake_hardened = False
+    staged_intake = systemd / ".nocturne-plugin-dev.service.staged"
     acl_paths = []
     try:
         for path, entry in (
@@ -73,8 +83,16 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
             stream.write((sources / timer.name).read_text())
         created_timer = True
         timer.chmod(0o644)
-        run(["systemd-analyze", "verify", str(service), str(timer)])
+        run(["systemd-analyze", "verify", str(sources / intake_service.name),
+             str(service), str(timer)])
+        with staged_intake.open("x") as stream:
+            stream.write(hardened_intake)
+        staged_intake.chmod(0o644)
+        os.replace(staged_intake, intake_service)
+        intake_hardened = True
         run(["systemctl", "daemon-reload"])
+        run(["systemctl", "restart", intake_service.name])
+        run(["systemctl", "is-active", "--quiet", intake_service.name])
         run(["runuser", "-u", IMPORT_USER, "--",
              str(project / ".venv/bin/python"), "-B",
              str(project / "dev/intake/import_pending.py"), "--limit", "50"])
@@ -89,11 +107,21 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
             timer.unlink(missing_ok=True)
         if created_service:
             service.unlink(missing_ok=True)
-        if created_service or created_timer:
+        staged_intake.unlink(missing_ok=True)
+        if intake_hardened:
+            restore = systemd / ".nocturne-plugin-dev.service.restore"
             try:
-                run(["systemctl", "daemon-reload"])
+                restore.write_text(original_intake)
+                restore.chmod(0o644)
+                os.replace(restore, intake_service)
             except Exception:
                 pass
+        try:
+            run(["systemctl", "daemon-reload"])
+            if intake_hardened:
+                run(["systemctl", "restart", intake_service.name])
+        except Exception:
+            pass
         try:
             run(["setfacl", "-x", f"d:u:{IMPORT_USER}", str(state)])
         except Exception:
@@ -105,7 +133,7 @@ def install(project=Path("/srv/projects/nocturne-plugin-intake"),
                 pass
         raise
     print("Importer timer installed and active.")
-    print("The public intake still has no live-database access; imported rows remain pending.")
+    print("The public intake cannot access /srv/projects/database; imported rows remain pending.")
 
 
 if __name__ == "__main__":
