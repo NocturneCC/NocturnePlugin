@@ -91,6 +91,18 @@ class PreviewTest(unittest.TestCase):
             self.assertIsNone(item["final_points"])
             self.assertNotIn("base_points", item)
 
+    def test_sqlite_current_timestamp_is_utc_and_does_not_bypass_freshness(self):
+        for stamp, expected in [("2026-09-01 21:00:00", "current"),
+                                ("2026-06-04 22:39:13", "price_stale"),
+                                ("2026-09-01 21:05:00", "price_stale"),
+                                ("2026-09-01T21:00:00", "price_timestamp_unavailable")]:
+            with self.subTest(stamp=stamp):
+                self.edit("Items.db", "UPDATE items SET latest_price_checked_at=?", (stamp,))
+                price = self.item()["price"]
+                self.assertEqual(expected, price["status"])
+                if expected == "current":
+                    self.assertEqual(0, price["age_hours"])
+
     def test_eligible_units_get_base_points_but_no_assumed_group_or_event(self):
         self.edit("Items.db", "UPDATE items SET latest_price=600000")
         self.event_id = self.add_event(quantity=3)

@@ -8,6 +8,7 @@ from collections import Counter
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 import sqlite3
 
@@ -59,9 +60,14 @@ def price_info(item, now, max_age_hours):
         return {"status": "price_unavailable", "unit_price_gp": None}
     info = {"unit_price_gp": price, "checked_at": item["latest_price_checked_at"]}
     try:
-        stamp = datetime.fromisoformat(item["latest_price_checked_at"].replace("Z", "+00:00"))
+        raw_stamp = item["latest_price_checked_at"]
+        stamp = datetime.fromisoformat(raw_stamp.replace("Z", "+00:00"))
         if stamp.tzinfo is None:
-            raise ValueError("No timezone")
+            # Existing app.py writes SQLite CURRENT_TIMESTAMP: UTC without an
+            # explicit suffix. Never interpret this value as the host's local time.
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}", raw_stamp):
+                raise ValueError("Unrecognized timestamp without timezone")
+            stamp = stamp.replace(tzinfo=timezone.utc)
         age = now - stamp.timestamp()
         info["age_hours"] = round(age / 3600, 2)
         info["status"] = "current" if -120 <= age <= max_age_hours * 3600 else "price_stale"

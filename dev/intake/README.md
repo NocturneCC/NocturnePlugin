@@ -126,3 +126,9 @@ not claim high-value drops are ready for automatic awards. Current website
 submission pages do not read the test-intake database, so even a stored receipt
 is not a website submission. Eventually excluded low-value loot should remain
 intake-only, while qualified awards enter the existing submission workflow.
+
+The preview accepts timezone-qualified ISO timestamps and the existing API's
+SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`), interpreted as UTC
+according to [SQLite's specification](https://www.sqlite.org/lang_createtable.html#the_default_clause).
+It does not reinterpret these timestamps using Midgard's local timezone or
+replace stale timestamps with the current time.
