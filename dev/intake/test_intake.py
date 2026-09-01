@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -37,7 +38,7 @@ class IntakeTest(unittest.TestCase):
         self.assertEqual({"event_id": self.body["event_id"], "status": "stored", "storage": "development"}, receipt)
         code, receipt = self.send()
         self.assertEqual((200, "duplicate"), (code, receipt["status"]))
-        with sqlite3.connect(Path(self.temp.name) / "test-drops.sqlite3") as db:
+        with closing(sqlite3.connect(Path(self.temp.name) / "test-drops.sqlite3")) as db:
             rows = db.execute("SELECT rsn, payload FROM test_drops").fetchall()
         self.assertEqual(1, len(rows))
         self.assertEqual("simons alt", rows[0][0])
