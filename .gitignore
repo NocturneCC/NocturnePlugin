@@ -11,3 +11,10 @@ out/
 *.class
 .tmp/
 credentials.properties
+
+# Development intake state and Python environment
+.venv/
+__pycache__/
+*.pyc
+*.sqlite3
+*.sqlite3-journal

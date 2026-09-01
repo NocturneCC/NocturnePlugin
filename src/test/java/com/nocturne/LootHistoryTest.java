@@ -51,6 +51,6 @@ public class LootHistoryTest
 
 	private static LootRecord drop(String rsn, String source)
 	{
-		return new LootRecord(rsn, source, List.of("1 x Bones"));
+		return new LootRecord(rsn, source, List.of(new LootItem(526, 1, "Bones")));
 	}
 }

@@ -1,0 +1,27 @@
+[Unit]
+Description=Nocturne isolated plugin test intake
+After=network.target
+
+[Service]
+DynamicUser=yes
+WorkingDirectory=/srv/projects/nocturne-plugin-intake/dev/intake
+Environment=NOCTURNE_INTAKE_STATE=/var/lib/nocturne-plugin-dev
+Environment="NOCTURNE_TEST_RSNS=Simons Alt"
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/projects/nocturne-plugin-intake/.venv/bin/gunicorn --bind 127.0.0.1:5072 --workers 2 --timeout 10 --limit-request-line 1024 --limit-request-fields 30 "intake:create_app()"
+StateDirectory=nocturne-plugin-dev
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=160M
+TasksMax=32
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

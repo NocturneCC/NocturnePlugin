@@ -14,6 +14,8 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.game.ItemManager;
+import java.awt.Dimension;
 
 final class NocturnePanel extends PluginPanel
 {
@@ -23,15 +25,20 @@ final class NocturnePanel extends PluginPanel
 	private static final Color MUTED = new Color(186, 178, 198);
 	private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
+	private final ItemManager itemManager;
+	private boolean diagnostics;
+	private GroupSnapshot liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
+	private final JTextArea connection = note("Local capture · submissions off", BACKGROUND);
 	private final LootHistory history = new LootHistory();
 	private final JLabel player = label("Log in to see your character", Color.WHITE);
-	private final JLabel tracking = label("NPC loot tracking enabled", PURPLE);
+	private final JLabel tracking = label("Loot tracking enabled", PURPLE);
 	private final JLabel count = label("0 loot events", MUTED);
 	private final JPanel feed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 
-	NocturnePanel()
+	NocturnePanel(ItemManager itemManager)
 	{
+		this.itemManager = itemManager;
 		setBackground(BACKGROUND);
 		setLayout(new BorderLayout(0, 12));
 		setBorder(BorderFactory.createEmptyBorder(12, 9, 12, 9));
@@ -40,15 +47,14 @@ final class NocturnePanel extends PluginPanel
 		JLabel title = label("NOCTURNE", PURPLE);
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 21f));
 		header.add(title);
-		header.add(label("COMPANION  /  PREVIEW 0.2.0", MUTED));
+		header.add(label("COMPANION  /  PREVIEW 0.3.0", MUTED));
 		header.add(spacer());
 		header.add(label("CHARACTER", MUTED));
 		header.add(player);
 		header.add(spacer());
 		header.add(tracking);
-		header.add(note("Drops stay in this client. Backend connection comes later.", BACKGROUND));
+		header.add(connection);
 		header.add(spacer());
-		header.add(label("RAID GROUP", PURPLE));
 		header.add(groupPreview);
 		header.add(spacer());
 		header.add(label("RECENT LOOT", PURPLE));
@@ -80,7 +86,8 @@ final class NocturnePanel extends PluginPanel
 		if (history.setPlayer(rsn))
 		{
 			player.setText(rsn == null ? "Log in to see your character" : rsn);
-			groupPreview.setText("Enter a raid to preview its roster.");
+			liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
+			setGroup(liveGroup);
 			renderHistory();
 		}
 	}
@@ -93,6 +100,8 @@ final class NocturnePanel extends PluginPanel
 
 	void setGroup(GroupSnapshot group)
 	{
+		liveGroup = group;
+		groupPreview.setVisible(diagnostics);
 		String text = group.displayText();
 		if (!text.equals(groupPreview.getText()))
 		{
@@ -106,6 +115,35 @@ final class NocturnePanel extends PluginPanel
 		setPlayer(record.rsn);
 		history.add(record);
 		renderHistory();
+	}
+
+	void setDiagnostics(boolean enabled)
+	{
+		if (diagnostics != enabled)
+		{
+			diagnostics = enabled;
+			setGroup(liveGroup);
+			renderHistory();
+		}
+		groupPreview.setVisible(enabled);
+	}
+
+	void setSubmissionEnabled(boolean enabled)
+	{
+		connection.setText(enabled ? "Test submissions on · no points awarded" : "Local capture · submissions off");
+	}
+
+	void setSubmission(String id, SubmissionStatus status)
+	{
+		for (LootRecord record : history.getRecords())
+		{
+			if (record.id.equals(id))
+			{
+				record.submission = status;
+				renderHistory();
+				break;
+			}
+		}
 	}
 
 	private void renderHistory()
@@ -124,10 +162,30 @@ final class NocturnePanel extends PluginPanel
 				BorderFactory.createEmptyBorder(8, 8, 8, 8)));
 			card.add(label(record.source, PURPLE));
 			card.add(label(TIME.format(record.time) + "  |  " + record.rsn, MUTED));
-			JTextArea items = note(String.join("\n", record.items), CARD);
-			items.setForeground(Color.WHITE);
-			card.add(items);
-			card.add(note(record.group.displayText(), CARD));
+			for (LootItem item : record.items)
+			{
+				JPanel row = new JPanel(new BorderLayout(7, 0));
+				row.setBackground(CARD);
+				row.setAlignmentX(LEFT_ALIGNMENT);
+				JLabel icon = label("", Color.WHITE);
+				icon.setPreferredSize(new Dimension(36, 32));
+				itemManager.getImage(item.id).addTo(icon);
+				row.add(icon, BorderLayout.WEST);
+				JTextArea text = note(item.quantity + " × " + item.name
+					+ (diagnostics ? " [" + item.id + "]" : ""), CARD);
+				text.setForeground(Color.WHITE);
+				row.add(text, BorderLayout.CENTER);
+				card.add(row);
+			}
+			card.add(note(record.submission.label, CARD));
+			if (record.group.status == GroupSnapshot.Status.MATCHED
+				|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
+			{
+				card.add(note("Raid roster" + (record.group.status == GroupSnapshot.Status.INCOMPLETE
+					? " (incomplete)" : "") + " · local only\n"
+					+ (record.group.names.isEmpty() ? "Unavailable" : String.join(", ", record.group.names)), CARD));
+			}
+			if (diagnostics) card.add(note(record.group.displayText(), CARD));
 			feed.add(card);
 		}
 		feed.revalidate();

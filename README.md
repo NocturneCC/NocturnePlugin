@@ -2,11 +2,13 @@
 
 RuneLite companion for Nocturne clan members and community event participants.
 
-## Development preview — 0.2.0
+## Development preview — 0.3.0
 
-The purple **N** sidebar shows the logged-in character, local loot records, and
-group-capture evidence. Each loot card freezes the source, RSN, time, item names,
-quantities, item IDs and the group observed when the event arrived.
+The purple **N** sidebar shows compact loot cards: RuneLite item sprites,
+quantities, source, time and delivery status. Raid cards also show a locally
+captured roster (marked incomplete where applicable). Random nearby player names,
+item IDs and capture internals are hidden by default; **Show capture diagnostics**
+reveals them for local testing. Names are not presented as verified clan members.
 
 - Enable **Nocturne** in RuneLite's plugin settings, then click the purple **N**.
 - **Track loot** pauses or resumes recording new NPC drops and raid rewards.
@@ -17,9 +19,36 @@ quantities, item IDs and the group observed when the event arrived.
 - **Clear local history** resets the displayed history and counter.
 - Separate kills with identical drops are retained as separate events.
 
-Nocturne makes no external requests in this version and does not save drops or
-group names to disk, register event participants, check membership or award points. This does
-not change network behavior of RuneLite itself or other installed plugins.
+### Optional test submissions
+
+**Send drops to test intake** is off by default. When enabled, new drops send
+only your RSN, source, item IDs, quantities, timestamp and a random event UUID to
+`https://nocturne.events/api/plugin/dev/drops`. The server also receives your IP
+address as part of the connection. No group names, credentials, screenshots,
+chat, membership data or points are sent. Item sprites come from RuneLite's
+item cache; no image downloads are needed.
+
+The companion test service is in [dev/intake](dev/intake/README.md). Committing
+these files does not deploy it. Keep submissions off until the Midgard service
+and HTTPS route are installed and checked. It stores unverified test records in
+its own capped database and accepts only explicitly configured test RSNs. There
+is no Discord login, member lookup or live scoring in this preview.
+
+Cards distinguish **Captured locally**, **Sending to test intake…**, **Received
+by test intake**, rejection, full queue, cancellation and unconfirmed delivery.
+Only a matching JSON receipt after server storage produces confirmation; a plain
+HTTP 200 page is insufficient. There are at most eight pending requests, a
+12-second timeout, no redirects, no automatic retries and no disk queue. Turning
+submissions off, logout or plugin shutdown cancels pending requests. Cancellation
+cannot undo a write already made by the server. Clearing local history does not
+delete records from the separate test database. Old drops are not sent when the
+toggle is enabled.
+
+Group data remains local while we resolve RuneLite's restriction on crowdsourcing
+other players' names. See the official
+[restricted feature list](https://github.com/runelite/runelite/wiki/Rejected-or-Rolled-Back-Features).
+The backend rejects extra group fields. Group bonuses remain a future feature;
+this preview cannot establish group membership or entitlement.
 
 ### Detection scope
 
@@ -31,7 +60,7 @@ and picking up arbitrary ground items are not treated as earned NPC drops.
 
 ### Group capture
 
-**Capture groups locally** enables this preview (no network transmission):
+**Capture groups locally** enables collection (group names are never transmitted):
 
 - ToB/HMT and ToA: read the game's party-name string slots.
 - CoX/CM: read the game's raiding-party sidebar names.
@@ -53,7 +82,7 @@ and picking up arbitrary ground items are not treated as earned NPC drops.
 
 For non-raid NPC drops (including Nex), a one-time **20-tile proximity snapshot**
 includes the local character and nearby visible names in the same world view
-and plane, up to 100 entries. It is always marked **Nearby observations only**,
+and plane, up to 100 entries. With diagnostics enabled, it is marked **Nearby observations only**,
 with unknown team size. It is not a room roster or proof of participation. It
 does not retain people who left before the drop. Full Nex encounter tracking is
 a separate next stage; this preview must not be used to award Nex group bonuses.
@@ -100,14 +129,16 @@ git pull --ff-only
 ```
 
 Unit tests check bounded history, repeated drops, frozen rosters, missing names,
-late capture, solo evidence, retention and repeated raid rewards. They cannot
+late capture, solo evidence, retention, repeated raid rewards, payload privacy and
+response acknowledgement. The isolated intake has its own Python tests. They cannot
 confirm RuneLite detects live game events or that the sidebar renders correctly.
 
 Manual test checklist:
 
 1. Enable Nocturne while logged in. The sidebar should show your current RSN.
 2. Defeat a basic NPC that drops loot (for example a cow or goblin). Verify source,
-   item names, quantities and IDs appear in one loot card.
+   item sprites, names and quantities appear in one loot card. It should say
+   Captured locally while submissions are off. Item IDs require diagnostics.
 3. Repeat a kill. It should create another card, even if the drops are identical.
 4. Pause **Track loot** and repeat. No new card should appear; resume afterward.
 5. Clear history. The counter should return to zero and the character stay visible.
@@ -118,10 +149,10 @@ Manual test checklist:
 
 Group capture test:
 
-1. Defeat a basic NPC near another player. The card should list both RSNs as
-   observations, with unknown group size. Moving away must not change that card.
+1. Enable **Show capture diagnostics**, then defeat a basic NPC near another
+   player. The card should list both RSNs as observations, with unknown group size. Moving away must not change that card.
 2. Keep the plugin enabled before entering a ToB, ToA or CoX raid. Compare the
-   live roster with the real group, including yourself and teammates in other rooms.
+   live diagnostic roster with the real group, including yourself and teammates in other rooms.
 3. At completion, open the reward chest. Its loot card should keep that run's
    roster. Reopening the same chest should not add an identical reward card.
 4. Test a subsequent run with a different group; names from the earlier group
@@ -131,7 +162,7 @@ Group capture test:
 
 ## Planned next stages
 
-- Broader drop-source coverage and a separate Midgard development intake.
+- Deploy and verify the prepared Midgard development intake; broaden drop coverage.
 - Backend member/alt RSN lookup and event-only guest enrollment, without Discord login.
 - Custom chat emojis and clearly labeled Nocturne announcements.
 

@@ -1,6 +1,8 @@
 package com.nocturne;
 
 import com.google.inject.Provides;
+import com.google.gson.Gson;
+import okhttp3.OkHttpClient;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -52,6 +54,14 @@ public class NocturnePlugin extends Plugin
 	@Inject
 	private NocturneConfig config;
 
+	@Inject
+	private OkHttpClient http;
+
+	@Inject
+	private Gson gson;
+
+	private volatile SubmissionService submissions;
+
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
 	private volatile GroupTracker groups;
@@ -65,14 +75,17 @@ public class NocturnePlugin extends Plugin
 		Object token = new Object();
 		lifecycle = token;
 		groups = new GroupTracker(client);
+		submissions = new SubmissionService(http, gson);
 		SwingUtilities.invokeLater(() ->
 		{
 			if (lifecycle != token)
 			{
 				return;
 			}
-			panel = new NocturnePanel();
+			panel = new NocturnePanel(itemManager);
 			panel.setTracking(config.trackNpcLoot());
+			panel.setDiagnostics(config.showDiagnostics());
+			panel.setSubmissionEnabled(config.submitTestDrops());
 			navigation = NavigationButton.builder()
 				.tooltip("Nocturne")
 				.icon(NocturnePanel.createIcon())
@@ -95,6 +108,9 @@ public class NocturnePlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = null;
+		SubmissionService sender = submissions;
+		submissions = null;
+		if (sender != null) sender.close();
 		groups = null;
 		SwingUtilities.invokeLater(() ->
 		{
@@ -127,6 +143,7 @@ public class NocturnePlugin extends Plugin
 		if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
 			if (groups != null) groups.reset();
+			if (submissions != null) submissions.cancelPending();
 			withPanel(view -> view.setPlayer(null));
 		}
 		else if (event.getGameState() == GameState.HOPPING)
@@ -145,8 +162,14 @@ public class NocturnePlugin extends Plugin
 	{
 		if (NocturneConfig.GROUP.equals(event.getGroup()))
 		{
+			if (!config.submitTestDrops() && submissions != null) submissions.cancelPending();
 			boolean enabled = config.trackNpcLoot();
-			withPanel(view -> view.setTracking(enabled));
+			withPanel(view ->
+			{
+				view.setTracking(enabled);
+				view.setDiagnostics(config.showDiagnostics());
+				view.setSubmissionEnabled(config.submitTestDrops());
+			});
 			if ("captureGroups".equals(event.getKey()))
 			{
 				GroupTracker tracker = groups;
@@ -203,13 +226,13 @@ public class NocturnePlugin extends Plugin
 
 		// Copy game data on the client thread; never pass NPC or Player objects to Swing.
 		String rsn = player.getName();
-		List<String> items = new ArrayList<>();
+		List<LootItem> items = new ArrayList<>();
 		for (ItemStack item : stacks)
 		{
 			if (item.getQuantity() > 0)
 			{
 				String name = itemManager.getItemComposition(item.getId()).getName();
-				items.add(item.getQuantity() + " x " + name + " [" + item.getId() + "]");
+				items.add(new LootItem(item.getId(), item.getQuantity(), name));
 			}
 		}
 		if (items.isEmpty())
@@ -220,11 +243,20 @@ public class NocturnePlugin extends Plugin
 		GroupSnapshot group = GroupSnapshot.unavailable("Group capture is off.");
 		if (tracker != null && config.captureGroups())
 		{
-			if (raidReward && !tracker.acceptRaidReward(source, items)) return;
+			if (raidReward && !tracker.acceptRaidReward(source, items.stream().map(LootItem::signature).collect(java.util.stream.Collectors.toList()))) return;
 			group = tracker.forLoot(source);
 		}
 		LootRecord record = new LootRecord(rsn, source, items, group);
 		withPanel(view -> view.recordLoot(record));
+		SubmissionService sender = submissions;
+		Object token = lifecycle;
+		if (sender != null && config.submitTestDrops())
+		{
+			sender.submit(record, status ->
+			{
+				if (lifecycle == token) withPanel(view -> view.setSubmission(record.id, status));
+			});
+		}
 		log.debug("Nocturne detected loot: {} from {}, {} item stacks", rsn, source, items.size());
 	}
 
