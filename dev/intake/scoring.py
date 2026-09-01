@@ -112,11 +112,20 @@ def fixed_recipient_award(catalogue_points):
 def qualifying_quantity(unit_value_gp, quantity):
     """Ordinary-loot eligibility is based on UNIT price, not combined stack value.
 
-    Returns the quantity eligible for scoring. This does not decide whether a
-    qualifying stack is rounded per unit or as one combined value. Never use it
-    for catalogue-based personal rewards such as pets, kits or jars.
+    Returns the quantity eligible for per-unit scoring. Never use it for
+    catalogue-based personal rewards such as pets, kits or jars.
     """
     nonnegative_int(unit_value_gp, "unit_value_gp")
     if type(quantity) is not int or quantity < 1:
         raise ValueError("quantity must be a positive integer")
     return quantity if unit_value_gp >= 500_000 else 0
+
+
+def ordinary_stack_base_points(unit_value_gp, quantity):
+    """Round each eligible unit, then multiply by quantity, before bonuses/splits.
+
+    Three 600k units yield 3 base points, not 2 from rounding their combined value.
+    This helper does not apply a party multiplier, recipient rounding or a cap.
+    """
+    eligible = qualifying_quantity(unit_value_gp, quantity)
+    return ordinary_base_points(unit_value_gp) * eligible

@@ -17,9 +17,9 @@ update is required to test these Python rules.
   a one-point minimum (pity point); larger shares use the discussed nearest-whole
   rounding with halves upward. Zero/ineligible awards remain zero. Cap the final
   integer award at 200. The minimum can make total awards exceed the original pool.
-- For qualifying multi-quantity stacks, whether to round each unit separately or
-  round their combined value still needs clarification. The unit-price gate is
-  implemented independently so it does not preempt that choice.
+- For qualifying multi-quantity stacks, round each unit separately, then multiply
+  by quantity: three 600k units give **3 base points**, not 2. This step happens
+  before applying group/event multipliers and allocation.
 - Ordinary solo: 1x.
 - All-clan group: 1.5x. Solo membership alone does not qualify as group content.
 - Mixed member/nonmember group: 1x.
@@ -44,7 +44,7 @@ multiplier and splitting. A 1.5B item for five all-clan participants is 1500 bas
 × 1.5 / 5 = 450, capped to **200 each**. Do not cap the whole group pool first.
 Fixed personal awards also respect the stated any-item cap. No cap is imposed
 across unrelated items. The calculation helper remains disconnected from live
-awards while stack valuation and integration are resolved.
+awards while live valuation and integration are resolved.
 
 ## Allocation still to resolve
 
@@ -61,10 +61,10 @@ zero. Exact fractions are kept for intermediate math, and final awarded shares
 are integers. Existing total calculations must sum those final awards rather than
 recompute/truncate intermediate shares.
 
-Stack scoring remains unresolved: three units at 600k could produce 2 base points
-from their combined 1.8M value, or 3 base points from rounding each 600k unit.
-Cap granularity across multiple identical units also follows from that decision.
-Do not wire the multi-quantity scorer into automatic awards before resolving it.
+Simon confirmed rounding per unit for stack base points: three 600k units award
+3 base points. The stack-base helper preserves quantity and does not prematurely
+cap base points. Recipient-level rounding/cap treatment for a multi-unit stack
+must be kept distinct from this base calculation during integration.
 
 ## Existing database integration
 

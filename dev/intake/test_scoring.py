@@ -2,7 +2,7 @@ import unittest
 from fractions import Fraction
 from scoring import (GroupKind, UnresolvedEligibility, ordinary_base_points,
                      fixed_base_points, drop_multiplier, ordinary_drop_pool, exact_share,
-                     capped_recipient_share, fixed_recipient_award, qualifying_quantity)
+                     capped_recipient_share, fixed_recipient_award, qualifying_quantity, ordinary_stack_base_points)
 
 
 class ScoringTest(unittest.TestCase):
@@ -73,6 +73,19 @@ class ScoringTest(unittest.TestCase):
         self.assertEqual(0, qualifying_quantity(499999, 3))
         self.assertEqual(3, qualifying_quantity(500000, 3))
         self.assertEqual(3, qualifying_quantity(600000, 3))
+
+    def test_stack_base_points_round_each_eligible_unit_before_quantity(self):
+        for price, quantity, expected in [(600000, 3, 3), (500000, 3, 3),
+                                         (1499999, 3, 3), (1500000, 3, 6),
+                                         (100000, 100, 0), (499999, 100, 0)]:
+            with self.subTest(price=price, quantity=quantity):
+                self.assertEqual(expected, ordinary_stack_base_points(price, quantity))
+
+    def test_stack_base_scoring_is_additive_before_bonus_and_cap(self):
+        self.assertEqual(ordinary_stack_base_points(600000, 3),
+                         ordinary_stack_base_points(600000, 1) + ordinary_stack_base_points(600000, 2))
+        # Preserve uncapped base points; the cap belongs to recipient awards.
+        self.assertEqual(1500, ordinary_stack_base_points(1500000000, 1))
 
     def test_unit_value_gate_rejects_invalid_counts_and_prices(self):
         for count in [0, -1, True, 1.5]:
