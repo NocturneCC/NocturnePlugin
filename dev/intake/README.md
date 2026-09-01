@@ -40,10 +40,26 @@ are never opened. Do not use the RuneLite project checkout on Windows as a serve
 Review `nocturne-plugin-dev.service` (including the test RSN allowlist) before
 installing it into `/etc/systemd/system/`. `nginx-limits.conf` belongs in nginx's
 http context; add the location snippet inside the existing HTTPS server block.
-The exact deployment commands will follow inspection of Midgard permissions,
-port availability and config. Changes require an administrator where Simon lacks
-permission. Test `nginx -t` before reload. Run the service and verify its endpoint
-through HTTPS before enabling **Send drops to test intake** in RuneLite.
+After the local intake test succeeds, the inspected Midgard nginx layout can be
+updated using:
+
+```sh
+sudo python3 dev/intake/install_nginx.py
+```
+
+The installer requires the exact inspected HTTPS header, no existing intake
+route/limits file, an active intake service, and an unchanged backup (or only the
+observed `client_max_body_size 15M` difference). It saves originals under
+`/etc/nginx/nocturne-plugin-backups/`, moves `nocturne.backup` out of the active
+include directory, adds the exact intake location and rate-limit definitions,
+validates with `nginx -t`, and requests a reload. Validation or reload errors
+restore prior files; a reload failure also attempts to reload the restored config.
+A second invocation stops for inspection rather than duplicating the route.
+Installer tests exercise temporary files and simulated commands, not live nginx.
+
+Verify a stored receipt through HTTPS after installation before enabling
+**Send drops to test intake** in RuneLite. Only `Simons Alt` is initially allowed
+by the supplied service. There is no scoring or group-name upload on this route.
 
 A successful response is HTTP 201 with `status=stored`, `storage=development`,
 and the matching `event_id`, after the database commits. A repeated identical
