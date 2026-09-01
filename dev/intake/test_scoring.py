@@ -49,7 +49,7 @@ class ScoringTest(unittest.TestCase):
         self.assertEqual(Fraction(2, 3), exact_share(2, 3))
 
     def test_per_recipient_cap_follows_multiplier_and_split(self):
-        # Working cap-order interpretation; pending user confirmation.
+        # Confirmed: 1.5B all-clan five-person split awards 200 each.
         pool = ordinary_drop_pool(1500000000, qualifying_event_drop=False, group=GroupKind.ALL_CLAN)
         self.assertEqual(200, capped_recipient_share(pool, 5))
         self.assertEqual(Fraction(225, 2), capped_recipient_share(pool, 20))

@@ -30,13 +30,12 @@ applies to these fixed awards still needs confirmation before wiring that path. 
 
 ## Per-item cap
 
-Simon added a 200-point cap on any one item. Working interpretation: cap each
-player's award after applying the multiplier and splitting. This ordering is
-implemented only in a separate draft arithmetic helper and needs confirmation.
-A 1.5B item for five all-clan participants would be 1500 base × 1.5 / 5 = 450,
-capped to 200 each under this interpretation. Do not cap the whole group pool
-at 200 first unless Simon confirms that alternative. Fixed personal awards also
-respect the stated any-item cap. No cap is imposed across unrelated items.
+Simon confirmed a 200-point cap per player, per item, AFTER applying the
+multiplier and splitting. A 1.5B item for five all-clan participants is 1500 base
+× 1.5 / 5 = 450, capped to **200 each**. Do not cap the whole group pool first.
+Fixed personal awards also respect the stated any-item cap. No cap is imposed
+across unrelated items. The calculation helper remains disconnected from live
+awards while fractional rounding and integration are resolved.
 
 ## Allocation still to resolve
 

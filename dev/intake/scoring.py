@@ -87,9 +87,9 @@ PER_PLAYER_ITEM_CAP = 200
 
 
 def capped_recipient_share(pool, recipient_count):
-    """Draft cap order: split the multiplied item pool, then cap each recipient.
+    """Confirmed cap order: split the multiplied item pool, then cap each recipient.
 
-    Confirm this interpretation with Simon before enabling awards. This does not
+    Simon confirmed the cap applies to each final recipient award. This does not
     round fractional shares. Apply independently for each item award, not to the
     sum of a player's unrelated drops. Never use this group helper for fixed awards.
     """
