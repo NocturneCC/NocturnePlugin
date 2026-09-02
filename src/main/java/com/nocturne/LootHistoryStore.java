@@ -12,13 +12,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /** Versioned, per-character local event storage. Never participates in capture or submission. */
 final class LootHistoryStore
@@ -26,11 +30,24 @@ final class LootHistoryStore
 	static final int SCHEMA_VERSION = 2;
 	private final Path root;
 	private final Gson gson;
+	private final Boolean posixOverride;
+	private static final Set<PosixFilePermission> DIRECTORY_PERMISSIONS = EnumSet.of(
+		PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+		PosixFilePermission.OWNER_EXECUTE);
+	private static final Set<PosixFilePermission> FILE_PERMISSIONS = EnumSet.of(
+		PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
 
 	LootHistoryStore(Path root, Gson gson)
 	{
+		this(root, gson, null);
+	}
+
+	/** Test seam for filesystems whose POSIX capability differs from the host running tests. */
+	LootHistoryStore(Path root, Gson gson, Boolean posixOverride)
+	{
 		this.root = root;
 		this.gson = gson;
+		this.posixOverride = posixOverride;
 	}
 
 	static String normalizeRsn(String rsn)
@@ -112,9 +129,10 @@ final class LootHistoryStore
 
 	private void ensureFile(Path path, String rsn) throws IOException
 	{
-		Files.createDirectories(root);
+		ensureDirectory();
 		if (!Files.exists(path)) writeNew(path, header(rsn));
 		if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) throw new IOException("unsafe history path");
+		hardenFile(path);
 	}
 
 	private boolean contains(Path path, String id) throws IOException
@@ -136,34 +154,74 @@ final class LootHistoryStore
 	private void rewrite(Path path, LineTransform transform, String appendedLine) throws IOException
 	{
 		Path temp = Files.createTempFile(root, path.getFileName().toString(), ".tmp");
-		try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8);
-			 BufferedWriter writer = Files.newBufferedWriter(temp, StandardCharsets.UTF_8))
+		try
 		{
-			String line;
-			while ((line = reader.readLine()) != null)
+			hardenFile(temp);
+			try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8);
+				 BufferedWriter writer = Files.newBufferedWriter(temp, StandardCharsets.UTF_8))
 			{
-				writer.write(transform.apply(line));
-				writer.newLine();
+				String line;
+				while ((line = reader.readLine()) != null)
+				{
+					writer.write(transform.apply(line));
+					writer.newLine();
+				}
+				if (appendedLine != null)
+				{
+					writer.write(appendedLine);
+					writer.newLine();
+				}
 			}
-			if (appendedLine != null)
-			{
-				writer.write(appendedLine);
-				writer.newLine();
-			}
+			force(temp);
+			Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			hardenFile(path);
+			forceDirectory();
 		}
-		force(temp);
-		Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-		forceDirectory();
+		finally
+		{
+			Files.deleteIfExists(temp);
+		}
 	}
 
 	private void writeNew(Path path, String content) throws IOException
 	{
-		Files.createDirectories(root);
+		ensureDirectory();
 		Path temp = Files.createTempFile(root, path.getFileName().toString(), ".tmp");
-		Files.writeString(temp, content + "\n", StandardCharsets.UTF_8);
-		force(temp);
-		Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-		forceDirectory();
+		try
+		{
+			hardenFile(temp);
+			try (BufferedWriter writer = Files.newBufferedWriter(temp, StandardCharsets.UTF_8))
+			{
+				writer.write(content);
+				writer.newLine();
+			}
+			force(temp);
+			Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			hardenFile(path);
+			forceDirectory();
+		}
+		finally
+		{
+			Files.deleteIfExists(temp);
+		}
+	}
+
+	private void ensureDirectory() throws IOException
+	{
+		Files.createDirectories(root);
+		if (!Files.isDirectory(root) || Files.isSymbolicLink(root)) throw new IOException("unsafe history directory");
+		if (supportsPosix()) Files.setPosixFilePermissions(root, DIRECTORY_PERMISSIONS);
+	}
+
+	private void hardenFile(Path path) throws IOException
+	{
+		if (supportsPosix()) Files.setPosixFilePermissions(path, FILE_PERMISSIONS);
+	}
+
+	private boolean supportsPosix() throws IOException
+	{
+		return posixOverride != null ? posixOverride
+			: Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class);
 	}
 
 	private void force(Path path) throws IOException
@@ -173,6 +231,10 @@ final class LootHistoryStore
 
 	private void forceDirectory() throws IOException
 	{
+		// Windows/non-POSIX providers cannot open directories as FileChannels.
+		// Their inherited per-user ACLs are retained; file contents are still
+		// forced and replacement remains atomic on the underlying provider.
+		if (!supportsPosix()) return;
 		try (FileChannel channel = FileChannel.open(root, StandardOpenOption.READ)) { channel.force(true); }
 	}
 

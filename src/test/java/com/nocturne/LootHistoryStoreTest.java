@@ -4,7 +4,10 @@ import com.google.gson.Gson;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import org.junit.Rule;
 import org.junit.Test;
@@ -169,5 +172,36 @@ public class LootHistoryStoreTest
 		LootHistoryStore.Page page = store.load("First", 0, 50);
 		assertEquals(1, page.totalCount);
 		assertEquals(SubmissionStatus.REJECTED, page.records.get(0).submission);
+	}
+
+	@Test public void nonPosixStorageSkipsUnsupportedDirectoryFsyncAndRemainsReplaceable() throws Exception
+	{
+		Path root = temporary.getRoot().toPath().resolve("windows-history");
+		LootHistoryStore store = new LootHistoryStore(root, new Gson(), false);
+		store.append(record("one", "First", 1));
+		store.append(record("two", "First", 2));
+		Path history = store.pathFor("First");
+		Path moved = history.resolveSibling("moved.jsonl");
+		Files.move(history, moved, StandardCopyOption.ATOMIC_MOVE);
+		Files.delete(moved);
+		Files.delete(root);
+	}
+
+	@Test public void posixStorageHardensDirectoryAndFilesToOwnerOnly() throws Exception
+	{
+		Path root = temporary.getRoot().toPath().resolve("posix-history");
+		LootHistoryStore store = new LootHistoryStore(root, new Gson());
+		store.append(record("one", "First", 1));
+		if (Files.getFileStore(root).supportsFileAttributeView("posix"))
+		{
+			assertEquals(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+				PosixFilePermission.OWNER_EXECUTE), Files.getPosixFilePermissions(root));
+			assertEquals(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+				Files.getPosixFilePermissions(store.pathFor("First")));
+		}
+		else
+		{
+			assertEquals(1, store.load("First", 0, 1).totalCount);
+		}
 	}
 }
