@@ -38,6 +38,7 @@ class PendingWriterTest(unittest.TestCase):
                 points INTEGER, category TEXT, is_active INTEGER);
             INSERT INTO items VALUES(10,20997,'Twisted bow','twisted_bow',1,NULL,1);
             INSERT INTO items VALUES(11,526,'Bones','bones',1,NULL,1);
+            INSERT INTO items VALUES(12,29790,'Noxious point','noxious_point',0,NULL,1);
         """)
         self.create(self.root / "RegularSubmissions.db", """
             CREATE TABLE regular_submissions (
@@ -52,6 +53,9 @@ class PendingWriterTest(unittest.TestCase):
                 identity_match_method TEXT, identity_match_notes TEXT,
                 identity_review_status TEXT, external_id TEXT,
                 screenshot_url TEXT
+                ,price_source TEXT, valuation_rule_id TEXT, valuation_catalogue_version INTEGER,
+                finished_output_item_id INTEGER, finished_output_item_name TEXT,
+                finished_output_market_price_gp INTEGER, derived_unit_price_gp INTEGER
             );
             CREATE TABLE rank_totals(member_id INTEGER PRIMARY KEY, total_points INTEGER);
             INSERT INTO rank_totals VALUES(2,77);
@@ -101,6 +105,23 @@ class PendingWriterTest(unittest.TestCase):
         row = self.rows("SELECT rsn,status,source_type,final_points FROM regular_submissions")[0]
         self.assertEqual(("Test Alt", "pending", "runelite", 2), row)
         self.assertEqual([(77,)], self.rows("SELECT total_points FROM rank_totals"))
+
+    def test_derived_metadata_is_preserved_on_pending_row(self):
+        payload = self.payload(29790, 500_000, version=2)
+        payload["version"] = 4
+        payload["items"][0].update({
+            "price_source": "runelite_derived_equal_share",
+            "valuation_rule_id": "noxious_halberd_components",
+            "valuation_catalogue_version": 1,
+            "finished_output_item_id": 29796,
+            "finished_output_item_name": "Noxious halberd",
+            "finished_output_market_price_gp": 1_500_002,
+            "derived_unit_price_gp": 500_000,
+        })
+        self.assertEqual("pending_stored", process_payload(payload, self.root, NOW.timestamp())["status"])
+        row = self.rows("SELECT price_source,valuation_rule_id,finished_output_item_id,finished_output_market_price_gp,derived_unit_price_gp FROM regular_submissions")[0]
+        self.assertEqual(("runelite_derived_equal_share", "noxious_halberd_components",
+                          29796, 1_500_002, 500_000), row)
 
     def test_low_value_and_legacy_reports_are_excluded(self):
         low = process_payload(self.payload(526, 31), self.root, NOW.timestamp())

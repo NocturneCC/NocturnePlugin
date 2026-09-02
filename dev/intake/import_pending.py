@@ -21,13 +21,19 @@ REQUIRED_COLUMNS = {
     "source_type", "notes", "status", "submitted_at", "identity_match_method",
     "identity_match_notes", "identity_review_status", "external_id",
     "screenshot_url",
+    "price_source", "valuation_rule_id", "valuation_catalogue_version",
+    "finished_output_item_id", "finished_output_item_name",
+    "finished_output_market_price_gp", "derived_unit_price_gp",
 }
 
 
 def candidate(event, item):
-    if event.get("payload_version") not in (2, 3) or event.get("member", {}).get("status") != "matched":
+    if event.get("payload_version") not in (2, 3, 4) or event.get("member", {}).get("status") != "matched":
         return None
-    ordinary = item.get("status") == "needs_context" and item.get("price", {}).get("source") == "runelite_client"
+    price_source = item.get("price", {}).get("source")
+    ordinary = item.get("status") == "needs_context" and price_source in {
+        "runelite_client", "runelite_market", "runelite_derived_full_output", "runelite_derived_equal_share"
+    }
     fixed = item.get("fixed_catalogue")
     fixed_reward = (item.get("status") == "fixed_reward_review"
                     and isinstance(fixed, list) and len(fixed) == 1)
@@ -56,7 +62,14 @@ def candidate(event, item):
     }
     if ordinary:
         base = item["base_points"]
-        return dict(common, item_price=item["price"]["unit_price_gp"],
+        price = item["price"]
+        return dict(common, item_price=price["unit_price_gp"], price_source=price_source,
+                    valuation_rule_id=price.get("valuation_rule_id"),
+                    valuation_catalogue_version=price.get("valuation_catalogue_version"),
+                    finished_output_item_id=price.get("finished_output_item_id"),
+                    finished_output_item_name=price.get("finished_output_item_name"),
+                    finished_output_market_price_gp=price.get("finished_output_market_price_gp"),
+                    derived_unit_price_gp=price.get("derived_unit_price_gp"),
                     base_points=base, multiplier=1.0,
                     final_points=capped_recipient_share(base, 1),
                     category="drop", notes=(
@@ -127,6 +140,9 @@ def apply_candidates(database, candidates, backup=True):
         "notes", "status", "submitted_at", "identity_match_method",
         "identity_match_notes", "identity_review_status", "external_id",
         "screenshot_url",
+        "price_source", "valuation_rule_id", "valuation_catalogue_version",
+        "finished_output_item_id", "finished_output_item_name",
+        "finished_output_market_price_gp", "derived_unit_price_gp",
     ]
     inserted = duplicates = 0
     db = sqlite3.connect(Path(database).resolve().as_uri() + "?mode=rw", uri=True, timeout=5)

@@ -55,6 +55,9 @@ class PendingImportTest(unittest.TestCase):
                 review_notes TEXT, identity_match_method TEXT, identity_match_notes TEXT,
                 identity_review_status TEXT, identity_reviewed_by TEXT, identity_reviewed_at TEXT,
                 identity_review_notes TEXT, external_id TEXT
+                ,price_source TEXT, valuation_rule_id TEXT, valuation_catalogue_version INTEGER,
+                finished_output_item_id INTEGER, finished_output_item_name TEXT,
+                finished_output_market_price_gp INTEGER, derived_unit_price_gp INTEGER
             );
             CREATE TABLE rank_totals(member_id INTEGER PRIMARY KEY, total_points INTEGER NOT NULL DEFAULT 0);
             INSERT INTO rank_totals VALUES(2,77);

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
+from derived_values import validate_item_valuation
 
 MAX_METADATA_BODY = 8192
 MAX_SCREENSHOT_BYTES = 240 * 1024
@@ -69,10 +70,10 @@ def normalize_rsn(value):
 def validate(data, now):
     if not isinstance(data, dict) or type(data.get("version")) is not int:
         raise ValueError("invalid fields")
-    if data["version"] not in (1, 2, 3):
+    if data["version"] not in (1, 2, 3, 4):
         raise ValueError("invalid version")
     expected_fields = {"version", "event_id", "occurred_at", "rsn", "source", "items"}
-    if data["version"] == 3:
+    if data["version"] == 3 or (data["version"] == 4 and "screenshot" in data):
         expected_fields.add("screenshot")
     if set(data) != expected_fields:
         raise ValueError("invalid fields")
@@ -94,18 +95,22 @@ def validate(data, now):
     ids = set()
     for item in items:
         expected = {"item_id", "quantity"} | ({"unit_price_gp"} if data["version"] in (2, 3) else set())
+        if data["version"] == 4:
+            expected = set(item) if isinstance(item, dict) and {"item_id", "quantity"}.issubset(item) else set()
         if not isinstance(item, dict) or set(item) != expected:
             raise ValueError("invalid item fields")
         if type(item["item_id"]) is not int or not 1 <= item["item_id"] <= 1000000:
             raise ValueError("invalid item ID")
         if type(item["quantity"]) is not int or not 1 <= item["quantity"] <= 2147483647:
             raise ValueError("invalid quantity")
-        if data["version"] in (2, 3) and (type(item["unit_price_gp"]) is not int or not 0 <= item["unit_price_gp"] <= 2147483647):
+        if data["version"] in (2, 3, 4) and (type(item.get("unit_price_gp")) is not int or not 0 <= item["unit_price_gp"] <= 2147483647):
             raise ValueError("invalid unit price")
+        if data["version"] == 4:
+            validate_item_valuation(item)
         if item["item_id"] in ids:
             raise ValueError("duplicate item stack")
         ids.add(item["item_id"])
-    if data["version"] == 3:
+    if data["version"] == 3 or (data["version"] == 4 and "screenshot" in data):
         validate_screenshot(data["screenshot"])
     canonical = dict(data, rsn=name, items=sorted(items, key=lambda x: x["item_id"]))
     return name, json.dumps(canonical, sort_keys=True, separators=(",", ":"))

@@ -110,8 +110,13 @@ def inspect_item(items_db, submissions_db, event_id, stack, member, now, max_age
         return result
     if "unit_price_gp" in stack:
         unit_price = stack["unit_price_gp"]
-        price = {"unit_price_gp": unit_price, "source": "runelite_client",
+        source = stack.get("price_source", "runelite_client")
+        price = {"unit_price_gp": unit_price, "source": source,
                  "status": "reported_at_capture" if unit_price > 0 else "price_unavailable"}
+        for field in ("valuation_rule_id", "valuation_catalogue_version", "finished_output_item_id",
+                      "finished_output_item_name", "finished_output_market_price_gp", "derived_unit_price_gp"):
+            if field in stack:
+                price[field] = stack[field]
     else:
         # Legacy v1 reports never included a price; keep their original path.
         price = dict(price_info(item, now, max_age_hours), source="legacy_item_database")
@@ -142,7 +147,7 @@ def build_report(intake_path, database_dir, limit=10, max_age_hours=24, now=None
     root = Path(database_dir)
     result = {"mode": "read_only_preview", "max_price_age_hours": max_age_hours,
               "writes": 0, "automatic_awards_enabled": False,
-              "price_policy": "v2 uses client-reported unit price at capture; v1 uses catalogue price",
+              "price_policy": "v2/v3 use direct client prices; v4 identifies direct or catalogue-derived client prices; v1 uses the item database",
               "identity_note": "RSN matching establishes eligibility, not ownership or proof of a drop.",
               "events": []}
     with ExitStack() as stack:

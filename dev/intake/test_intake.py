@@ -88,6 +88,22 @@ class IntakeTest(unittest.TestCase):
         self.body["items"] = [{"item_id": 526, "quantity": 1}]
         self.assertEqual(201, self.send()[0])
 
+    def test_v4_direct_and_derived_prices_are_validated(self):
+        self.body["version"] = 4
+        self.body["items"] = [{"item_id": 526, "quantity": 1, "unit_price_gp": 32,
+                               "price_source": "runelite_market"}]
+        self.assertEqual(201, self.send()[0])
+        self.body["event_id"] = str(uuid4())
+        self.body["items"] = [{"item_id": 29790, "quantity": 1, "unit_price_gp": 500000,
+            "price_source": "runelite_derived_equal_share",
+            "valuation_rule_id": "noxious_halberd_components", "valuation_catalogue_version": 1,
+            "finished_output_item_id": 29796, "finished_output_item_name": "Noxious halberd",
+            "finished_output_market_price_gp": 1500002, "derived_unit_price_gp": 500000}]
+        self.assertEqual(201, self.send()[0])
+        self.body["event_id"] = str(uuid4())
+        self.body["items"][0]["valuation_catalogue_version"] = 2
+        self.assertEqual(400, self.send()[0])
+
     def test_v3_screenshot_is_validated_handed_off_but_not_stored_in_sqlite(self):
         raw = b"\xff\xd8bounded-test-jpeg\xff\xd9"
         self.body["version"] = 3

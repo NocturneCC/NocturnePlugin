@@ -77,7 +77,7 @@ def process_payload(data, database_dir, now=None):
     """Revalidate one report and insert eligible proposals as pending only."""
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     validate(data, now)
-    if data["version"] not in (2, 3):
+    if data["version"] not in (2, 3, 4):
         return {"status": "excluded", "reason": "legacy_payload", "inserted": 0}
     if data["source"].startswith("Synthetic "):
         return {"status": "excluded", "reason": "synthetic_test", "inserted": 0}
