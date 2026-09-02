@@ -5,8 +5,9 @@ import sqlite3
 import tempfile
 import unittest
 
-from screenshot_lifecycle import (AUDIT, EVIDENCE, LINKS, cleanup, evidence_state,
-                                  migrate, migration_sql, schema_state)
+from screenshot_lifecycle import (AUDIT, EVIDENCE, LINKS, VERSION_TABLE, cleanup,
+                                  evidence_state, migrate, migration_sql,
+                                  require_compatible_schema, schema_state)
 
 NOW = datetime(2026, 9, 2, tzinfo=timezone.utc)
 
@@ -102,6 +103,19 @@ class ScreenshotLifecycleTest(unittest.TestCase):
             migrate(other, apply=True, fail=lambda phase: (_ for _ in ()).throw(KeyboardInterrupt()))
         self.assertEqual("not_applied", schema_state(other))
         self.assertEqual("already_applied", migrate(other, apply=True)["state"])
+
+    def test_schema_version_rejects_missing_partial_and_future(self):
+        missing = self.root / "missing.db"
+        with closing(sqlite3.connect(missing)) as db: db.execute("CREATE TABLE harmless(value INTEGER)")
+        with self.assertRaisesRegex(ValueError, "missing or partial"): require_compatible_schema(missing)
+        self.assertEqual(1, require_compatible_schema(self.db))
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute(f"UPDATE {VERSION_TABLE} SET schema_version=2"); db.commit()
+        with self.assertRaisesRegex(ValueError, "version: 2"): require_compatible_schema(self.db)
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute(f"UPDATE {VERSION_TABLE} SET schema_version=1")
+            db.execute("DROP TABLE runelite_screenshot_submissions"); db.commit()
+        with self.assertRaisesRegex(ValueError, "missing or partial"): require_compatible_schema(self.db)
 
     def test_append_only_audit(self):
         with closing(sqlite3.connect(self.db)) as db:

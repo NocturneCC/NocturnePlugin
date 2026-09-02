@@ -1,7 +1,8 @@
 """Local Unix-socket writer for unverified RuneLite pending submissions."""
 import argparse
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ import sqlite3
 from import_pending import REQUIRED_COLUMNS, apply_candidates, plan, schema_columns
 from intake import MAX_BODY, validate, validate_screenshot
 from preview import identity, inspect_item, readonly
-from screenshot_lifecycle import AUDIT, EVIDENCE, LINKS
+from screenshot_lifecycle import AUDIT, EVIDENCE, LINKS, require_compatible_schema
 
 
 MAX_RESPONSE = 2048
@@ -87,16 +88,31 @@ def evidence_inserter(data, stored, created_at):
     return insert
 
 
+def remove_created_screenshot(stored, event_id, database_dir):
+    if not stored or not stored.get("created") or not stored.get("filename"):
+        return
+    expected = f"{event_id}.jpg"
+    if stored["filename"] != expected:
+        raise ValueError("unsafe staged screenshot identity")
+    directory = private_screenshot_directory(database_dir)
+    path = directory / expected
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        raise ValueError("unsafe staged screenshot")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != stored["digest"]:
+        raise ValueError("staged screenshot digest changed")
+    path.unlink()
+
+
 def check_environment(database_dir):
     root = Path(database_dir)
     missing = REQUIRED_COLUMNS - schema_columns(root / "RegularSubmissions.db")
     if missing:
         raise ValueError("regular_submissions schema missing: " + ", ".join(sorted(missing)))
-    with closing(sqlite3.connect(root / "RegularSubmissions.db")) as db:
-        present = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        required = {EVIDENCE, LINKS, AUDIT}
-        if not required <= present:
-            raise ValueError("screenshot lifecycle schema missing")
+    require_compatible_schema(root / "RegularSubmissions.db")
     with ExitStack() as stack:
         members = stack.enter_context(readonly(root / "Members.db"))
         items = stack.enter_context(readonly(root / "Items.db"))
@@ -108,6 +124,8 @@ def check_environment(database_dir):
 
 def process_payload(data, database_dir, now=None):
     """Revalidate one report and insert eligible proposals as pending only."""
+    root = Path(database_dir)
+    require_compatible_schema(root / "RegularSubmissions.db")
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     validate(data, now)
     if data["version"] not in (2, 3, 4):
@@ -115,7 +133,6 @@ def process_payload(data, database_dir, now=None):
     if data["source"].startswith("Synthetic "):
         return {"status": "excluded", "reason": "synthetic_test", "inserted": 0}
 
-    root = Path(database_dir)
     with ExitStack() as stack:
         members_db = stack.enter_context(readonly(root / "Members.db"))
         items_db = stack.enter_context(readonly(root / "Items.db"))
@@ -143,11 +160,15 @@ def process_payload(data, database_dir, now=None):
         )
         for candidate in candidates:
             candidate["screenshot_url"] = stored["url"]
-    result = apply_candidates(root / "RegularSubmissions.db", candidates, backup=False,
-                              after_insert=evidence_inserter(data, stored,
-                                  datetime.now(timezone.utc).isoformat()))
+    try:
+        result = apply_candidates(root / "RegularSubmissions.db", candidates, backup=False,
+                                  after_insert=evidence_inserter(data, stored,
+                                      datetime.now(timezone.utc).isoformat()))
+    except BaseException:
+        remove_created_screenshot(stored, data["event_id"], root)
+        raise
     if stored and stored["created"] and not result["inserted"]:
-        (root / "runelite-submission-images" / f"{data['event_id']}.jpg").unlink(missing_ok=True)
+        remove_created_screenshot(stored, data["event_id"], root)
     if result["inserted"]:
         status = "pending_stored"
     elif result["duplicates"] or excluded.get("already_imported"):
@@ -215,6 +236,11 @@ def serve(socket_path, database_dir):
                 handle_connection(connection, database_dir)
 
 
+def run_server(socket_path, database_dir):
+    check_environment(database_dir)
+    serve(socket_path, database_dir)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", default="/run/nocturne-plugin-writer/pending.sock")
@@ -225,7 +251,7 @@ def main():
         check_environment(args.database_dir)
         print("Pending writer database checks passed without writes.")
     else:
-        serve(args.socket, args.database_dir)
+        run_server(args.socket, args.database_dir)
 
 
 if __name__ == "__main__":

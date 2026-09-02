@@ -13,8 +13,9 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from intake import socket_handoff
-from pending_writer import handle_connection, process_payload, store_screenshot
-from screenshot_lifecycle import migration_sql
+from pending_writer import (check_environment, handle_connection, process_payload, run_server,
+                            store_screenshot)
+from screenshot_lifecycle import VERSION_TABLE, migration_sql
 
 
 NOW = datetime(2026, 9, 1, 23, 0, tzinfo=timezone.utc)
@@ -228,6 +229,40 @@ class PendingWriterTest(unittest.TestCase):
         payload, _raw = self.with_screenshot(self.payload())
         with self.assertRaisesRegex(ValueError, "unsafe screenshot directory"):
             store_screenshot(payload["screenshot"], payload["event_id"], self.root)
+
+    def test_startup_fails_before_socket_for_missing_partial_and_future_schema(self):
+        socket_path = self.root / "writer.sock"
+        with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
+            db.execute(f"UPDATE {VERSION_TABLE} SET schema_version=2")
+            db.commit()
+        with self.assertRaisesRegex(ValueError, "incompatible.*version"):
+            run_server(socket_path, self.root)
+        self.assertFalse(socket_path.exists())
+        with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
+            db.execute(f"UPDATE {VERSION_TABLE} SET schema_version=1")
+            db.execute("DROP TRIGGER runelite_screenshot_audit_no_delete")
+            db.commit()
+        with self.assertRaisesRegex(ValueError, "missing or partial"):
+            run_server(socket_path, self.root)
+        self.assertFalse(socket_path.exists())
+
+    def test_startup_checks_before_serving_and_complete_schema_passes(self):
+        order = []
+        with patch("pending_writer.check_environment", side_effect=lambda _root: order.append("check")) as check, \
+             patch("pending_writer.serve", side_effect=lambda *_args: order.append("serve")) as serve:
+            run_server(self.root / "writer.sock", self.root)
+        self.assertEqual(["check", "serve"], order)
+        check.assert_called_once_with(self.root)
+        serve.assert_called_once_with(self.root / "writer.sock", self.root)
+        check_environment(self.root)
+
+    def test_database_failure_after_image_staging_removes_image(self):
+        payload, _raw = self.with_screenshot(self.payload())
+        with patch("pending_writer.apply_candidates", side_effect=sqlite3.OperationalError("injected")):
+            with self.assertRaises(sqlite3.OperationalError):
+                process_payload(payload, self.root, NOW.timestamp())
+        directory = self.root / "runelite-submission-images"
+        self.assertEqual([], list(directory.glob("*.jpg")))
 
     def test_socket_protocol_returns_small_receipt(self):
         server, client = socket.socketpair()

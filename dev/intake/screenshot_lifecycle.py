@@ -16,7 +16,9 @@ import uuid
 EVIDENCE = "runelite_screenshot_evidence"
 LINKS = "runelite_screenshot_submissions"
 AUDIT = "runelite_screenshot_lifecycle_audit"
-OBJECTS = {EVIDENCE, LINKS, AUDIT, "runelite_screenshot_audit_no_update",
+VERSION_TABLE = "runelite_screenshot_schema"
+SCHEMA_VERSION = 1
+OBJECTS = {VERSION_TABLE, EVIDENCE, LINKS, AUDIT, "runelite_screenshot_audit_no_update",
            "runelite_screenshot_audit_no_delete"}
 DENIED_DAYS = 7
 APPROVED_DAYS = 30
@@ -24,6 +26,10 @@ APPROVED_DAYS = 30
 
 def migration_sql():
     return f"""
+    CREATE TABLE {VERSION_TABLE}(
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema_version INTEGER NOT NULL
+    );
+    INSERT INTO {VERSION_TABLE}(singleton,schema_version) VALUES(1,{SCHEMA_VERSION});
     CREATE TABLE {EVIDENCE}(
       event_uuid TEXT PRIMARY KEY, image_filename TEXT UNIQUE, image_sha256 TEXT,
       image_bytes INTEGER, created_at TEXT NOT NULL, review_state TEXT NOT NULL,
@@ -58,6 +64,34 @@ def schema_state(database):
     raise ValueError("ambiguous partially applied screenshot lifecycle schema")
 
 
+def require_compatible_schema(database):
+    try:
+        state = schema_state(database)
+    except ValueError as error:
+        raise ValueError("screenshot lifecycle schema is missing or partial") from error
+    if state != "already_applied":
+        raise ValueError("screenshot lifecycle schema is missing or partial")
+    expected_columns = {
+        VERSION_TABLE: ("singleton", "schema_version"),
+        EVIDENCE: ("event_uuid", "image_filename", "image_sha256", "image_bytes", "created_at",
+                   "review_state", "purge_deadline", "deleted_at", "storage_state"),
+        LINKS: ("event_uuid", "submission_id"),
+        AUDIT: ("audit_id", "event_uuid", "image_filename", "image_sha256", "action",
+                "occurred_at", "detail"),
+    }
+    with closing(sqlite3.connect(f"file:{Path(database)}?mode=ro", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        versions = db.execute(f"SELECT singleton,schema_version FROM {VERSION_TABLE}").fetchall()
+        if versions != [(1, SCHEMA_VERSION)]:
+            reported = versions[0][1] if len(versions) == 1 else "invalid"
+            raise ValueError(f"incompatible screenshot lifecycle schema version: {reported}")
+        for table, expected in expected_columns.items():
+            actual = tuple(row[1] for row in db.execute(f'PRAGMA table_info("{table}")'))
+            if actual != expected:
+                raise ValueError(f"incompatible screenshot lifecycle table: {table}")
+    return SCHEMA_VERSION
+
+
 def migrate(database, apply=False, fail=None):
     state = schema_state(database)
     if state == "already_applied" or not apply:
@@ -80,6 +114,7 @@ def migrate(database, apply=False, fail=None):
         except BaseException:
             db.rollback()
             raise
+    require_compatible_schema(database)
     return {"state": schema_state(database), "dry_run": False}
 
 
