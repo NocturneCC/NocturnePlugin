@@ -26,7 +26,7 @@ final class LootRecord
 	{
 		this.rsn = rsn;
 		this.source = source;
-		this.items = List.copyOf(items);
+		this.items = LootItem.consolidate(items);
 		this.group = group;
 	}
 }

@@ -11,10 +11,12 @@ public class ScreenshotCaptureTest
 	@Test
 	public void eligibilityUsesIndividualUnitPrice()
 	{
-		assertFalse(ScreenshotCapture.isLikelyEligible(List.of(
-			new LootItem(1, 2_000_000, "Cheap stack", 1))));
-		assertTrue(ScreenshotCapture.isLikelyEligible(List.of(
-			new LootItem(2, 1, "Eligible item", 500_000))));
+		assertFalse(ScreenshotCapture.isLikelyEligible(LootItem.consolidate(List.of(
+			new LootItem(1, 300_000, "Cheap stack", 1),
+			new LootItem(1, 300_000, "Cheap stack", 1)))));
+		assertTrue(ScreenshotCapture.isLikelyEligible(LootItem.consolidate(List.of(
+			new LootItem(2, 1, "Eligible item", 500_000),
+			new LootItem(2, 2, "Eligible item", 500_000)))));
 	}
 
 	@Test

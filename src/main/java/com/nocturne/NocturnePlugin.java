@@ -249,6 +249,7 @@ public class NocturnePlugin extends Plugin
 		{
 			return;
 		}
+		items = LootItem.consolidate(items);
 		GroupTracker tracker = groups;
 		GroupSnapshot group = GroupSnapshot.unavailable("Group capture is off.");
 		if (tracker != null && config.captureGroups())

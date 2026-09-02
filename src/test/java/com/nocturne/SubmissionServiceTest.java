@@ -39,6 +39,21 @@ public class SubmissionServiceTest
 	}
 
 	@Test
+	public void payloadContainsConsolidatedStacksInFirstOccurrenceOrder()
+	{
+		LootRecord record = new LootRecord("Simons Alt", "Man", List.of(
+			new LootItem(2361, 2, "Adamantite bar", 1_900),
+			new LootItem(526, 1, "Bones", 32),
+			new LootItem(2361, 4, "Adamantite bar", 1_900)));
+
+		JsonObject body = SubmissionService.payload(record);
+		assertEquals(2, body.getAsJsonArray("items").size());
+		assertEquals(2361, body.getAsJsonArray("items").get(0).getAsJsonObject().get("item_id").getAsInt());
+		assertEquals(6, body.getAsJsonArray("items").get(0).getAsJsonObject().get("quantity").getAsInt());
+		assertEquals(526, body.getAsJsonArray("items").get(1).getAsJsonObject().get("item_id").getAsInt());
+	}
+
+	@Test
 	public void screenshotPayloadIsVersionThreeAndBounded()
 	{
 		byte[] jpeg = {(byte) 0xff, (byte) 0xd8, 1, 2, (byte) 0xff, (byte) 0xd9};
