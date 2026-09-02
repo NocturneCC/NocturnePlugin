@@ -1,6 +1,6 @@
 """Preview or import qualifying RuneLite reports as pending submissions.
 
-No rank totals or approvals are written. Only version 2 reports with an active
+No rank totals or approvals are written. Only version 2/3 reports with an active
 member match are eligible. Apply mode backs up RegularSubmissions.db first.
 """
 import argparse
@@ -20,11 +20,12 @@ REQUIRED_COLUMNS = {
     "item_price", "base_points", "multiplier", "final_points", "category",
     "source_type", "notes", "status", "submitted_at", "identity_match_method",
     "identity_match_notes", "identity_review_status", "external_id",
+    "screenshot_url",
 }
 
 
 def candidate(event, item):
-    if event.get("payload_version") != 2 or event.get("member", {}).get("status") != "matched":
+    if event.get("payload_version") not in (2, 3) or event.get("member", {}).get("status") != "matched":
         return None
     ordinary = item.get("status") == "needs_context" and item.get("price", {}).get("source") == "runelite_client"
     fixed = item.get("fixed_catalogue")
@@ -125,6 +126,7 @@ def apply_candidates(database, candidates, backup=True):
         "base_points", "multiplier", "final_points", "category", "source_type",
         "notes", "status", "submitted_at", "identity_match_method",
         "identity_match_notes", "identity_review_status", "external_id",
+        "screenshot_url",
     ]
     inserted = duplicates = 0
     db = sqlite3.connect(Path(database).resolve().as_uri() + "?mode=rw", uri=True, timeout=5)
@@ -137,7 +139,7 @@ def apply_candidates(database, candidates, backup=True):
                 continue
             placeholders = ",".join("?" for _ in columns)
             db.execute(f"INSERT INTO regular_submissions ({','.join(columns)}) VALUES ({placeholders})",
-                       tuple(row[name] for name in columns))
+                       tuple(row.get(name) for name in columns))
             inserted += 1
         db.commit()
     except BaseException:

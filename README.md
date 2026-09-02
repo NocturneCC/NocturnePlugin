@@ -2,7 +2,7 @@
 
 RuneLite companion for Nocturne clan members and community event participants.
 
-## Development preview — 0.3.1
+## Development preview — 0.3.2
 
 The purple **N** sidebar shows compact loot cards: RuneLite item sprites,
 quantities, source, time and delivery status. Raid cards also show a locally
@@ -24,16 +24,26 @@ reveals them for local testing. Names are not presented as verified clan members
 **Send drops to test intake** is off by default. When enabled, new drops send
 only your RSN, source, item IDs, quantities, RuneLite unit prices, timestamp and a random event UUID to
 `https://nocturne.events/api/plugin/dev/drops`. The server also receives your IP
-address as part of the connection. No group names, credentials, screenshots,
-chat, membership data or points are sent. The price is client-reported and does
+address as part of the connection. No group names, credentials, membership data
+or points are sent. **Attach drop screenshots** is a separate opt-in setting for
+likely point-eligible loot. It sends one compressed RuneLite-canvas JPEG; chat is
+excluded by default unless **Include chat in screenshots** is separately enabled.
+The cropped game view can still contain visible players, overhead names and
+plugin overlays. Full-canvas images can contain public, clan or private chat, so
+both screenshot settings are off by default and display RuneLite's external-server warning.
+The price is client-reported and does
 not prove a drop; Midgard remains responsible for scoring. Item sprites come from RuneLite's
 item cache; no image downloads are needed.
 
 The companion test service is in [dev/intake](dev/intake/README.md). Committing
 these files does not deploy it. Keep submissions off until the Midgard service
 and HTTPS route are installed and checked. It stores unverified test records in
-its own capped database and accepts only explicitly configured test RSNs. There
-is no Discord login, member lookup or live scoring in this preview.
+its own capped database and accepts only explicitly configured test RSNs. A
+separate local writer can match an active member and create an unverified pending
+review row, but cannot approve it or change rank totals. Screenshot bytes are not
+stored in the public intake database and are served only through the authenticated
+super-admin API. Private storage is capped at 2,000 images; when full, the pending
+submission is still created without an attachment.
 
 Cards distinguish **Captured locally**, **Sending to test intake…**, **Received
 by test intake**, rejection, full queue, cancellation and unconfirmed delivery.
@@ -160,6 +170,18 @@ Group capture test:
    must not appear. Teammates who died during the first raid should remain on its card.
 5. Disable/re-enable group capture mid-raid. The capture must be incomplete even
    if all currently visible party slots match. Test solo and spectator cases too.
+
+Screenshot attachment test:
+
+1. Leave **Attach drop screenshots** off and confirm an eligible pending drop uses
+   the item-icon fallback on the review page.
+2. Enable **Attach drop screenshots**, leave chat inclusion off, and receive loot
+   containing an individual item worth at least 500,000 gp. Confirm the pending
+   review card shows the captured game viewport and no chat box.
+3. Separately enable **Include chat in screenshots** only after reviewing its
+   warning. On another eligible drop, confirm the full canvas is attached.
+4. Confirm excluded low-value loot never creates an image file and approving or
+   denying a pending item still leaves rank totals governed by the existing review flow.
 
 ## Planned next stages
 

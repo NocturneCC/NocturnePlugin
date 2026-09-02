@@ -1,4 +1,6 @@
 import io
+import base64
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -8,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 from unittest.mock import patch
-from intake import create_app
+from intake import MAX_BODY, create_app
 
 
 class IntakeTest(unittest.TestCase):
@@ -65,7 +67,7 @@ class IntakeTest(unittest.TestCase):
         self.assertEqual(400, self.send()[0])
 
     def test_request_limits_and_bad_json(self):
-        self.assertEqual(413, self.send(raw=b" " * 8193)[0])
+        self.assertEqual(413, self.send(raw=b" " * (MAX_BODY + 1))[0])
         self.assertEqual(400, self.send(raw=b"{")[0])
         self.assertEqual(411, self.send(CONTENT_LENGTH="")[0])
         self.assertEqual(415, self.send(CONTENT_TYPE="text/plain")[0])
@@ -85,6 +87,47 @@ class IntakeTest(unittest.TestCase):
         self.body["version"] = 1
         self.body["items"] = [{"item_id": 526, "quantity": 1}]
         self.assertEqual(201, self.send()[0])
+
+    def test_v3_screenshot_is_validated_handed_off_but_not_stored_in_sqlite(self):
+        raw = b"\xff\xd8bounded-test-jpeg\xff\xd9"
+        self.body["version"] = 3
+        self.body["screenshot"] = {
+            "mime_type": "image/jpeg",
+            "width": 640,
+            "height": 480,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "data_base64": base64.b64encode(raw).decode(),
+        }
+        calls = []
+        self.app = create_app(self.temp.name, ["Simons Alt"],
+                              clock=lambda: self.now, handoff=calls.append)
+        self.assertEqual(201, self.send()[0])
+        self.assertIn("data_base64", calls[0])
+        with closing(sqlite3.connect(Path(self.temp.name) / "test-drops.sqlite3")) as db:
+            payload, digest = db.execute(
+                "SELECT payload, screenshot_sha256 FROM test_drops"
+            ).fetchone()
+        self.assertNotIn("data_base64", payload)
+        self.assertEqual(2, json.loads(payload)["version"])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
+        self.assertEqual(200, self.send()[0])
+
+    def test_v3_rejects_invalid_or_changed_screenshot(self):
+        raw = b"\xff\xd8image-one\xff\xd9"
+        self.body["version"] = 3
+        self.body["screenshot"] = {
+            "mime_type": "image/jpeg", "width": 320, "height": 240,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "data_base64": base64.b64encode(raw).decode(),
+        }
+        self.assertEqual(201, self.send()[0])
+        changed = b"\xff\xd8image-two\xff\xd9"
+        self.body["screenshot"]["sha256"] = hashlib.sha256(changed).hexdigest()
+        self.body["screenshot"]["data_base64"] = base64.b64encode(changed).decode()
+        self.assertEqual(409, self.send()[0])
+        self.body["event_id"] = str(uuid4())
+        self.body["screenshot"]["sha256"] = "0" * 64
+        self.assertEqual(400, self.send()[0])
 
     def test_price_field_must_match_payload_version(self):
         self.body["items"] = [{"item_id": 526, "quantity": 1}]

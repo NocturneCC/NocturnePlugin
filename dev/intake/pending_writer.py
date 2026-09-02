@@ -5,15 +5,58 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import stat
 import socket
 import sqlite3
 
 from import_pending import REQUIRED_COLUMNS, apply_candidates, plan, schema_columns
-from intake import MAX_BODY, validate
+from intake import MAX_BODY, validate, validate_screenshot
 from preview import identity, inspect_item, readonly
 
 
 MAX_RESPONSE = 2048
+MAX_STORED_SCREENSHOTS = 2000
+SCREENSHOT_URL_PREFIX = "/admin/api/nocturne/runelite-submission-images/"
+
+
+def private_screenshot_directory(database_dir):
+    directory = Path(database_dir) / "runelite-submission-images"
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    metadata = directory.lstat()
+    if (not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o077):
+        raise ValueError("unsafe screenshot directory")
+    return directory
+
+
+def store_screenshot(image, event_id, database_dir):
+    if image is None:
+        return None
+    raw = validate_screenshot(image)
+    directory = private_screenshot_directory(database_dir)
+    final = directory / f"{event_id}.jpg"
+    if final.exists():
+        if final.read_bytes() != raw:
+            raise ValueError("screenshot event collision")
+        return SCREENSHOT_URL_PREFIX + final.name, False
+    if sum(1 for path in directory.iterdir()
+           if path.is_file() and path.suffix == ".jpg") >= MAX_STORED_SCREENSHOTS:
+        return None, False
+    temporary = directory / f".{event_id}.{os.getpid()}.tmp"
+    try:
+        with temporary.open("xb") as output:
+            output.write(raw)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return SCREENSHOT_URL_PREFIX + final.name, True
 
 
 def check_environment(database_dir):
@@ -34,7 +77,7 @@ def process_payload(data, database_dir, now=None):
     """Revalidate one report and insert eligible proposals as pending only."""
     now = datetime.now(timezone.utc).timestamp() if now is None else now
     validate(data, now)
-    if data["version"] != 2:
+    if data["version"] not in (2, 3):
         return {"status": "excluded", "reason": "legacy_payload", "inserted": 0}
     if data["source"].startswith("Synthetic "):
         return {"status": "excluded", "reason": "synthetic_test", "inserted": 0}
@@ -60,7 +103,17 @@ def process_payload(data, database_dir, now=None):
             ],
         }
     candidates, excluded = plan({"events": [event]})
+    screenshot_url = None
+    screenshot_created = False
+    if candidates and data.get("screenshot"):
+        screenshot_url, screenshot_created = store_screenshot(
+            data["screenshot"], data["event_id"], root
+        )
+        for candidate in candidates:
+            candidate["screenshot_url"] = screenshot_url
     result = apply_candidates(root / "RegularSubmissions.db", candidates, backup=False)
+    if screenshot_created and not result["inserted"]:
+        (root / "runelite-submission-images" / f"{data['event_id']}.jpg").unlink(missing_ok=True)
     if result["inserted"]:
         status = "pending_stored"
     elif result["duplicates"] or excluded.get("already_imported"):

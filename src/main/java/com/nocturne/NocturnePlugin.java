@@ -3,10 +3,12 @@ package com.nocturne;
 import com.google.inject.Provides;
 import com.google.gson.Gson;
 import okhttp3.OkHttpClient;
+import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.concurrent.ScheduledExecutorService;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +31,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.http.api.loottracker.LootRecordType;
 import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.DrawManager;
 import net.runelite.client.ui.NavigationButton;
 
 @Slf4j
@@ -59,6 +62,12 @@ public class NocturnePlugin extends Plugin
 
 	@Inject
 	private Gson gson;
+
+	@Inject
+	private DrawManager drawManager;
+
+	@Inject
+	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
 
@@ -253,10 +262,29 @@ public class NocturnePlugin extends Plugin
 		Object token = lifecycle;
 		if (sender != null && config.submitTestDrops())
 		{
-			sender.submit(record, status ->
+			Consumer<SubmissionStatus> update = status ->
 			{
 				if (lifecycle == token) withPanel(view -> view.setSubmission(record.id, status));
-			});
+			};
+			if (config.attachScreenshots() && ScreenshotCapture.isLikelyEligible(items))
+			{
+				boolean includeChat = config.includeChatInScreenshots();
+				Rectangle viewport = new Rectangle(client.getViewportXOffset(), client.getViewportYOffset(),
+					client.getViewportWidth(), client.getViewportHeight());
+				drawManager.requestNextFrameListener(frame -> executor.submit(() ->
+				{
+					SubmissionScreenshot screenshot = ScreenshotCapture.encode(frame, viewport, includeChat);
+					SubmissionService active = submissions;
+					if (lifecycle == token && active == sender)
+					{
+						active.submit(record, screenshot, update);
+					}
+				}));
+			}
+			else
+			{
+				sender.submit(record, update);
+			}
 		}
 		log.debug("Nocturne detected loot: {} from {}, {} item stacks", rsn, source, items.size());
 	}

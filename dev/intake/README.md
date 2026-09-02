@@ -136,6 +136,30 @@ submission pages do not read the test-intake database, so even a stored receipt
 is not a website submission. Eventually excluded low-value loot should remain
 intake-only, while qualified awards enter the existing submission workflow.
 
+Payload version 3 may also include one bounded JPEG captured from the RuneLite
+canvas after the user explicitly enables screenshot attachments. The plugin
+requests the next rendered frame only for a locally
+price-eligible loot event. Chat is excluded by default by cropping to the game
+viewport; users must explicitly enable full-canvas capture. The intake verifies
+the JPEG markers, dimensions, SHA-256 digest and decoded 240 KiB limit. Image
+bytes are never stored in the public intake SQLite database. The private writer
+persists an image only when it creates an eligible pending submission, using an
+administrator-authenticated URL; excluded loot retains no image.
+The private directory must be owned by the writer with mode `0700` and is capped
+at 2,000 JPEGs. At the cap, pending submissions continue without an attachment.
+
+After pulling the reviewed screenshot release, install the server integration:
+
+```bash
+sudo python3 -B dev/intake/install_screenshot_support.py
+```
+
+The installer first runs the full intake test suite, verifies all four services,
+compiles the staged admin API, and validates nginx. It backs up `admin_app.py`
+and the active nginx site, changes only the existing intake body limit, installs
+the `noc_super_admin` image route, and rolls both files and services back on any
+failure.
+
 ### Pending-submission preview and manual importer
 
 `import_pending.py` bridges eligible version 2 reports into the existing

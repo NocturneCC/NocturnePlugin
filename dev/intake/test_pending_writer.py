@@ -1,4 +1,6 @@
 import json
+import base64
+import hashlib
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from intake import socket_handoff
-from pending_writer import handle_connection, process_payload
+from pending_writer import handle_connection, process_payload, store_screenshot
 
 
 NOW = datetime(2026, 9, 1, 23, 0, tzinfo=timezone.utc)
@@ -48,7 +50,8 @@ class PendingWriterTest(unittest.TestCase):
                 source_type TEXT NOT NULL DEFAULT 'regular', notes TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', submitted_at TEXT,
                 identity_match_method TEXT, identity_match_notes TEXT,
-                identity_review_status TEXT, external_id TEXT
+                identity_review_status TEXT, external_id TEXT,
+                screenshot_url TEXT
             );
             CREATE TABLE rank_totals(member_id INTEGER PRIMARY KEY, total_points INTEGER);
             INSERT INTO rank_totals VALUES(2,77);
@@ -74,6 +77,17 @@ class PendingWriterTest(unittest.TestCase):
             "items": [item],
         }
 
+    @staticmethod
+    def with_screenshot(payload):
+        raw = b"\xff\xd8pending-writer-test\xff\xd9"
+        payload["version"] = 3
+        payload["screenshot"] = {
+            "mime_type": "image/jpeg", "width": 640, "height": 480,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "data_base64": base64.b64encode(raw).decode(),
+        }
+        return payload, raw
+
     def rows(self, query):
         with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
             return db.execute(query).fetchall()
@@ -94,6 +108,45 @@ class PendingWriterTest(unittest.TestCase):
         self.assertEqual("excluded", low["status"])
         self.assertEqual("excluded", legacy["status"])
         self.assertEqual([], self.rows("SELECT submission_id FROM regular_submissions"))
+
+    def test_eligible_screenshot_is_private_and_attached_to_pending_row(self):
+        payload, raw = self.with_screenshot(self.payload())
+        result = process_payload(payload, self.root, NOW.timestamp())
+        self.assertEqual("pending_stored", result["status"])
+        expected_url = (
+            "/admin/api/nocturne/runelite-submission-images/"
+            + payload["event_id"] + ".jpg"
+        )
+        self.assertEqual([(expected_url,)], self.rows(
+            "SELECT screenshot_url FROM regular_submissions"
+        ))
+        image = self.root / "runelite-submission-images" / (payload["event_id"] + ".jpg")
+        self.assertEqual(raw, image.read_bytes())
+        self.assertEqual(0o600, image.stat().st_mode & 0o777)
+
+    def test_excluded_screenshot_is_not_persisted(self):
+        payload, _raw = self.with_screenshot(self.payload(526, 31))
+        self.assertEqual("excluded", process_payload(payload, self.root, NOW.timestamp())["status"])
+        self.assertFalse((self.root / "runelite-submission-images").exists())
+
+    def test_screenshot_cap_falls_back_to_pending_without_image(self):
+        directory = self.root / "runelite-submission-images"
+        directory.mkdir(mode=0o700)
+        with patch("pending_writer.MAX_STORED_SCREENSHOTS", 0):
+            payload, _raw = self.with_screenshot(self.payload())
+            result = process_payload(payload, self.root, NOW.timestamp())
+        self.assertEqual("pending_stored", result["status"])
+        self.assertEqual([(None,)], self.rows(
+            "SELECT screenshot_url FROM regular_submissions"
+        ))
+        self.assertEqual([], list(directory.glob("*.jpg")))
+
+    def test_unsafe_screenshot_directory_is_rejected(self):
+        directory = self.root / "runelite-submission-images"
+        directory.mkdir(mode=0o770)
+        payload, _raw = self.with_screenshot(self.payload())
+        with self.assertRaisesRegex(ValueError, "unsafe screenshot directory"):
+            store_screenshot(payload["screenshot"], payload["event_id"], self.root)
 
     def test_socket_protocol_returns_small_receipt(self):
         server, client = socket.socketpair()

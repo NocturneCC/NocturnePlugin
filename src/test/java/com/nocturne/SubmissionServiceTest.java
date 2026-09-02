@@ -3,6 +3,7 @@ package com.nocturne;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import java.io.IOException;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -35,6 +36,20 @@ public class SubmissionServiceTest
 		assertFalse(body.toString().contains("Bones"));
 		assertEquals(526, body.getAsJsonArray("items").get(0).getAsJsonObject().get("item_id").getAsInt());
 		assertEquals(32, body.getAsJsonArray("items").get(0).getAsJsonObject().get("unit_price_gp").getAsInt());
+	}
+
+	@Test
+	public void screenshotPayloadIsVersionThreeAndBounded()
+	{
+		byte[] jpeg = {(byte) 0xff, (byte) 0xd8, 1, 2, (byte) 0xff, (byte) 0xd9};
+		SubmissionScreenshot screenshot = new SubmissionScreenshot(
+			"image/jpeg", 640, 480, jpeg, "a".repeat(64));
+		JsonObject body = SubmissionService.payload(record(), screenshot);
+		assertEquals(3, body.get("version").getAsInt());
+		JsonObject image = body.getAsJsonObject("screenshot");
+		assertEquals("image/jpeg", image.get("mime_type").getAsString());
+		assertEquals(640, image.get("width").getAsInt());
+		assertArrayEquals(jpeg, Base64.getDecoder().decode(image.get("data_base64").getAsString()));
 	}
 
 	@Test

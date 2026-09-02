@@ -34,8 +34,13 @@ final class SubmissionService
 
 	static JsonObject payload(LootRecord record)
 	{
+		return payload(record, null);
+	}
+
+	static JsonObject payload(LootRecord record, SubmissionScreenshot screenshot)
+	{
 		JsonObject body = new JsonObject();
-		body.addProperty("version", 2);
+		body.addProperty("version", screenshot == null ? 2 : 3);
 		body.addProperty("event_id", record.id);
 		body.addProperty("occurred_at", record.occurredAt);
 		body.addProperty("rsn", record.rsn);
@@ -50,15 +55,32 @@ final class SubmissionService
 			items.add(entry);
 		}
 		body.add("items", items);
+		if (screenshot != null)
+		{
+			JsonObject image = new JsonObject();
+			image.addProperty("mime_type", screenshot.mimeType);
+			image.addProperty("width", screenshot.width);
+			image.addProperty("height", screenshot.height);
+			image.addProperty("sha256", screenshot.sha256);
+			image.addProperty("data_base64", screenshot.base64());
+			body.add("screenshot", image);
+		}
 		return body;
 	}
 
 	synchronized void submit(LootRecord record, Consumer<SubmissionStatus> update)
 	{
+		submit(record, null, update);
+	}
+
+	synchronized void submit(LootRecord record, SubmissionScreenshot screenshot,
+		Consumer<SubmissionStatus> update)
+	{
 		if (closed) { update.accept(SubmissionStatus.CANCELLED); return; }
 		if (pending.size() >= 8) { update.accept(SubmissionStatus.BUSY); return; }
 		Request request = new Request.Builder().url(ENDPOINT)
-			.post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"), gson.toJson(payload(record))))
+			.post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
+				gson.toJson(payload(record, screenshot))))
 			.build();
 		Call call = http.newCall(request);
 		pending.put(call, update);

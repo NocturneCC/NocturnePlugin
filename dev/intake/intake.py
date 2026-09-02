@@ -1,4 +1,7 @@
 """Isolated WSGI test intake. Run behind gunicorn and the supplied nginx limits."""
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -9,7 +12,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
-MAX_BODY = 8192
+MAX_METADATA_BODY = 8192
+MAX_SCREENSHOT_BYTES = 240 * 1024
+MAX_BODY = 360 * 1024
 MAX_ROWS = 10000
 RSN = re.compile(r"[A-Za-z0-9 _-]{1,12}\Z")
 
@@ -62,12 +67,15 @@ def normalize_rsn(value):
 
 
 def validate(data, now):
-    if not isinstance(data, dict) or set(data) != {
-        "version", "event_id", "occurred_at", "rsn", "source", "items"
-    }:
+    if not isinstance(data, dict) or type(data.get("version")) is not int:
         raise ValueError("invalid fields")
-    if type(data["version"]) is not int or data["version"] not in (1, 2):
+    if data["version"] not in (1, 2, 3):
         raise ValueError("invalid version")
+    expected_fields = {"version", "event_id", "occurred_at", "rsn", "source", "items"}
+    if data["version"] == 3:
+        expected_fields.add("screenshot")
+    if set(data) != expected_fields:
+        raise ValueError("invalid fields")
     if not isinstance(data["event_id"], str) or str(UUID(data["event_id"])) != data["event_id"]:
         raise ValueError("invalid event ID")
     name = normalize_rsn(data["rsn"])
@@ -85,20 +93,62 @@ def validate(data, now):
         raise ValueError("invalid items")
     ids = set()
     for item in items:
-        expected = {"item_id", "quantity"} | ({"unit_price_gp"} if data["version"] == 2 else set())
+        expected = {"item_id", "quantity"} | ({"unit_price_gp"} if data["version"] in (2, 3) else set())
         if not isinstance(item, dict) or set(item) != expected:
             raise ValueError("invalid item fields")
         if type(item["item_id"]) is not int or not 1 <= item["item_id"] <= 1000000:
             raise ValueError("invalid item ID")
         if type(item["quantity"]) is not int or not 1 <= item["quantity"] <= 2147483647:
             raise ValueError("invalid quantity")
-        if data["version"] == 2 and (type(item["unit_price_gp"]) is not int or not 0 <= item["unit_price_gp"] <= 2147483647):
+        if data["version"] in (2, 3) and (type(item["unit_price_gp"]) is not int or not 0 <= item["unit_price_gp"] <= 2147483647):
             raise ValueError("invalid unit price")
         if item["item_id"] in ids:
             raise ValueError("duplicate item stack")
         ids.add(item["item_id"])
+    if data["version"] == 3:
+        validate_screenshot(data["screenshot"])
     canonical = dict(data, rsn=name, items=sorted(items, key=lambda x: x["item_id"]))
     return name, json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+
+
+def validate_screenshot(image):
+    if not isinstance(image, dict) or set(image) != {
+        "mime_type", "width", "height", "sha256", "data_base64"
+    }:
+        raise ValueError("invalid screenshot fields")
+    if image["mime_type"] != "image/jpeg":
+        raise ValueError("invalid screenshot type")
+    if type(image["width"]) is not int or not 32 <= image["width"] <= 4096:
+        raise ValueError("invalid screenshot width")
+    if type(image["height"]) is not int or not 32 <= image["height"] <= 4096:
+        raise ValueError("invalid screenshot height")
+    if not isinstance(image["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", image["sha256"]):
+        raise ValueError("invalid screenshot digest")
+    if not isinstance(image["data_base64"], str):
+        raise ValueError("invalid screenshot data")
+    try:
+        raw = base64.b64decode(image["data_base64"], validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid screenshot encoding")
+    if not 4 <= len(raw) <= MAX_SCREENSHOT_BYTES or not raw.startswith(b"\xff\xd8") or not raw.endswith(b"\xff\xd9"):
+        raise ValueError("invalid screenshot bytes")
+    if hashlib.sha256(raw).hexdigest() != image["sha256"]:
+        raise ValueError("screenshot digest mismatch")
+    return raw
+
+
+def storage_payload(data, normalized_rsn):
+    """Remove image bytes from persistent intake storage while retaining metadata."""
+    stored = dict(data, rsn=normalized_rsn)
+    stored["items"] = sorted(data["items"], key=lambda item: item["item_id"])
+    stored.pop("screenshot", None)
+    if stored["version"] == 3:
+        stored["version"] = 2
+    return json.dumps(stored, sort_keys=True, separators=(",", ":"))
+
+
+def screenshot_digest(data):
+    return data.get("screenshot", {}).get("sha256")
 
 
 def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
@@ -133,6 +183,9 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
             event_id TEXT PRIMARY KEY, rsn TEXT NOT NULL,
             received_at REAL NOT NULL, payload TEXT NOT NULL)""")
         db.execute("CREATE INDEX IF NOT EXISTS intake_rsn_time ON test_drops(rsn, received_at)")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(test_drops)")}
+        if "screenshot_sha256" not in columns:
+            db.execute("ALTER TABLE test_drops ADD COLUMN screenshot_sha256 TEXT")
 
     def reply(start_response, code, body):
         reasons = {200: "OK", 201: "Created", 400: "Bad Request", 403: "Forbidden",
@@ -171,6 +224,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
             data = json.loads(raw)
             now = clock()
             name, canonical = validate(data, now)
+            stored = storage_payload(data, name)
+            digest = screenshot_digest(data)
         except (ValueError, TypeError, OverflowError, RecursionError, AttributeError):
             return error(400)
         if name not in allowed:
@@ -178,9 +233,9 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
         try:
             with connect() as db:
                 db.execute("BEGIN IMMEDIATE")
-                existing = db.execute("SELECT payload FROM test_drops WHERE event_id=?", (data["event_id"],)).fetchone()
+                existing = db.execute("SELECT payload, screenshot_sha256 FROM test_drops WHERE event_id=?", (data["event_id"],)).fetchone()
                 if existing:
-                    if existing[0] != canonical:
+                    if existing != (stored, digest):
                         return error(409)
                     try:
                         handoff(canonical)
@@ -193,7 +248,9 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
                     return error(429)
                 if db.execute("SELECT count(*) FROM test_drops").fetchone()[0] >= MAX_ROWS:
                     return error(507)
-                db.execute("INSERT INTO test_drops VALUES (?, ?, ?, ?)", (data["event_id"], name, now, canonical))
+                db.execute("""INSERT INTO test_drops
+                    (event_id, rsn, received_at, payload, screenshot_sha256)
+                    VALUES (?, ?, ?, ?, ?)""", (data["event_id"], name, now, stored, digest))
             # Acknowledge only after the transaction commits.
             try:
                 handoff(canonical)
