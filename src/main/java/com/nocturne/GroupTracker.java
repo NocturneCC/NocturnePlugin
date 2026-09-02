@@ -14,6 +14,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.gameval.VarClientID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
@@ -32,6 +33,7 @@ final class GroupTracker
 	private int world;
 	private long tick;
 	private int scanTicks;
+	private long nextRunEpoch;
 	private GroupSnapshot current = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 
 	GroupTracker(Client client)
@@ -84,10 +86,15 @@ final class GroupTracker
 			}
 			return;
 		}
-		if (raid != active)
+		int partyGroup = raid == RaidType.COX
+			? client.getVarpValue(VarPlayerID.RAIDS_PARTY_GROUPHOLDER) : -1;
+		boolean chambersPartyChanged = raid == RaidType.COX && active == RaidType.COX
+			&& session != null && partyGroup >= 0 && partyGroup != session.partyGroup;
+		if (raid != active || chambersPartyChanged)
 		{
 			boolean spectator = raid == RaidType.TOB && client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 3;
-			session = new RaidSession(raid, name, outsideObserved && !spectator, tick);
+			session = new RaidSession(raid, name, outsideObserved && !spectator, tick,
+				++nextRunEpoch, partyGroup);
 			active = raid;
 			outsideObserved = false;
 			scanTicks = 5;
@@ -130,13 +137,7 @@ final class GroupTracker
 				break;
 			case COX:
 				Widget list = client.getWidget(InterfaceID.RaidsSidepanel.LIST);
-				if (list != null && list.getChildren() != null)
-				{
-					for (Widget child : list.getChildren())
-					{
-						if (child != null) addName(names, child.getName());
-					}
-				}
+				names.addAll(ChambersRoster.extract(list));
 				size = client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE);
 				break;
 		}
@@ -181,12 +182,34 @@ final class GroupTracker
 		return session.acceptReward(String.join("|", sorted));
 	}
 
+	GroupSnapshot takeChambersReward(String source, Collection<String> itemSignature)
+	{
+		syncIdentity();
+		int partyGroup = client.getVarpValue(VarPlayerID.RAIDS_PARTY_GROUPHOLDER);
+		if (RaidType.fromSource(source) != RaidType.COX
+			|| !isCurrentChambersReward(session, active, nextRunEpoch, partyGroup, tick)) return null;
+		List<String> sorted = new ArrayList<>(itemSignature);
+		sorted.sort(String::compareTo);
+		if (!session.acceptReward(String.join("|", sorted))) return null;
+		GroupSnapshot snapshot = session.snapshot();
+		session.clearRoster();
+		current = GroupSnapshot.unavailable("Chambers roster consumed by the reward event.");
+		return snapshot;
+	}
+
 	void onGameMessage(String text)
 	{
 		syncIdentity();
 		if (text == null) return;
 		// Freeze the roster before reward-room state/party widgets are cleared.
 		String message = Text.removeTags(text).toLowerCase(Locale.ROOT);
+		if (session != null && session.type == RaidType.COX && isChambersCompletionMessage(message))
+		{
+			capture();
+			session.finish();
+			current = session.snapshot();
+			return;
+		}
 		if (session != null && message.startsWith("your ") && message.contains("count is")
 			&& RaidType.fromSource(message) == session.type)
 		{
@@ -194,6 +217,21 @@ final class GroupTracker
 			session.finish();
 			current = session.snapshot();
 		}
+	}
+
+	static boolean isChambersCompletionMessage(String message)
+	{
+		return message != null && Text.removeTags(message).trim().toLowerCase(Locale.ROOT)
+			.startsWith("congratulations - your raid is complete!");
+	}
+
+	static boolean isCurrentChambersReward(RaidSession candidate, RaidType active, long epoch,
+		int currentPartyGroup, long tick)
+	{
+		return candidate != null && candidate.type == RaidType.COX && !candidate.expired(tick)
+			&& candidate.isRun(epoch, candidate.partyGroup)
+			&& (active == RaidType.COX || currentPartyGroup < 0
+				|| currentPartyGroup == candidate.partyGroup);
 	}
 
 	private void syncIdentity()

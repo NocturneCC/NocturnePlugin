@@ -11,6 +11,8 @@ final class RaidSession
 {
 	static final long RETENTION_TICKS = 1000; // About ten minutes after the last active tick.
 	final RaidType type;
+	final long runEpoch;
+	final int partyGroup;
 	private final String localName;
 	private final boolean entryObserved;
 	private final Set<String> names = new LinkedHashSet<>();
@@ -22,10 +24,23 @@ final class RaidSession
 
 	RaidSession(RaidType type, String localName, boolean entryObserved, long tick)
 	{
+		this(type, localName, entryObserved, tick, 0, -1);
+	}
+
+	RaidSession(RaidType type, String localName, boolean entryObserved, long tick,
+		long runEpoch, int partyGroup)
+	{
 		this.type = type;
+		this.runEpoch = runEpoch;
+		this.partyGroup = partyGroup;
 		this.localName = localName;
 		this.entryObserved = entryObserved;
 		lastActiveTick = tick;
+	}
+
+	boolean isRun(long epoch, int group)
+	{
+		return runEpoch == epoch && (type != RaidType.COX || partyGroup == group);
 	}
 
 	void observe(Collection<String> observedNames, int reportedSize, long tick)
@@ -69,6 +84,12 @@ final class RaidSession
 			return false;
 		}
 		return rewardSignatures.add(signature);
+	}
+
+	void clearRoster()
+	{
+		names.clear();
+		maxReportedSize = 0;
 	}
 
 	GroupSnapshot snapshot()

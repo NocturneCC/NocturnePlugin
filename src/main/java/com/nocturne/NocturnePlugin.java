@@ -298,10 +298,18 @@ public class NocturnePlugin extends Plugin
 			? "Generic reward; no raid group context." : "Group capture is off.");
 		if (tracker != null && config.captureGroups() && usesGroupContext(origin))
 		{
-			if (origin == LootOrigin.RAID_EVENT
-				&& !tracker.acceptRaidReward(source, items.stream().map(LootItem::signature)
-					.collect(java.util.stream.Collectors.toList()))) return;
-			group = tracker.forLoot(source);
+			List<String> signature = items.stream().map(LootItem::signature)
+				.collect(java.util.stream.Collectors.toList());
+			if (origin == LootOrigin.RAID_EVENT && RaidType.fromSource(source) == RaidType.COX)
+			{
+				group = tracker.takeChambersReward(source, signature);
+				if (group == null) return;
+			}
+			else
+			{
+				if (origin == LootOrigin.RAID_EVENT && !tracker.acceptRaidReward(source, signature)) return;
+				group = tracker.forLoot(source);
+			}
 		}
 		LootRecord record = new LootRecord(rsn, source, items, group);
 		boolean eligible = isSubmissionEligible(items);

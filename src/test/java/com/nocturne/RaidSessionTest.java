@@ -118,6 +118,73 @@ public class RaidSessionTest
 		assertNull(RaidType.fromSource(null));
 	}
 
+	@Test
+	public void chambersSoloAndThreePlayerRosterRequireExactAuthoritativeSize()
+	{
+		RaidSession solo = chambers(true, 1, 44);
+		solo.observe(List.of("De Lena"), 1, 2);
+		assertEquals(GroupSnapshot.Status.MATCHED, solo.snapshot().status);
+
+		RaidSession team = chambers(true, 2, 45);
+		team.observe(List.of("De Lena", "Teammate 1", "Third"), 3, 3);
+		assertEquals(GroupSnapshot.Status.MATCHED, team.snapshot().status);
+		assertEquals(3, team.snapshot().names.size());
+		RaidSession partial = chambers(true, 3, 46);
+		partial.observe(List.of("De Lena", "Teammate 1"), 3, 3);
+		assertEquals(GroupSnapshot.Status.INCOMPLETE, partial.snapshot().status);
+	}
+
+	@Test
+	public void chambersSnapshotsUnionMembersAndSurviveWidgetDisappearance()
+	{
+		RaidSession session = chambers(true, 1, 44);
+		session.observe(List.of("De Lena", "One"), 3, 2);
+		session.observe(List.of("De Lena", "Two"), 3, 7);
+		session.observe(List.of(), 0, 12);
+		assertEquals(List.of("De Lena", "One", "Two"), session.snapshot().names);
+		assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
+	}
+
+	@Test
+	public void reconnectAndLateEnableRemainIncomplete()
+	{
+		RaidSession reconnected = chambers(false, 1, 44);
+		reconnected.observe(List.of("De Lena", "One", "Two"), 3, 2);
+		assertEquals(GroupSnapshot.Status.INCOMPLETE, reconnected.snapshot().status);
+	}
+
+	@Test
+	public void completionMessageAndRunIdentityRejectStaleRewards()
+	{
+		assertTrue(GroupTracker.isChambersCompletionMessage(
+			"<col=ef1020>Congratulations - your raid is complete!</col>"));
+		RaidSession old = chambers(true, 7, 100);
+		old.observe(List.of("De Lena", "One", "Two"), 3, 2);
+		old.finish();
+		assertTrue(GroupTracker.isCurrentChambersReward(old, null, 7, 100, 3));
+		assertFalse(GroupTracker.isCurrentChambersReward(old, null, 8, 101, 3));
+		assertFalse(GroupTracker.isCurrentChambersReward(old, null, 7, 101, 3));
+		assertTrue(GroupTracker.isCurrentChambersReward(old, null, 7, -1, 3));
+	}
+
+	@Test
+	public void consumedRosterCannotLeakIntoAnotherReward()
+	{
+		RaidSession session = chambers(true, 7, 100);
+		session.observe(List.of("De Lena", "One", "Two"), 3, 2);
+		assertTrue(session.acceptReward("loot"));
+		GroupSnapshot frozen = session.snapshot();
+		session.clearRoster();
+		assertEquals(3, frozen.names.size());
+		assertTrue(session.snapshot().names.isEmpty());
+		assertFalse(session.acceptReward("loot"));
+	}
+
+	private static RaidSession chambers(boolean entryObserved, long epoch, int partyGroup)
+	{
+		return new RaidSession(RaidType.COX, "De Lena", entryObserved, 0, epoch, partyGroup);
+	}
+
 	private static RaidSession session(boolean entryObserved)
 	{
 		return new RaidSession(RaidType.TOB, "Simon", entryObserved, 0);
