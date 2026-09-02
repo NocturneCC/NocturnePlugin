@@ -129,7 +129,7 @@ def backup_database(database):
     return destination
 
 
-def apply_candidates(database, candidates, backup=True):
+def apply_candidates(database, candidates, backup=True, after_insert=None):
     missing = REQUIRED_COLUMNS - schema_columns(database)
     if missing:
         raise ValueError("regular_submissions schema missing: " + ", ".join(sorted(missing)))
@@ -158,8 +158,10 @@ def apply_candidates(database, candidates, backup=True):
                 duplicates += 1
                 continue
             placeholders = ",".join("?" for _ in columns)
-            db.execute(f"INSERT INTO regular_submissions ({','.join(columns)}) VALUES ({placeholders})",
-                       tuple(row.get(name) for name in columns))
+            cursor = db.execute(f"INSERT INTO regular_submissions ({','.join(columns)}) VALUES ({placeholders})",
+                                tuple(row.get(name) for name in columns))
+            if after_insert:
+                after_insert(db, row, cursor.lastrowid)
             inserted += 1
         db.commit()
     except BaseException:

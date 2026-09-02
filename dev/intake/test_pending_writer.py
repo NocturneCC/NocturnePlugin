@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from intake import socket_handoff
 from pending_writer import handle_connection, process_payload, store_screenshot
+from screenshot_lifecycle import migration_sql
 
 
 NOW = datetime(2026, 9, 1, 23, 0, tzinfo=timezone.utc)
@@ -60,6 +61,8 @@ class PendingWriterTest(unittest.TestCase):
             CREATE TABLE rank_totals(member_id INTEGER PRIMARY KEY, total_points INTEGER);
             INSERT INTO rank_totals VALUES(2,77);
         """)
+        with closing(sqlite3.connect(self.root / "RegularSubmissions.db")) as db:
+            db.executescript(migration_sql())
 
     @staticmethod
     def create(path, sql):
@@ -196,6 +199,9 @@ class PendingWriterTest(unittest.TestCase):
         image = self.root / "runelite-submission-images" / (payload["event_id"] + ".jpg")
         self.assertEqual(raw, image.read_bytes())
         self.assertEqual(0o600, image.stat().st_mode & 0o777)
+        evidence = self.rows("SELECT event_uuid,image_sha256,image_bytes,review_state,storage_state FROM runelite_screenshot_evidence")[0]
+        self.assertEqual((payload["event_id"], hashlib.sha256(raw).hexdigest(), len(raw), "pending", "available"), evidence)
+        self.assertEqual(1, self.rows("SELECT COUNT(*) FROM runelite_screenshot_submissions")[0][0])
 
     def test_excluded_screenshot_is_not_persisted(self):
         payload, _raw = self.with_screenshot(self.payload(526, 31))
@@ -213,6 +219,8 @@ class PendingWriterTest(unittest.TestCase):
             "SELECT screenshot_url FROM regular_submissions"
         ))
         self.assertEqual([], list(directory.glob("*.jpg")))
+        self.assertEqual("storage_failed", result["screenshot_state"])
+        self.assertEqual("capacity_exhausted", result["screenshot_failure"])
 
     def test_unsafe_screenshot_directory_is_rejected(self):
         directory = self.root / "runelite-submission-images"

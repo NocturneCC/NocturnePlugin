@@ -228,3 +228,31 @@ SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`), interpreted as UTC
 according to [SQLite's specification](https://www.sqlite.org/lang_createtable.html#the_default_clause).
 It does not reinterpret these timestamps using Midgard's local timezone or
 replace stale timestamps with the current time.
+
+### Private screenshot lifecycle
+
+`screenshot_retention_support.py` prepares the event-level evidence schema and
+review labels. It is dry-run by default and requires the Phase 1 review
+hardening to be installed first. An applying run creates and verifies exact
+file and consistent SQLite backups before mutation, stages both active files,
+preserves their deployment metadata, and restores every target after a safely
+handled interruption or failure. Install the schema/review support before
+deploying the lifecycle-aware `pending_writer.py`; the writer refuses an older
+schema instead of producing a mixed state.
+
+Images remain private files in
+`/srv/projects/database/runelite-submission-images`; SQLite stores only the
+event UUID, filename, SHA-256 digest, byte count, creation time, review state,
+purge deadline and row associations. Pending images are never purge candidates.
+Once every associated row is resolved, denied-only evidence is retained for 7
+days and evidence associated with an approval for 30 days. Digests and the
+append-only lifecycle audit remain after deletion.
+
+`screenshot_lifecycle.py --cleanup` reports a locked, path-safe cleanup plan.
+Add `--apply-cleanup` only after review. It ignores symlinks, does not traverse
+directories, reports orphan regular JPEGs independently, and uses reversible
+same-directory renames until the database audit transaction commits. Cleanup
+is idempotent and never removes unrelated files. At the existing 2,000-image
+cap, the maximum JPEG data is about 468.75 MiB (2,000 × 240 KiB), plus small
+filesystem and SQLite metadata overhead. Capacity exhaustion retains the
+pending row and is exposed as `storage_failed`; it never evicts pending proof.

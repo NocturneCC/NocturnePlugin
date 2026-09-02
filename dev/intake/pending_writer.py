@@ -1,6 +1,6 @@
 """Local Unix-socket writer for unverified RuneLite pending submissions."""
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime, timezone
 import json
 import os
@@ -12,6 +12,7 @@ import sqlite3
 from import_pending import REQUIRED_COLUMNS, apply_candidates, plan, schema_columns
 from intake import MAX_BODY, validate, validate_screenshot
 from preview import identity, inspect_item, readonly
+from screenshot_lifecycle import AUDIT, EVIDENCE, LINKS
 
 
 MAX_RESPONSE = 2048
@@ -40,12 +41,19 @@ def store_screenshot(image, event_id, database_dir):
     directory = private_screenshot_directory(database_dir)
     final = directory / f"{event_id}.jpg"
     if final.exists():
+        metadata = final.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or final.is_symlink():
+            raise ValueError("unsafe existing screenshot")
         if final.read_bytes() != raw:
             raise ValueError("screenshot event collision")
-        return SCREENSHOT_URL_PREFIX + final.name, False
+        return {"url": SCREENSHOT_URL_PREFIX + final.name, "created": False,
+                "state": "available", "filename": final.name, "digest": image["sha256"],
+                "bytes": len(raw)}
     if sum(1 for path in directory.iterdir()
            if path.is_file() and path.suffix == ".jpg") >= MAX_STORED_SCREENSHOTS:
-        return None, False
+        return {"url": None, "created": False, "state": "storage_failed",
+                "filename": None, "digest": image["sha256"], "bytes": len(raw),
+                "failure": "capacity_exhausted"}
     temporary = directory / f".{event_id}.{os.getpid()}.tmp"
     try:
         with temporary.open("xb") as output:
@@ -56,7 +64,27 @@ def store_screenshot(image, event_id, database_dir):
         os.replace(temporary, final)
     finally:
         temporary.unlink(missing_ok=True)
-    return SCREENSHOT_URL_PREFIX + final.name, True
+    return {"url": SCREENSHOT_URL_PREFIX + final.name, "created": True,
+            "state": "available", "filename": final.name, "digest": image["sha256"],
+            "bytes": len(raw)}
+
+
+def evidence_inserter(data, stored, created_at):
+    event_id = data["event_id"]
+    state = stored["state"] if stored else "capture_failed"
+    def insert(db, _candidate, submission_id):
+        cursor = db.execute(f"""INSERT OR IGNORE INTO {EVIDENCE}
+              (event_uuid,image_filename,image_sha256,image_bytes,created_at,review_state,storage_state)
+              VALUES(?,?,?,?,?,'pending',?)""",
+                            (event_id, stored and stored["filename"], stored and stored["digest"],
+                             stored and stored["bytes"], created_at, state))
+        db.execute(f"INSERT OR IGNORE INTO {LINKS}(event_uuid,submission_id) VALUES(?,?)",
+                   (event_id, submission_id))
+        if cursor.rowcount:
+            detail = stored.get("failure", "stored") if stored else "screenshot_not_provided"
+            db.execute(f"INSERT INTO {AUDIT}(event_uuid,image_filename,image_sha256,action,detail) VALUES(?,?,?,?,?)",
+                       (event_id, stored and stored["filename"], stored and stored["digest"], state, detail))
+    return insert
 
 
 def check_environment(database_dir):
@@ -64,6 +92,11 @@ def check_environment(database_dir):
     missing = REQUIRED_COLUMNS - schema_columns(root / "RegularSubmissions.db")
     if missing:
         raise ValueError("regular_submissions schema missing: " + ", ".join(sorted(missing)))
+    with closing(sqlite3.connect(root / "RegularSubmissions.db")) as db:
+        present = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {EVIDENCE, LINKS, AUDIT}
+        if not required <= present:
+            raise ValueError("screenshot lifecycle schema missing")
     with ExitStack() as stack:
         members = stack.enter_context(readonly(root / "Members.db"))
         items = stack.enter_context(readonly(root / "Items.db"))
@@ -103,16 +136,17 @@ def process_payload(data, database_dir, now=None):
             ],
         }
     candidates, excluded = plan({"events": [event]})
-    screenshot_url = None
-    screenshot_created = False
+    stored = None
     if candidates and data.get("screenshot"):
-        screenshot_url, screenshot_created = store_screenshot(
+        stored = store_screenshot(
             data["screenshot"], data["event_id"], root
         )
         for candidate in candidates:
-            candidate["screenshot_url"] = screenshot_url
-    result = apply_candidates(root / "RegularSubmissions.db", candidates, backup=False)
-    if screenshot_created and not result["inserted"]:
+            candidate["screenshot_url"] = stored["url"]
+    result = apply_candidates(root / "RegularSubmissions.db", candidates, backup=False,
+                              after_insert=evidence_inserter(data, stored,
+                                  datetime.now(timezone.utc).isoformat()))
+    if stored and stored["created"] and not result["inserted"]:
         (root / "runelite-submission-images" / f"{data['event_id']}.jpg").unlink(missing_ok=True)
     if result["inserted"]:
         status = "pending_stored"
@@ -127,6 +161,8 @@ def process_payload(data, database_dir, now=None):
         "excluded": excluded,
         "automatic_awards_enabled": False,
         "rank_total_writes": 0,
+        "screenshot_state": stored["state"] if stored else ("capture_failed" if result["inserted"] else None),
+        "screenshot_failure": stored.get("failure") if stored else None,
     }
 
 
