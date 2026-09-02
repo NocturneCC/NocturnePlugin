@@ -21,11 +21,53 @@ paths and may contain host- or interpreter-specific binaries. Build the shared
 runtime environment independently with the host's managed Python 3.14, the
 committed `runtime-requirements.txt`, and an operator-reviewed local wheelhouse.
 For a reproducible deployment, generate a hash-locked requirements file from
-that wheelhouse, create a fresh versioned venv, install with
+that wheelhouse, create the venv directly at its final versioned path, install with
 `pip --require-hashes --no-index --find-links <wheelhouse>`, run `pip check`,
-record `pip freeze --all`, then atomically select it as
-`/srv/nocturne-plugin/venv`. The prepared tool currently requires the inspected
-Gunicorn 26.2.0 and refuses a missing or mismatched environment.
+verify imports and permissions, then atomically select it as
+`/srv/nocturne-plugin/venv`. Never rename a venv: generated launchers contain
+absolute interpreter paths. The tool invokes Gunicorn as `python -m gunicorn`
+and requires exactly Gunicorn 26.2.0.
+
+`prepare_immutable_runtime.sh` is the root-only preparation entry point. It is
+read-only with `--check`; `--prepare` builds the release, builds or validates the
+exact venv, and stages units without changing `current`, active units, databases,
+or services:
+
+```bash
+cd /srv/projects/nocturne-plugin-intake
+sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --check FULL_SHA
+sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --prepare FULL_SHA
+```
+
+The venv is created at
+`/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0` with a root-owned mode
+0600 `PREPARATION_INCOMPLETE` marker. The marker remains after interruption or
+validation failure. A completed target has a verified `VENV-MANIFEST.json` and
+no incomplete marker; reruns validate and reuse it. Ordinary venv links are
+accepted only when they resolve within that venv or to `/usr/bin/python3.14`.
+Dangling links, escaping links, mounts, unsafe ACLs, unexpected ownership and
+unknown pre-existing targets fail closed.
+
+Recovery never deletes the target. First verify the exact incomplete target in
+dry-run mode, then explicitly move it into the root-only quarantine:
+
+```bash
+cd /srv/projects/nocturne-plugin-intake
+SHA=FULL_SHA
+TARGET=/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0
+sudo python3.14 -B dev/intake/immutable_runtime_release.py \
+  --commit "$SHA" --recover-incomplete-venv "$TARGET"
+sudo python3.14 -B dev/intake/immutable_runtime_release.py \
+  --commit "$SHA" --recover-incomplete-venv "$TARGET" --apply-recovery
+sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --prepare "$SHA"
+```
+
+Recovery accepts either a valid new incomplete marker or the narrowly verified
+legacy failure whose Gunicorn shebang points at an absent
+`.venv-<40-hex-commit>.<pid>/bin/python`. It refuses every other unmarked state.
+Quarantined environments remain beneath
+`/srv/nocturne-plugin/quarantine/incomplete-venvs/` for operator inspection and
+are not removed automatically.
 
 ## One maintenance window
 
