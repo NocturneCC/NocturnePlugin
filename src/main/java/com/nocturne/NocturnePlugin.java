@@ -340,7 +340,8 @@ public class NocturnePlugin extends Plugin
 					client.getViewportWidth(), client.getViewportHeight());
 				drawManager.requestNextFrameListener(frame -> executor.submit(() ->
 				{
-					SubmissionScreenshot screenshot = ScreenshotCapture.encode(frame, viewport, includeChat);
+					SubmissionScreenshot screenshot = ScreenshotCapture.encode(
+						frame, viewport, includeChat, record, PluginMetadata.VERSION);
 					SubmissionService active = submissions;
 					if (lifecycle == token && active == sender)
 					{

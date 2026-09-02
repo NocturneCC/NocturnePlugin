@@ -1,5 +1,8 @@
 package com.nocturne;
 
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.Rectangle;
@@ -24,6 +27,8 @@ final class ScreenshotCapture
 	static final int MAX_BYTES = 240 * 1024;
 	private static final int MAX_WIDTH = 960;
 	private static final int MAX_HEIGHT = 720;
+	private static final int FOOTER_HEIGHT = 42;
+	private static final int FOOTER_PADDING = 8;
 	private static final float[] QUALITIES = {0.78f, 0.64f, 0.50f, 0.36f};
 
 	private ScreenshotCapture()
@@ -35,7 +40,8 @@ final class ScreenshotCapture
 		return items.stream().anyMatch(item -> item.unitPriceGp >= ELIGIBLE_UNIT_PRICE);
 	}
 
-	static SubmissionScreenshot encode(Image frame, Rectangle viewport, boolean includeChat)
+	static SubmissionScreenshot encode(Image frame, Rectangle viewport, boolean includeChat,
+		LootRecord record, String pluginVersion)
 	{
 		if (frame == null)
 		{
@@ -43,17 +49,83 @@ final class ScreenshotCapture
 		}
 		BufferedImage canvas = toRgb(frame);
 		BufferedImage selected = includeChat ? canvas : crop(canvas, viewport);
-		BufferedImage scaled = scale(selected);
-		for (float quality : QUALITIES)
+		BufferedImage scaled = scale(withFooter(selected, footerLines(record, pluginVersion)));
+		while (scaled.getWidth() >= 160 && scaled.getHeight() >= 120)
 		{
-			byte[] bytes = jpeg(scaled, quality);
-			if (bytes != null && bytes.length <= MAX_BYTES)
+			for (float quality : QUALITIES)
 			{
-				return new SubmissionScreenshot("image/jpeg", scaled.getWidth(), scaled.getHeight(),
-					bytes, sha256(bytes));
+				byte[] bytes = jpeg(scaled, quality);
+				if (bytes != null && bytes.length <= MAX_BYTES)
+				{
+					return new SubmissionScreenshot("image/jpeg", scaled.getWidth(), scaled.getHeight(),
+						bytes, sha256(bytes));
+				}
 			}
+			scaled = resize(scaled, Math.max(1, (int) (scaled.getWidth() * .85)),
+				Math.max(1, (int) (scaled.getHeight() * .85)));
 		}
 		return null;
+	}
+
+	static List<String> footerLines(LootRecord record, String pluginVersion)
+	{
+		String identity = "RSN: " + display(record.rsn, 24) + "  |  Source: " + display(record.source, 64);
+		String safeId = display(record.id, 64);
+		String event = safeId.substring(0, Math.min(8, safeId.length()));
+		return List.of(identity, "UTC: " + record.occurredAt + "  |  Event: " + event
+			+ "  |  Nocturne: " + display(pluginVersion, 16));
+	}
+
+	private static String display(String value, int limit)
+	{
+		String safe = value == null ? "Unavailable" : value.replaceAll("[\\p{Cntrl}]+", " ")
+			.replaceAll("\\s+", " ").trim();
+		if (safe.length() <= limit)
+		{
+			return safe;
+		}
+		return safe.substring(0, Math.max(1, limit - 1)) + "\u2026";
+	}
+
+	private static BufferedImage withFooter(BufferedImage image, List<String> lines)
+	{
+		BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight() + FOOTER_HEIGHT,
+			BufferedImage.TYPE_INT_RGB);
+		Graphics2D graphics = result.createGraphics();
+		try
+		{
+			graphics.drawImage(image, 0, 0, null);
+			graphics.setColor(new Color(24, 27, 31));
+			graphics.fillRect(0, image.getHeight(), result.getWidth(), FOOTER_HEIGHT);
+			graphics.setColor(new Color(225, 228, 232));
+			graphics.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+			FontMetrics metrics = graphics.getFontMetrics();
+			for (int index = 0; index < lines.size(); index++)
+			{
+				graphics.drawString(fit(lines.get(index), metrics, result.getWidth() - 2 * FOOTER_PADDING),
+					FOOTER_PADDING, image.getHeight() + 15 + index * 16);
+			}
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+		return result;
+	}
+
+	private static String fit(String value, FontMetrics metrics, int width)
+	{
+		if (metrics.stringWidth(value) <= width)
+		{
+			return value;
+		}
+		String suffix = "\u2026";
+		int end = value.length();
+		while (end > 1 && metrics.stringWidth(value.substring(0, end) + suffix) > width)
+		{
+			end--;
+		}
+		return value.substring(0, end) + suffix;
 	}
 
 	private static BufferedImage toRgb(Image image)
@@ -109,6 +181,11 @@ final class ScreenshotCapture
 		}
 		int width = Math.max(1, (int) Math.round(image.getWidth() * ratio));
 		int height = Math.max(1, (int) Math.round(image.getHeight() * ratio));
+		return resize(image, width, height);
+	}
+
+	private static BufferedImage resize(BufferedImage image, int width, int height)
+	{
 		BufferedImage result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
 		Graphics2D graphics = result.createGraphics();
 		try
