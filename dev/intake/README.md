@@ -60,8 +60,9 @@ A second invocation stops for inspection rather than duplicating the route.
 Installer tests exercise temporary files and simulated commands, not live nginx.
 
 Verify a stored receipt through HTTPS after installation before enabling
-**Send drops to test intake** in RuneLite. Only `Simons Alt` is initially allowed
-by the supplied service. There is no scoring or group-name upload on this route.
+**Send drops to test intake** in RuneLite. Only `Simons Alt` and `RoatBefAuJu`
+are allowed by the supplied service. There is no scoring or group-name upload on
+this route.
 
 A successful response is HTTP 201 with `status=stored`, `storage=development`,
 and the matching `event_id`, after the database commits. A repeated identical

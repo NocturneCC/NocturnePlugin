@@ -8,7 +8,7 @@ Requires=nocturne-plugin-writer.service
 DynamicUser=yes
 WorkingDirectory=/srv/projects/nocturne-plugin-intake/dev/intake
 Environment=NOCTURNE_INTAKE_STATE=/var/lib/nocturne-plugin-dev
-Environment="NOCTURNE_TEST_RSNS=Simons Alt"
+Environment="NOCTURNE_TEST_RSNS=Simons Alt,RoatBefAuJu"
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=NOCTURNE_PENDING_SOCKET=/run/nocturne-plugin-writer/pending.sock
 ExecStart=/srv/projects/nocturne-plugin-intake/.venv/bin/gunicorn --bind 127.0.0.1:5072 --workers 2 --timeout 10 --limit-request-line 1024 --limit-request-fields 30 --no-control-socket "intake:create_app()"
