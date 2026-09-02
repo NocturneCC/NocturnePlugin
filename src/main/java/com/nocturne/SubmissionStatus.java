@@ -3,6 +3,7 @@ package com.nocturne;
 enum SubmissionStatus
 {
 	LOCAL("Captured locally"),
+	INELIGIBLE("Not accepted — below 500,000 gp per unit"),
 	SENDING("Sending to test intake…"),
 	ACCEPTED("Received by test intake"),
 	UNCERTAIN("Delivery unconfirmed"),

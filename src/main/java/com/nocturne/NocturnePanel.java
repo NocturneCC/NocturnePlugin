@@ -173,6 +173,14 @@ final class NocturnePanel extends PluginPanel
 		}
 		for (LootRecord record : history.getRecords())
 		{
+			feed.add(renderRecord(record));
+		}
+		feed.revalidate();
+		feed.repaint();
+	}
+
+	JPanel renderRecord(LootRecord record)
+	{
 			JPanel card = column(CARD);
 			card.setBorder(BorderFactory.createCompoundBorder(
 				BorderFactory.createMatteBorder(0, 0, 6, 0, BACKGROUND),
@@ -206,10 +214,7 @@ final class NocturnePanel extends PluginPanel
 					+ (record.group.names.isEmpty() ? "Unavailable" : String.join(", ", record.group.names)), CARD));
 			}
 			if (diagnostics) card.add(note(record.group.displayText(), CARD));
-			feed.add(card);
-		}
-		feed.revalidate();
-		feed.repaint();
+			return card;
 	}
 
 	private static JPanel column(Color background)

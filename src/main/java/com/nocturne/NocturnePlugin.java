@@ -42,6 +42,11 @@ import net.runelite.client.ui.NavigationButton;
 )
 public class NocturnePlugin extends Plugin
 {
+	enum LootOrigin
+	{
+		NPC, GENERIC_EVENT, RAID_EVENT, REJECTED
+	}
+
 	@Inject
 	private Client client;
 
@@ -196,18 +201,39 @@ public class NocturnePlugin extends Plugin
 	public void onNpcLootReceived(NpcLootReceived event)
 	{
 		String source = event.getNpc() == null ? null : event.getNpc().getName();
-		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), false);
+		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), LootOrigin.NPC);
 	}
 
 	@Subscribe
 	public void onLootReceived(LootReceived event)
 	{
-		// Raid reward interfaces use LootReceived rather than an NPC death.
-		// Do not also accept generic NPC events here: that would duplicate the listener above.
-		if (event.getType() == LootRecordType.EVENT && RaidType.fromSource(event.getName()) != null)
+		LootOrigin origin = classifyLoot(event.getType(), event.getName());
+		if (origin != LootOrigin.REJECTED)
 		{
-			recordLoot(event.getName(), event.getItems(), true);
+			String source = event.getName();
+			recordLoot(source == null || source.isEmpty() ? "Unknown reward" : source, event.getItems(), origin);
 		}
+	}
+
+	static LootOrigin classifyLoot(LootRecordType type, String source)
+	{
+		// NPC records are handled exclusively by NpcLootReceived. PLAYER and PICKPOCKET
+		// retain their explicit rejection policy here.
+		if (type != LootRecordType.EVENT)
+		{
+			return LootOrigin.REJECTED;
+		}
+		return RaidType.fromSource(source) == null ? LootOrigin.GENERIC_EVENT : LootOrigin.RAID_EVENT;
+	}
+
+	static boolean usesGroupContext(LootOrigin origin)
+	{
+		return origin != LootOrigin.GENERIC_EVENT;
+	}
+
+	static boolean isSubmissionEligible(List<LootItem> items)
+	{
+		return ScreenshotCapture.isLikelyEligible(items);
 	}
 
 	@Subscribe
@@ -221,7 +247,7 @@ public class NocturnePlugin extends Plugin
 		}
 	}
 
-	private void recordLoot(String source, Collection<ItemStack> stacks, boolean raidReward)
+	private void recordLoot(String source, Collection<ItemStack> stacks, LootOrigin origin)
 	{
 		if (!config.trackNpcLoot() || client.getGameState() != GameState.LOGGED_IN)
 		{
@@ -251,23 +277,31 @@ public class NocturnePlugin extends Plugin
 		}
 		items = LootItem.consolidate(items);
 		GroupTracker tracker = groups;
-		GroupSnapshot group = GroupSnapshot.unavailable("Group capture is off.");
-		if (tracker != null && config.captureGroups())
+		GroupSnapshot group = GroupSnapshot.unavailable(origin == LootOrigin.GENERIC_EVENT
+			? "Generic reward; no raid group context." : "Group capture is off.");
+		if (tracker != null && config.captureGroups() && usesGroupContext(origin))
 		{
-			if (raidReward && !tracker.acceptRaidReward(source, items.stream().map(LootItem::signature).collect(java.util.stream.Collectors.toList()))) return;
+			if (origin == LootOrigin.RAID_EVENT
+				&& !tracker.acceptRaidReward(source, items.stream().map(LootItem::signature)
+					.collect(java.util.stream.Collectors.toList()))) return;
 			group = tracker.forLoot(source);
 		}
 		LootRecord record = new LootRecord(rsn, source, items, group);
+		boolean eligible = isSubmissionEligible(items);
+		if (!eligible)
+		{
+			record.submission = SubmissionStatus.INELIGIBLE;
+		}
 		withPanel(view -> view.recordLoot(record));
 		SubmissionService sender = submissions;
 		Object token = lifecycle;
-		if (sender != null && config.submitTestDrops())
+		if (sender != null && config.submitTestDrops() && eligible)
 		{
 			Consumer<SubmissionStatus> update = status ->
 			{
 				if (lifecycle == token) withPanel(view -> view.setSubmission(record.id, status));
 			};
-			if (config.attachScreenshots() && ScreenshotCapture.isLikelyEligible(items))
+			if (config.attachScreenshots())
 			{
 				boolean includeChat = config.includeChatInScreenshots();
 				Rectangle viewport = new Rectangle(client.getViewportXOffset(), client.getViewportYOffset(),
