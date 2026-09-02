@@ -1,10 +1,12 @@
 """Safely install derived-value review support; dry-run unless --apply is given."""
 import argparse
 from contextlib import closing
+import grp
 import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import shutil
 import sqlite3
 import stat
@@ -47,16 +49,6 @@ REVIEW_HELPER = '''
 
 '''
 MIN_FREE_MARGIN = 512 * 1024 * 1024
-EXPECTED = {
-    "admin_app": {"uid": 65534, "gid": 65534, "mode": 0o775,
-                  "acl": "user::rwx\ngroup::rwx\nother::r-x\n"},
-    "review_page": {"uid": 1001, "gid": 65534, "mode": 0o664,
-                    "acl": "user::rw-\nuser:4294967295:rw-\ngroup::r--\nmask::rw-\nother::r--\n"},
-    "database": {"uid": 65534, "gid": 65534, "mode": 0o664,
-                 "acl": "user::rw-\nuser:4294967295:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"},
-    "backup_dir": {"uid": 65534, "gid": 65534, "mode": 0o755,
-                   "acl": "user::rwx\ngroup::r-x\nother::r-x\n"},
-}
 
 
 def candidate_admin(original):
@@ -95,12 +87,82 @@ def _acl(path, run=_run):
 
 
 def _metadata(path, run=_run):
-    value = path.stat()
-    return {"uid": value.st_uid, "gid": value.st_gid,
-            "mode": stat.S_IMODE(value.st_mode), "acl": _acl(path, run)}
+    before = path.lstat()
+    acl = _acl(path, run)
+    after = path.lstat()
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+                              stat.S_IFMT(value.st_mode), stat.S_IMODE(value.st_mode))
+    if identity(before) != identity(after):
+        raise ValueError(f"metadata changed while inspecting {path}")
+    return {"uid": after.st_uid, "gid": after.st_gid,
+            "mode": stat.S_IMODE(after.st_mode), "acl": acl}
+
+
+def _permissions(value):
+    if (len(value) != 3 or value[0] not in "r-" or
+            value[1] not in "w-" or value[2] not in "x-"):
+        raise ValueError(f"invalid ACL permissions: {value}")
+    return sum(bit for character, bit in zip(value, (4, 2, 1)) if character != "-")
+
+
+def _validate_safe_metadata(path, metadata, *, directory=False):
+    value = path.lstat()
+    expected_type = stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode)
+    if not expected_type or stat.S_ISLNK(value.st_mode):
+        raise ValueError(f"unsafe target type or symlink: {path}")
+    if metadata["mode"] & 0o002:
+        raise ValueError(f"world-writable target is unsafe: {path}")
+    if metadata["mode"] & 0o7000 and not directory:
+        raise ValueError(f"special permission bits are unsafe: {path}")
+    try:
+        pwd.getpwuid(metadata["uid"])
+        grp.getgrgid(metadata["gid"])
+    except KeyError as error:
+        raise ValueError(f"target has unresolved ownership: {path}") from error
+
+    acl = {}
+    named = []
+    for raw_line in metadata["acl"].splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) != 3 or parts[0] not in ("user", "group", "mask", "other"):
+            raise ValueError(f"unrecognized ACL entry for {path}: {raw_line}")
+        kind, principal, permissions = parts
+        bits = _permissions(permissions)
+        if principal:
+            if kind not in ("user", "group"):
+                raise ValueError(f"unsafe named ACL entry for {path}: {raw_line}")
+            named.append((raw_line, bits))
+        else:
+            if kind in acl:
+                raise ValueError(f"duplicate ACL entry for {path}: {kind}")
+            acl[kind] = bits
+    owner_bits = (metadata["mode"] >> 6) & 7
+    group_bits = (metadata["mode"] >> 3) & 7
+    other_bits = metadata["mode"] & 7
+    if acl.get("user") != owner_bits or acl.get("other") != other_bits:
+        raise ValueError(f"ACL owner/other entries disagree with mode for {path}")
+    if named:
+        if set(acl) != {"user", "group", "mask", "other"} or acl["mask"] != group_bits:
+            raise ValueError(f"named ACL mask disagrees with mode for {path}")
+        for raw_line, bits in named:
+            if bits & ~group_bits:
+                raise ValueError(f"unsafe named ACL grant for {path}: {raw_line}")
+    elif set(acl) != {"user", "group", "other"} or acl["group"] != group_bits:
+        raise ValueError(f"ACL group entry disagrees with mode for {path}")
+    return metadata
+
+
+def _capture_safe_metadata(path, run=_run, *, directory=False):
+    return _validate_safe_metadata(path, _metadata(path, run), directory=directory)
 
 
 def _verify_metadata(path, expected, run=_run):
+    value = path.lstat()
+    if not stat.S_ISREG(value.st_mode) or stat.S_ISLNK(value.st_mode):
+        raise ValueError(f"unsafe replacement type or symlink: {path}")
     actual = _metadata(path, run)
     if actual != expected:
         raise ValueError(f"unexpected ownership, mode, or ACL for {path}: {actual}")
@@ -246,7 +308,7 @@ def migrate_database(database, fail=None):
 
 
 def install(admin_app, review_page, database, backup_dir, *, apply=False,
-            admin_python="/srv/projects/api/venv-simon/bin/python", expected=EXPECTED,
+            admin_python="/srv/projects/api/venv-simon/bin/python",
             source_files=None, disk_usage=shutil.disk_usage, run=_run, fail=None):
     """Preflight and optionally apply; restore all targets after any mutating failure."""
     paths = {"admin_app": Path(admin_app), "review_page": Path(review_page),
@@ -262,8 +324,8 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
         raise ValueError(f"active admin interpreter is missing or not executable: {admin_python_path}")
     if not paths["backup_dir"].is_dir():
         raise ValueError(f"backup path is not a directory: {paths['backup_dir']}")
-    for name, path in paths.items():
-        _verify_metadata(path, expected[name], run)
+    captured = {name: _capture_safe_metadata(
+        path, run, directory=(name == "backup_dir")) for name, path in paths.items()}
 
     admin_text = paths["admin_app"].read_text()
     review_text = paths["review_page"].read_text()
@@ -290,16 +352,16 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
     try:
         saved_admin, saved_review, saved_database = (backup / paths[name].name for name in
                                                       ("admin_app", "review_page", "database"))
-        _backup_file(paths["admin_app"], saved_admin, expected["admin_app"], run)
-        _backup_file(paths["review_page"], saved_review, expected["review_page"], run)
-        _backup_database(paths["database"], saved_database, expected["database"], run)
+        _backup_file(paths["admin_app"], saved_admin, captured["admin_app"], run)
+        _backup_file(paths["review_page"], saved_review, captured["review_page"], run)
+        _backup_database(paths["database"], saved_database, captured["database"], run)
         manifest = {path.name: _digest(path) for path in (saved_admin, saved_review, saved_database)}
         (backup / "SHA256SUMS.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
         _fsync(backup / "SHA256SUMS.json")
         if fail:
             fail("after_backup")
 
-        staged_admin = _stage_bytes(paths["admin_app"], new_admin, expected["admin_app"], run)
+        staged_admin = _stage_bytes(paths["admin_app"], new_admin, captured["admin_app"], run)
         staged.append(staged_admin)
         candidate = staged_admin.read_text()
         if candidate.count("valuation_rule_id") < 1:
@@ -309,13 +371,17 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
         run([str(admin_python), "-B", "-c", syntax_check, str(staged_admin)], capture_output=True, text=True)
         if fail:
             fail("after_admin_stage")
-        staged_review = _stage_bytes(paths["review_page"], new_review, expected["review_page"], run)
+        staged_review = _stage_bytes(paths["review_page"], new_review, captured["review_page"], run)
         staged.append(staged_review)
         if staged_review.read_text().count("derivedValueDetails") != 2:
             raise ValueError("staged review markers failed validation")
         if fail:
             fail("after_review_stage")
 
+        for name, path in paths.items():
+            current = _capture_safe_metadata(path, run, directory=(name == "backup_dir"))
+            if current != captured[name]:
+                raise ValueError(f"metadata changed after preflight for {path}")
         mutation_started = True
         migrate_database(paths["database"], fail)
         os.replace(staged_admin, paths["admin_app"])
@@ -326,9 +392,9 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
         staged.remove(staged_review)
         if fail:
             fail("second_replacement")
-        _verify_metadata(paths["admin_app"], expected["admin_app"], run)
-        _verify_metadata(paths["review_page"], expected["review_page"], run)
-        _verify_metadata(paths["database"], expected["database"], run)
+        _verify_metadata(paths["admin_app"], captured["admin_app"], run)
+        _verify_metadata(paths["review_page"], captured["review_page"], run)
+        _verify_metadata(paths["database"], captured["database"], run)
         if _state(paths["admin_app"].read_text(), paths["review_page"].read_text(),
                   _columns(paths["database"])) != "already_applied":
             raise ValueError("post-install state verification failed")
@@ -341,11 +407,11 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
         if mutation_started:
             restorations = (
                 ("admin_app", lambda: _restore_file(
-                    saved_admin, paths["admin_app"], expected["admin_app"], run)),
+                    saved_admin, paths["admin_app"], captured["admin_app"], run)),
                 ("review_page", lambda: _restore_file(
-                    saved_review, paths["review_page"], expected["review_page"], run)),
+                    saved_review, paths["review_page"], captured["review_page"], run)),
                 ("database", lambda: _restore_database(
-                    saved_database, paths["database"], expected["database"], run)),
+                    saved_database, paths["database"], captured["database"], run)),
             )
             for name, restore in restorations:
                 try:

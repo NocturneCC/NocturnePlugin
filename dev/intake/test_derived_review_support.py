@@ -1,4 +1,5 @@
 from contextlib import closing
+import grp
 import os
 from pathlib import Path
 import sqlite3
@@ -54,13 +55,15 @@ class Fixture:
             ("admin_app", self.admin), ("review_page", self.review),
             ("database", self.database), ("backup_dir", self.backups))}
         self.python = Path(sys.executable).resolve()
+        self.named_gid = next(group.gr_gid for group in grp.getgrall()
+                              if group.gr_gid != self.review.stat().st_gid)
 
     def close(self):
         self.temp.cleanup()
 
     def install(self, **kwargs):
         return support.install(self.admin, self.review, self.database, self.backups,
-                               admin_python=self.python, expected=self.expected,
+                               admin_python=self.python,
                                source_files=[self.source], disk_usage=lambda _: Space(10 * 1024 ** 3), **kwargs)
 
     def state(self):
@@ -98,12 +101,70 @@ class DerivedReviewSupportTest(unittest.TestCase):
         self.assertIsNone(rerun["backup"])
         self.assertEqual(1, len(list(fixture.backups.iterdir())))
 
+    def test_safe_executable_and_ordinary_file_modes_are_preserved(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        os.chmod(fixture.admin, 0o775)
+        os.chmod(fixture.review, 0o640)
+        original = {"admin": support._metadata(fixture.admin),
+                    "review": support._metadata(fixture.review)}
+        fixture.install(apply=True)
+        self.assertEqual(original["admin"], support._metadata(fixture.admin))
+        self.assertEqual(original["review"], support._metadata(fixture.review))
+
+    def test_safe_named_acl_is_preserved(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        support._run(["setfacl", "-m", f"g:{fixture.named_gid}:r--", str(fixture.review)])
+        original = support._metadata(fixture.review)
+        fixture.install(apply=True)
+        self.assertEqual(original, support._metadata(fixture.review))
+
+    def test_unsafe_named_acl_grant_is_rejected(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        support._run(["setfacl", "-m", f"g:{fixture.named_gid}:rw-,m::r--", str(fixture.review)])
+        with self.assertRaisesRegex(ValueError, "unsafe named ACL grant"):
+            fixture.install(apply=True)
+        self.assertEqual([], list(fixture.backups.iterdir()))
+
+    def test_world_writable_target_is_rejected(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        os.chmod(fixture.review, 0o666)
+        with self.assertRaisesRegex(ValueError, "world-writable"):
+            fixture.install(apply=True)
+        self.assertEqual([], list(fixture.backups.iterdir()))
+
+    def test_unresolved_owner_is_rejected(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        metadata = support._metadata(fixture.admin)
+        metadata["uid"] = 4294967294
+        with self.assertRaisesRegex(ValueError, "unresolved ownership"):
+            support._validate_safe_metadata(fixture.admin, metadata)
+
+    def test_symlink_target_is_rejected(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        real_admin = fixture.admin.with_name("real_admin.py")
+        fixture.admin.rename(real_admin)
+        fixture.admin.symlink_to(real_admin)
+        with self.assertRaisesRegex(ValueError, "symlinked source/target"):
+            fixture.install(apply=True)
+        self.assertEqual([], list(fixture.backups.iterdir()))
+
+    def test_metadata_race_before_activation_is_rejected_without_mutation(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        before = fixture.state()
+        def change_metadata(phase):
+            if phase == "after_review_stage":
+                os.chmod(fixture.admin, 0o600)
+        with self.assertRaisesRegex(RuntimeError, "metadata changed after preflight") as caught:
+            fixture.install(apply=True, fail=change_metadata)
+        self.assertIn("mutation_started=False", str(caught.exception))
+        self.assertEqual(before, fixture.state())
+
     def test_insufficient_space_refuses_before_backup(self):
         fixture = Fixture(); self.addCleanup(fixture.close)
         before = fixture.state()
         with self.assertRaisesRegex(ValueError, "insufficient backup space"):
             support.install(fixture.admin, fixture.review, fixture.database, fixture.backups, apply=True,
-                            admin_python=fixture.python, expected=fixture.expected, source_files=[fixture.source],
+                            admin_python=fixture.python, source_files=[fixture.source],
                             disk_usage=lambda _: Space(1))
         self.assertEqual(before, fixture.state())
         self.assertEqual([], list(fixture.backups.iterdir()))
@@ -137,11 +198,16 @@ class DerivedReviewSupportTest(unittest.TestCase):
 
     def test_automatic_rollback_allows_safe_rerun(self):
         fixture = Fixture(); self.addCleanup(fixture.close)
+        original_metadata = {name: support._metadata(path) for name, path in (
+            ("admin", fixture.admin), ("review", fixture.review), ("database", fixture.database))}
         def fail(phase):
             if phase == "first_replacement":
                 raise OSError("injected")
         with self.assertRaisesRegex(RuntimeError, "restoration=succeeded"):
             fixture.install(apply=True, fail=fail)
+        self.assertEqual(original_metadata["admin"], support._metadata(fixture.admin))
+        self.assertEqual(original_metadata["review"], support._metadata(fixture.review))
+        self.assertEqual(original_metadata["database"], support._metadata(fixture.database))
         self.assertEqual("already_applied", fixture.install(apply=True)["state"])
 
     def test_staged_python_validation_failure_does_not_mutate(self):
@@ -153,7 +219,7 @@ class DerivedReviewSupportTest(unittest.TestCase):
             return support._run(command, **kwargs)
         with self.assertRaisesRegex(RuntimeError, "restoration=not_required"):
             support.install(fixture.admin, fixture.review, fixture.database, fixture.backups, apply=True,
-                            admin_python=fixture.python, expected=fixture.expected, source_files=[fixture.source],
+                            admin_python=fixture.python, source_files=[fixture.source],
                             disk_usage=lambda _: Space(10 * 1024 ** 3), run=run)
         self.assertEqual(before, fixture.state())
 
