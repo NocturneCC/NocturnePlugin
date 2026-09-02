@@ -1,5 +1,6 @@
 from contextlib import closing
 import grp
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -57,6 +58,7 @@ class Fixture:
         self.python = Path(sys.executable).resolve()
         self.named_gid = next(group.gr_gid for group in grp.getgrall()
                               if group.gr_gid != self.review.stat().st_gid)
+        self.messages = []
 
     def close(self):
         self.temp.cleanup()
@@ -64,7 +66,8 @@ class Fixture:
     def install(self, **kwargs):
         return support.install(self.admin, self.review, self.database, self.backups,
                                admin_python=self.python,
-                               source_files=[self.source], disk_usage=lambda _: Space(10 * 1024 ** 3), **kwargs)
+                               source_files=[self.source], disk_usage=lambda _: Space(10 * 1024 ** 3),
+                               progress=self.messages.append, **kwargs)
 
     def state(self):
         return self.admin.read_text(), self.review.read_text(), support._columns(self.database)
@@ -91,6 +94,8 @@ class DerivedReviewSupportTest(unittest.TestCase):
         result = fixture.install(apply=True)
         self.assertEqual("already_applied", result["state"])
         self.assertTrue(Path(result["backup"]).is_dir())
+        self.assertEqual("verified", json.loads(
+            (Path(result["backup"]) / "BACKUP_STATUS.json").read_text())["state"])
         with closing(sqlite3.connect(fixture.database)) as db:
             self.assertEqual((1, "Existing"), db.execute("SELECT submission_id,item_name FROM regular_submissions").fetchone())
         self.assertEqual(support.COLUMNS, {name: support._columns(fixture.database)[name] for name in support.COLUMNS})
@@ -165,7 +170,7 @@ class DerivedReviewSupportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "insufficient backup space"):
             support.install(fixture.admin, fixture.review, fixture.database, fixture.backups, apply=True,
                             admin_python=fixture.python, source_files=[fixture.source],
-                            disk_usage=lambda _: Space(1))
+                            disk_usage=lambda _: Space(1), progress=fixture.messages.append)
         self.assertEqual(before, fixture.state())
         self.assertEqual([], list(fixture.backups.iterdir()))
 
@@ -196,6 +201,68 @@ class DerivedReviewSupportTest(unittest.TestCase):
                 finally:
                     fixture.close()
 
+    def test_progress_reports_every_slow_or_mutating_phase(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        fixture.install(apply=True)
+        phases = ("Source database integrity check", "Database backup copy", "Backup checksum",
+                  "Backup database integrity check", "Staged-file validation", "Schema transaction",
+                  "Active admin file activation", "Active review file activation", "Final verification")
+        for phase in phases:
+            self.assertIn(phase + ": starting", fixture.messages)
+            self.assertIn(phase + ": completed", fixture.messages)
+        warnings = [message for message in fixture.messages if "may take several minutes" in message]
+        self.assertGreaterEqual(len(warnings), 3)
+
+    def test_keyboard_interrupt_during_source_check_reports_untouched_without_backup(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        before = fixture.state()
+        with self.assertRaises(KeyboardInterrupt):
+            fixture.install(apply=True, fail=lambda phase: (_ for _ in ()).throw(
+                KeyboardInterrupt()) if phase == "source_database_integrity" else None)
+        self.assertEqual(before, fixture.state())
+        self.assertEqual([], list(fixture.backups.iterdir()))
+        self.assertTrue(any("before backup creation or mutation" in message for message in fixture.messages))
+
+    def test_keyboard_interrupt_during_backup_marks_directory_incomplete(self):
+        fixture = Fixture(); self.addCleanup(fixture.close)
+        before = fixture.state()
+        def interrupt(phase):
+            if phase == "backup_database_integrity":
+                raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            fixture.install(apply=True, fail=interrupt)
+        self.assertEqual(before, fixture.state())
+        backups = list(fixture.backups.iterdir())
+        self.assertEqual(1, len(backups))
+        status = json.loads((backups[0] / "BACKUP_STATUS.json").read_text())
+        self.assertEqual("incomplete", status["state"])
+        self.assertTrue(any(str(backups[0]) in message and "incomplete/unverified" in message
+                            for message in fixture.messages))
+
+    def test_keyboard_interrupt_after_each_mutating_phase_rolls_back(self):
+        phases = ("schema_application", "after_schema", "first_replacement",
+                  "second_replacement", "final_verification")
+        for phase in phases:
+            with self.subTest(phase=phase):
+                fixture = Fixture()
+                try:
+                    before = fixture.state()
+                    metadata = {name: support._metadata(path) for name, path in (
+                        ("admin", fixture.admin), ("review", fixture.review),
+                        ("database", fixture.database))}
+                    def interrupt(value):
+                        if value == phase:
+                            raise KeyboardInterrupt()
+                    with self.assertRaises(KeyboardInterrupt):
+                        fixture.install(apply=True, fail=interrupt)
+                    self.assertEqual(before, fixture.state())
+                    self.assertEqual(metadata["admin"], support._metadata(fixture.admin))
+                    self.assertEqual(metadata["review"], support._metadata(fixture.review))
+                    self.assertEqual(metadata["database"], support._metadata(fixture.database))
+                    self.assertIn("Rollback restoration: succeeded", fixture.messages)
+                finally:
+                    fixture.close()
+
     def test_automatic_rollback_allows_safe_rerun(self):
         fixture = Fixture(); self.addCleanup(fixture.close)
         original_metadata = {name: support._metadata(path) for name, path in (
@@ -220,7 +287,8 @@ class DerivedReviewSupportTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "restoration=not_required"):
             support.install(fixture.admin, fixture.review, fixture.database, fixture.backups, apply=True,
                             admin_python=fixture.python, source_files=[fixture.source],
-                            disk_usage=lambda _: Space(10 * 1024 ** 3), run=run)
+                            disk_usage=lambda _: Space(10 * 1024 ** 3), run=run,
+                            progress=fixture.messages.append)
         self.assertEqual(before, fixture.state())
 
     def test_wal_database_gets_consistent_verified_backup(self):

@@ -49,6 +49,8 @@ REVIEW_HELPER = '''
 
 '''
 MIN_FREE_MARGIN = 512 * 1024 * 1024
+LONG_CHECK_WARNING = ("The 1.5 GB database backup and integrity checks may take several minutes; "
+                      "do not interrupt them.")
 
 
 def candidate_admin(original):
@@ -80,6 +82,10 @@ def candidate_review_page(original):
 
 def _run(command, **kwargs):
     return subprocess.run(command, check=True, timeout=30, **kwargs)
+
+
+def _progress(message):
+    print(message, flush=True)
 
 
 def _acl(path, run=_run):
@@ -235,6 +241,20 @@ def _fsync(path):
         os.fsync(value.fileno())
 
 
+def _backup_status(backup, state, detail):
+    content = json.dumps({"state": state, "detail": detail}, sort_keys=True) + "\n"
+    descriptor, name = tempfile.mkstemp(prefix=".BACKUP_STATUS-", dir=backup)
+    staged = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as value:
+            value.write(content)
+            value.flush()
+            os.fsync(value.fileno())
+        os.replace(staged, backup / "BACKUP_STATUS.json")
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def _stage_bytes(target, content, metadata, run=_run):
     descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.derived-", dir=target.parent)
     staged = Path(name)
@@ -265,9 +285,6 @@ def _backup_database(source, destination, metadata, run=_run):
             original.backup(saved)
     _fsync(destination)
     _apply_metadata(destination, metadata, run)
-    _database_check(destination)
-    if _columns(source) != _columns(destination):
-        raise ValueError("database backup schema verification failed")
 
 
 def _restore_file(saved, target, metadata, run=_run):
@@ -302,14 +319,15 @@ def migrate_database(database, fail=None):
             if fail:
                 fail("schema_application")
             db.commit()
-        except Exception:
+        except BaseException:
             db.rollback()
             raise
 
 
 def install(admin_app, review_page, database, backup_dir, *, apply=False,
             admin_python="/srv/projects/api/venv-simon/bin/python",
-            source_files=None, disk_usage=shutil.disk_usage, run=_run, fail=None):
+            source_files=None, disk_usage=shutil.disk_usage, run=_run, fail=None,
+            progress=_progress):
     """Preflight and optionally apply; restore all targets after any mutating failure."""
     paths = {"admin_app": Path(admin_app), "review_page": Path(review_page),
              "database": Path(database), "backup_dir": Path(backup_dir)}
@@ -331,7 +349,17 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
     review_text = paths["review_page"].read_text()
     columns = _columns(paths["database"])
     state = _state(admin_text, review_text, columns)
-    journal_mode = _database_check(paths["database"])
+    progress(LONG_CHECK_WARNING)
+    progress("Source database integrity check: starting")
+    try:
+        if fail:
+            fail("source_database_integrity")
+        journal_mode = _database_check(paths["database"])
+    except BaseException:
+        progress("Installation interrupted or failed during preflight before backup creation or mutation; "
+                 "active targets were untouched")
+        raise
+    progress("Source database integrity check: completed")
     database_size = paths["database"].stat().st_size
     required_free = database_size + max(MIN_FREE_MARGIN, database_size // 4)
     free = disk_usage(paths["backup_dir"]).free
@@ -346,21 +374,45 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
     new_admin = candidate_admin(admin_text).encode()
     new_review = candidate_review_page(review_text).encode()
     backup = paths["backup_dir"] / ("derived-values-" + uuid4().hex[:8])
-    backup.mkdir(mode=0o700)
     staged = []
     mutation_started = False
+    backup_verified = False
     try:
+        backup.mkdir(mode=0o700)
+        _backup_status(backup, "incomplete", "Backup creation or verification has not completed")
+        progress(f"Backup directory: {backup} (marked incomplete until every verification passes)")
         saved_admin, saved_review, saved_database = (backup / paths[name].name for name in
                                                       ("admin_app", "review_page", "database"))
         _backup_file(paths["admin_app"], saved_admin, captured["admin_app"], run)
         _backup_file(paths["review_page"], saved_review, captured["review_page"], run)
+        progress(LONG_CHECK_WARNING)
+        progress("Database backup copy: starting")
+        if fail:
+            fail("database_backup_copy")
         _backup_database(paths["database"], saved_database, captured["database"], run)
-        manifest = {path.name: _digest(path) for path in (saved_admin, saved_review, saved_database)}
+        progress("Database backup copy: completed")
+        progress("Backup checksum: starting")
+        if fail:
+            fail("backup_checksum")
+        manifest = {saved_admin.name: _digest(saved_admin), saved_review.name: _digest(saved_review),
+                    saved_database.name: _digest(saved_database)}
         (backup / "SHA256SUMS.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
         _fsync(backup / "SHA256SUMS.json")
+        progress("Backup checksum: completed")
+        progress(LONG_CHECK_WARNING)
+        progress("Backup database integrity check: starting")
+        if fail:
+            fail("backup_database_integrity")
+        _database_check(saved_database)
+        if _columns(paths["database"]) != _columns(saved_database):
+            raise ValueError("database backup schema verification failed")
+        progress("Backup database integrity check: completed")
+        _backup_status(backup, "verified", "All backup copies, checksums, and integrity checks completed")
+        backup_verified = True
         if fail:
             fail("after_backup")
 
+        progress("Staged-file validation: starting")
         staged_admin = _stage_bytes(paths["admin_app"], new_admin, captured["admin_app"], run)
         staged.append(staged_admin)
         candidate = staged_admin.read_text()
@@ -377,21 +429,31 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
             raise ValueError("staged review markers failed validation")
         if fail:
             fail("after_review_stage")
+        progress("Staged-file validation: completed")
 
         for name, path in paths.items():
             current = _capture_safe_metadata(path, run, directory=(name == "backup_dir"))
             if current != captured[name]:
                 raise ValueError(f"metadata changed after preflight for {path}")
         mutation_started = True
+        progress("Schema transaction: starting")
         migrate_database(paths["database"], fail)
+        progress("Schema transaction: completed")
+        if fail:
+            fail("after_schema")
+        progress("Active admin file activation: starting")
         os.replace(staged_admin, paths["admin_app"])
         staged.remove(staged_admin)
+        progress("Active admin file activation: completed")
         if fail:
             fail("first_replacement")
+        progress("Active review file activation: starting")
         os.replace(staged_review, paths["review_page"])
         staged.remove(staged_review)
+        progress("Active review file activation: completed")
         if fail:
             fail("second_replacement")
+        progress("Final verification: starting")
         _verify_metadata(paths["admin_app"], captured["admin_app"], run)
         _verify_metadata(paths["review_page"], captured["review_page"], run)
         _verify_metadata(paths["database"], captured["database"], run)
@@ -399,12 +461,21 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
                   _columns(paths["database"])) != "already_applied":
             raise ValueError("post-install state verification failed")
         _database_check(paths["database"])
+        if fail:
+            fail("final_verification")
+        progress("Final verification: completed")
         report.update(state="already_applied", dry_run=False, backup=str(backup))
         return report
-    except Exception as error:
+    except BaseException as error:
         restoration = "not_required"
         rollback_errors = []
+        if not backup_verified and backup.is_dir():
+            try:
+                _backup_status(backup, "incomplete", f"Interrupted or failed before verification: {type(error).__name__}")
+            except BaseException as caught:
+                rollback_errors.append(f"backup status: {caught}")
         if mutation_started:
+            progress(f"Installation interrupted or failed after mutation began; rollback starting: {type(error).__name__}")
             restorations = (
                 ("admin_app", lambda: _restore_file(
                     saved_admin, paths["admin_app"], captured["admin_app"], run)),
@@ -416,19 +487,27 @@ def install(admin_app, review_page, database, backup_dir, *, apply=False,
             for name, restore in restorations:
                 try:
                     restore()
-                except Exception as caught:
+                except BaseException as caught:
                     rollback_errors.append(f"{name}: {caught}")
             try:
                 if _state(paths["admin_app"].read_text(), paths["review_page"].read_text(),
                           _columns(paths["database"])) != "not_applied":
                     raise ValueError("rolled-back state is not consistently old")
-            except Exception as caught:
+            except BaseException as caught:
                 rollback_errors.append(f"final verification: {caught}")
             restoration = "FAILED" if rollback_errors else "succeeded"
+            progress(f"Rollback restoration: {restoration}")
+        else:
+            backup_description = ("verified" if backup_verified else
+                                  "incomplete/unverified" if backup.is_dir() else "not created")
+            progress(f"Installation interrupted or failed before mutation; active targets were untouched; "
+                     f"backup={backup} ({backup_description})")
         message = f"installation failed; mutation_started={mutation_started}; restoration={restoration}; cause={error}"
         if rollback_errors:
             message += "; rollback_errors=" + " | ".join(rollback_errors)
-        raise RuntimeError(message) from error
+        if isinstance(error, Exception):
+            raise RuntimeError(message) from error
+        raise
     finally:
         for path in staged:
             path.unlink(missing_ok=True)
