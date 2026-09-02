@@ -8,13 +8,20 @@ import unittest
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from import_pending import run
+from import_pending import candidate, run
 
 
 NOW = datetime(2026, 9, 1, 22, 0, tzinfo=timezone.utc)
 
 
 class PendingImportTest(unittest.TestCase):
+
+    def test_future_pilot_source_is_controlled_without_changing_default(self):
+        event = {"payload_version": 4, "member": {"status": "unmatched"}}
+        self.assertIsNone(candidate(event, {}, source_type="runelite_pilot"))
+        with self.assertRaisesRegex(ValueError, "source type"):
+            candidate(event, {}, source_type="untrusted")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

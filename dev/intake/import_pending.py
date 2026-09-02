@@ -26,8 +26,12 @@ REQUIRED_COLUMNS = {
     "finished_output_market_price_gp", "derived_unit_price_gp",
 }
 
+RUNELITE_SOURCE_TYPES = {"runelite", "runelite_pilot"}
 
-def candidate(event, item):
+
+def candidate(event, item, source_type="runelite"):
+    if source_type not in RUNELITE_SOURCE_TYPES:
+        raise ValueError("invalid RuneLite source type")
     if event.get("payload_version") not in (2, 3, 4) or event.get("member", {}).get("status") != "matched":
         return None
     price_source = item.get("price", {}).get("source")
@@ -50,7 +54,7 @@ def candidate(event, item):
         "osrs_item_id": item["osrs_item_id"],
         "item_name": item["item_name"],
         "normalized_item_name": item["normalized_item_name"],
-        "source_type": "runelite",
+        "source_type": source_type,
         "status": "pending",
         "submitted_at": event["occurred_at"],
         "identity_match_method": "runelite_" + event["member"]["method"],
