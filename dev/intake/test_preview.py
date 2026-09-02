@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from uuid import uuid4
-from preview import build_report, readonly
+from derived_values import CATALOGUE, DERIVED_SOURCES
+from preview import build_report, inspect_item, readonly
 
 NOW = datetime(2026, 9, 1, 21, 0, tzinfo=timezone.utc).timestamp()
 STAMP = datetime.fromtimestamp(NOW, timezone.utc).isoformat()
@@ -168,6 +169,46 @@ class PreviewTest(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             build_report(missing, self.root, now=NOW)
         self.assertFalse(missing.exists())
+
+    def test_every_catalogued_derived_input_resolves_without_items_row(self):
+        member = {"status": "matched", "member_id": 1, "method": "linked_account",
+                  "matched_rsn": "Simons Alt"}
+        with readonly(self.root / "Items.db") as items_db, readonly(
+                self.root / "RegularSubmissions.db") as submissions_db:
+            for item_id, rule in CATALOGUE["by_input"].items():
+                divisor = rule["required_component_count"] if rule["valuation_type"] == "equal_share_output_value" else 1
+                output_price = 500_000 * divisor
+                stack = {
+                    "item_id": item_id, "quantity": 1, "unit_price_gp": 500_000,
+                    "price_source": DERIVED_SOURCES[rule["valuation_type"]],
+                    "valuation_rule_id": rule["rule_id"], "valuation_catalogue_version": 1,
+                    "finished_output_item_id": rule["output_item_id"],
+                    "finished_output_item_name": rule["output_item_name"],
+                    "finished_output_market_price_gp": output_price,
+                    "derived_unit_price_gp": 500_000,
+                }
+                with self.subTest(item_id=item_id):
+                    item = inspect_item(items_db, submissions_db, str(uuid4()), stack,
+                                        member, NOW, 24)
+                    self.assertEqual("needs_context", item["status"])
+                    self.assertEqual(CATALOGUE["input_names"][item_id], item["item_name"])
+                    self.assertIsNone(item["catalogue_item_id"])
+                    self.assertEqual(item_id, item["osrs_item_id"])
+
+    def test_unknown_and_direct_market_items_do_not_bypass_items_database(self):
+        member = {"status": "matched", "member_id": 1, "method": "linked_account"}
+        variants = (
+            {"item_id": 999999, "quantity": 1, "unit_price_gp": 0,
+             "price_source": "unpriced_untradeable"},
+            {"item_id": 999998, "quantity": 1, "unit_price_gp": 600_000,
+             "price_source": "runelite_market"},
+        )
+        with readonly(self.root / "Items.db") as items_db, readonly(
+                self.root / "RegularSubmissions.db") as submissions_db:
+            for stack in variants:
+                item = inspect_item(items_db, submissions_db, str(uuid4()), stack,
+                                    member, NOW, 24)
+                self.assertEqual("item_unknown", item["status"])
 
 
 if __name__ == "__main__":

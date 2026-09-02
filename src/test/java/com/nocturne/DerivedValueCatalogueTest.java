@@ -124,6 +124,7 @@ public class DerivedValueCatalogueTest
 		DerivedValueCatalogue.Rule rule = new DerivedValueCatalogue.Rule();
 		rule.rule_id = id; rule.catalogue_version = 1; rule.valuation_type = "full_output_value";
 		rule.input_item_ids = List.of(input); rule.output_item_id = output;
+		rule.input_item_names = List.of("Input");
 		rule.output_item_name = "Output"; rule.required_component_count = 1;
 		return rule;
 	}

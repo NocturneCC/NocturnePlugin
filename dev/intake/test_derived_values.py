@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from derived_values import CATALOGUE, load_catalogue, validate_item_valuation
+from derived_values import CATALOGUE, load_catalogue, validate_item_valuation, validated_derived_input
 
 
 class DerivedValuesTest(unittest.TestCase):
@@ -13,6 +13,13 @@ class DerivedValuesTest(unittest.TestCase):
             29790, 29792, 29794, 13274, 13275, 13276,
             22969, 22971, 22973, 28319, 28321, 28323, 28325,
         }, set(CATALOGUE["by_input"]))
+        self.assertEqual(set(CATALOGUE["by_input"]), set(CATALOGUE["input_names"]))
+        self.assertTrue(all(CATALOGUE["input_names"].values()))
+
+    def test_validated_derived_input_returns_canonical_drop_name(self):
+        item = self.derived(28281, 28313, "Magus ring", 500_000, 500_000,
+                            "magus_vestige_to_magus_ring", "runelite_derived_full_output")
+        self.assertEqual("Magus vestige", validated_derived_input(item))
 
     def test_full_and_equal_share_metadata_validate_with_floor_rounding(self):
         validate_item_valuation(self.derived(28285, 28307, "Ultor ring", 1_234_567,
@@ -25,12 +32,16 @@ class DerivedValuesTest(unittest.TestCase):
     def test_version_input_output_and_arithmetic_mismatches_are_rejected(self):
         original = self.derived(29790, 29796, "Noxious halberd", 1_500_002, 500_000,
                                 "noxious_halberd_components", "runelite_derived_equal_share")
-        for field, value in [("valuation_catalogue_version", 2), ("finished_output_item_id", 1),
+        for field, value in [("valuation_rule_id", "wrong_rule"),
+                             ("valuation_catalogue_version", 2), ("finished_output_item_id", 1),
                              ("finished_output_item_name", "Wrong"), ("derived_unit_price_gp", 500_001),
                              ("unit_price_gp", 500_001)]:
             item = dict(original, **{field: value})
             with self.subTest(field=field), self.assertRaises(ValueError):
                 validate_item_valuation(item)
+        wrong_input = dict(original, item_id=28285)
+        with self.assertRaises(ValueError):
+            validate_item_valuation(wrong_input)
 
     def test_missing_zero_and_invalid_finished_prices_are_rejected(self):
         for output_price in (None, 0, -1, True):
@@ -48,7 +59,8 @@ class DerivedValuesTest(unittest.TestCase):
     def test_catalogue_integrity_rejects_duplicate_ids_inputs_and_invalid_outputs(self):
         base = {"catalogue_version": 1, "rules": [
             {"rule_id": "one", "catalogue_version": 1, "valuation_type": "full_output_value",
-             "input_item_ids": [1], "output_item_id": 2, "output_item_name": "Output",
+             "input_item_ids": [1], "input_item_names": ["Input"],
+             "output_item_id": 2, "output_item_name": "Output",
              "required_component_count": 1},
         ]}
         variants = []

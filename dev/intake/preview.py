@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 
 from intake import validate
+from derived_values import DERIVED_SOURCES, validated_derived_input
 from scoring import ordinary_stack_base_points
 
 
@@ -92,17 +93,24 @@ def inspect_item(items_db, submissions_db, event_id, stack, member, now, max_age
         return result
     item = items_db.execute("SELECT * FROM items WHERE osrs_item_id=?", (item_id,)).fetchone()
     if item is None:
-        result["status"] = "item_unknown"
-        return result
-    result["item_name"] = item["item_name"]
-    result["catalogue_item_id"] = item["item_id"]
-    result["normalized_item_name"] = item["normalized_item_name"]
-    if item["is_active"] != 1:
-        result["status"] = "item_inactive"
-        return result
-    fixed = items_db.execute("""SELECT name, points, category FROM pet_kit_point_values
-        WHERE is_active=1 AND (norm_rsn(name)=? OR normalized_name=?) LIMIT 2""",
-        (normalize(item["item_name"]), item["normalized_item_name"])).fetchall()
+        canonical_name = (validated_derived_input(stack)
+                          if stack.get("price_source") in DERIVED_SOURCES.values() else None)
+        if canonical_name is None:
+            result["status"] = "item_unknown"
+            return result
+        result.update(item_name=canonical_name, catalogue_item_id=None,
+                      normalized_item_name=normalize(canonical_name))
+        fixed = []
+    else:
+        result["item_name"] = item["item_name"]
+        result["catalogue_item_id"] = item["item_id"]
+        result["normalized_item_name"] = item["normalized_item_name"]
+        if item["is_active"] != 1:
+            result["status"] = "item_inactive"
+            return result
+        fixed = items_db.execute("""SELECT name, points, category FROM pet_kit_point_values
+            WHERE is_active=1 AND (norm_rsn(name)=? OR normalized_name=?) LIMIT 2""",
+            (normalize(item["item_name"]), item["normalized_item_name"])).fetchall()
     if fixed:
         # Do not silently use GP prices for known catalogue rewards. Capture type
         # and event applicability are not available in the current intake schema.

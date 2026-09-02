@@ -52,6 +52,8 @@ final class DerivedValueCatalogue
 					|| "equal_share_output_value".equals(rule.valuation_type))
 				|| rule.output_item_id <= 0 || rule.output_item_name == null || rule.output_item_name.isBlank()
 				|| rule.input_item_ids == null || rule.input_item_ids.isEmpty()
+				|| rule.input_item_names == null || rule.input_item_names.size() != rule.input_item_ids.size()
+				|| rule.input_item_names.stream().anyMatch(name -> name == null || name.isBlank())
 				|| rule.required_component_count < 1
 				|| ("full_output_value".equals(rule.valuation_type) && rule.required_component_count != 1)
 				|| ("equal_share_output_value".equals(rule.valuation_type)
@@ -101,6 +103,7 @@ final class DerivedValueCatalogue
 		int catalogue_version;
 		String valuation_type;
 		List<Integer> input_item_ids;
+		List<String> input_item_names;
 		int output_item_id;
 		String output_item_name;
 		int required_component_count;

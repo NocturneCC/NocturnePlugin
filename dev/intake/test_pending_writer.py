@@ -123,6 +123,58 @@ class PendingWriterTest(unittest.TestCase):
         self.assertEqual(("runelite_derived_equal_share", "noxious_halberd_components",
                           29796, 1_500_002, 500_000), row)
 
+    def test_missing_derived_input_uses_canonical_name_and_nullable_internal_id(self):
+        payload = self.payload(28281, 500_000, version=2)
+        payload["version"] = 4
+        payload["items"][0].update({
+            "price_source": "runelite_derived_full_output",
+            "valuation_rule_id": "magus_vestige_to_magus_ring",
+            "valuation_catalogue_version": 1,
+            "finished_output_item_id": 28313,
+            "finished_output_item_name": "Magus ring",
+            "finished_output_market_price_gp": 500_000,
+            "derived_unit_price_gp": 500_000,
+        })
+        self.assertEqual("pending_stored", process_payload(payload, self.root, NOW.timestamp())["status"])
+        row = self.rows("""SELECT item_id,osrs_item_id,item_name,normalized_item_name,rsn,status,
+            price_source,valuation_rule_id,valuation_catalogue_version,finished_output_item_id,
+            finished_output_item_name,finished_output_market_price_gp,derived_unit_price_gp
+            FROM regular_submissions""")[0]
+        self.assertEqual((None, 28281, "Magus vestige", "magus_vestige", "Test Alt", "pending"), row[:6])
+        self.assertEqual(("runelite_derived_full_output", "magus_vestige_to_magus_ring", 1,
+                          28313, "Magus ring", 500_000, 500_000), row[6:])
+        self.assertEqual([], self.rows("PRAGMA foreign_key_list(regular_submissions)"))
+        self.assertEqual([(77,)], self.rows("SELECT total_points FROM rank_totals"))
+
+    def test_missing_item_fallback_rejects_mismatches_and_direct_unknowns(self):
+        def magus():
+            payload = self.payload(28281, 500_000, version=2)
+            payload["version"] = 4
+            payload["items"][0].update({
+                "price_source": "runelite_derived_full_output",
+                "valuation_rule_id": "magus_vestige_to_magus_ring",
+                "valuation_catalogue_version": 1,
+                "finished_output_item_id": 28313,
+                "finished_output_item_name": "Magus ring",
+                "finished_output_market_price_gp": 500_000,
+                "derived_unit_price_gp": 500_000,
+            })
+            return payload
+
+        for field, value in (("valuation_rule_id", "wrong_rule"),
+                             ("item_id", 28285),
+                             ("finished_output_item_id", 28316)):
+            payload = magus()
+            payload["items"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                process_payload(payload, self.root, NOW.timestamp())
+        direct = self.payload(999999, 600_000, version=2)
+        direct["version"] = 4
+        direct["items"][0]["price_source"] = "runelite_market"
+        self.assertEqual("excluded", process_payload(direct, self.root, NOW.timestamp())["status"])
+        self.assertEqual([], self.rows("SELECT submission_id FROM regular_submissions"))
+        self.assertEqual([(77,)], self.rows("SELECT total_points FROM rank_totals"))
+
     def test_low_value_and_legacy_reports_are_excluded(self):
         low = process_payload(self.payload(526, 31), self.root, NOW.timestamp())
         legacy = process_payload(self.payload(526, version=1), self.root, NOW.timestamp())

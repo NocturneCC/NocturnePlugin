@@ -4,6 +4,12 @@
 plugin packages that exact file as a resource; intake code loads it from the
 repository root. Duplicate rule IDs, duplicate input IDs, invalid output IDs,
 version mismatches and invalid component counts fail startup/tests closed.
+Each input ID also has a positionally matched canonical dropped-item name. Only
+after complete v4 derived-rule validation may the pending writer use that name
+when the untradeable input is absent from `Items.db`. In that case the nullable
+internal `regular_submissions.item_id` remains NULL, while the OSRS input ID and
+finished-output metadata remain distinct. Direct-market and unknown items get
+no fallback and still require the ordinary item catalogue.
 
 ## Included rules
 
