@@ -75,6 +75,7 @@ public class NocturnePlugin extends Plugin
 	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
+	private DerivedValueCatalogue derivedValues;
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -89,6 +90,7 @@ public class NocturnePlugin extends Plugin
 		Object token = new Object();
 		lifecycle = token;
 		groups = new GroupTracker(client);
+		derivedValues = DerivedValueCatalogue.load(gson);
 		submissions = new SubmissionService(http, gson);
 		SwingUtilities.invokeLater(() ->
 		{
@@ -267,8 +269,10 @@ public class NocturnePlugin extends Plugin
 			if (item.getQuantity() > 0)
 			{
 				String name = itemManager.getItemComposition(item.getId()).getName();
+				boolean tradeable = itemManager.getItemComposition(item.getId()).isTradeable();
 				int unitPriceGp = itemManager.getItemPrice(item.getId());
-				items.add(new LootItem(item.getId(), item.getQuantity(), name, unitPriceGp));
+				items.add(derivedValues.value(item.getId(), item.getQuantity(), name, unitPriceGp, tradeable,
+					itemManager::getItemPrice, outputId -> itemManager.getItemComposition(outputId).getName()));
 			}
 		}
 		if (items.isEmpty())

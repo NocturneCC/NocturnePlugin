@@ -30,12 +30,13 @@ public class SubmissionServiceTest
 		LootRecord record = record();
 		JsonObject body = SubmissionService.payload(record);
 		assertEquals(6, body.entrySet().size());
-		assertEquals(2, body.get("version").getAsInt());
+		assertEquals(4, body.get("version").getAsInt());
 		assertEquals(record.id, body.get("event_id").getAsString());
 		assertFalse(body.toString().contains("PrivateOtherPlayer"));
 		assertFalse(body.toString().contains("Bones"));
 		assertEquals(526, body.getAsJsonArray("items").get(0).getAsJsonObject().get("item_id").getAsInt());
 		assertEquals(32, body.getAsJsonArray("items").get(0).getAsJsonObject().get("unit_price_gp").getAsInt());
+		assertEquals("runelite_market", body.getAsJsonArray("items").get(0).getAsJsonObject().get("price_source").getAsString());
 	}
 
 	@Test
@@ -54,13 +55,28 @@ public class SubmissionServiceTest
 	}
 
 	@Test
-	public void screenshotPayloadIsVersionThreeAndBounded()
+	public void payloadContainsDerivedValuationMetadata()
+	{
+		LootItem item = LootItem.derived(29790, 1, "Noxious point", 500_000,
+			"runelite_derived_equal_share", "noxious_halberd_components", 1,
+			29796, "Noxious halberd", 1_500_001);
+		JsonObject entry = SubmissionService.payload(new LootRecord("Simons Alt", "Araxxor", List.of(item)))
+			.getAsJsonArray("items").get(0).getAsJsonObject();
+		assertEquals("noxious_halberd_components", entry.get("valuation_rule_id").getAsString());
+		assertEquals(29796, entry.get("finished_output_item_id").getAsInt());
+		assertEquals("Noxious halberd", entry.get("finished_output_item_name").getAsString());
+		assertEquals(1_500_001, entry.get("finished_output_market_price_gp").getAsInt());
+		assertEquals(500_000, entry.get("derived_unit_price_gp").getAsInt());
+	}
+
+	@Test
+	public void screenshotPayloadIsVersionFourAndBounded()
 	{
 		byte[] jpeg = {(byte) 0xff, (byte) 0xd8, 1, 2, (byte) 0xff, (byte) 0xd9};
 		SubmissionScreenshot screenshot = new SubmissionScreenshot(
 			"image/jpeg", 640, 480, jpeg, "a".repeat(64));
 		JsonObject body = SubmissionService.payload(record(), screenshot);
-		assertEquals(3, body.get("version").getAsInt());
+		assertEquals(4, body.get("version").getAsInt());
 		JsonObject image = body.getAsJsonObject("screenshot");
 		assertEquals("image/jpeg", image.get("mime_type").getAsString());
 		assertEquals(640, image.get("width").getAsInt());

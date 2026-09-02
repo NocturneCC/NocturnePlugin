@@ -40,7 +40,7 @@ final class SubmissionService
 	static JsonObject payload(LootRecord record, SubmissionScreenshot screenshot)
 	{
 		JsonObject body = new JsonObject();
-		body.addProperty("version", screenshot == null ? 2 : 3);
+		body.addProperty("version", 4);
 		body.addProperty("event_id", record.id);
 		body.addProperty("occurred_at", record.occurredAt);
 		body.addProperty("rsn", record.rsn);
@@ -52,6 +52,16 @@ final class SubmissionService
 			entry.addProperty("item_id", item.id);
 			entry.addProperty("quantity", item.quantity);
 			entry.addProperty("unit_price_gp", item.unitPriceGp);
+			entry.addProperty("price_source", item.priceSource);
+			if (item.valuationRuleId != null)
+			{
+				entry.addProperty("valuation_rule_id", item.valuationRuleId);
+				entry.addProperty("valuation_catalogue_version", item.valuationCatalogueVersion);
+				entry.addProperty("finished_output_item_id", item.finishedOutputItemId);
+				entry.addProperty("finished_output_item_name", item.finishedOutputItemName);
+				entry.addProperty("finished_output_market_price_gp", item.finishedOutputMarketPriceGp);
+				entry.addProperty("derived_unit_price_gp", item.unitPriceGp);
+			}
 			items.add(entry);
 		}
 		body.add("items", items);

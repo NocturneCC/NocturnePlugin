@@ -1,0 +1,15 @@
+{
+  "catalogue_version": 1,
+  "rules": [
+    {"rule_id":"ultor_vestige_to_ultor_ring","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[28285],"output_item_id":28307,"output_item_name":"Ultor ring","required_component_count":1},
+    {"rule_id":"magus_vestige_to_magus_ring","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[28281],"output_item_id":28313,"output_item_name":"Magus ring","required_component_count":1},
+    {"rule_id":"bellator_vestige_to_bellator_ring","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[28279],"output_item_id":28316,"output_item_name":"Bellator ring","required_component_count":1},
+    {"rule_id":"venator_vestige_to_venator_ring","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[28283],"output_item_id":28310,"output_item_name":"Venator ring","required_component_count":1},
+    {"rule_id":"araxyte_fang_to_amulet_of_rancour","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[29799],"output_item_id":29801,"output_item_name":"Amulet of rancour","required_component_count":1},
+    {"rule_id":"mokhaiotl_cloth_to_confliction_gauntlets","catalogue_version":1,"valuation_type":"full_output_value","input_item_ids":[31109],"output_item_id":31106,"output_item_name":"Confliction gauntlets","required_component_count":1},
+    {"rule_id":"noxious_halberd_components","catalogue_version":1,"valuation_type":"equal_share_output_value","input_item_ids":[29790,29792,29794],"output_item_id":29796,"output_item_name":"Noxious halberd","required_component_count":3},
+    {"rule_id":"abyssal_bludgeon_components","catalogue_version":1,"valuation_type":"equal_share_output_value","input_item_ids":[13274,13275,13276],"output_item_id":13263,"output_item_name":"Abyssal bludgeon","required_component_count":3},
+    {"rule_id":"brimstone_ring_components","catalogue_version":1,"valuation_type":"equal_share_output_value","input_item_ids":[22969,22971,22973],"output_item_id":22975,"output_item_name":"Brimstone ring","required_component_count":3},
+    {"rule_id":"soulreaper_axe_components","catalogue_version":1,"valuation_type":"equal_share_output_value","input_item_ids":[28319,28321,28323,28325],"output_item_id":28338,"output_item_name":"Soulreaper axe","required_component_count":4}
+  ]
+}

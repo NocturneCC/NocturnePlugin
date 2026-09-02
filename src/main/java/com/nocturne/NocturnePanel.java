@@ -196,9 +196,7 @@ final class NocturnePanel extends PluginPanel
 				icon.setPreferredSize(new Dimension(36, 32));
 				itemManager.getImage(item.id).addTo(icon);
 				row.add(icon, BorderLayout.WEST);
-				String price = item.unitPriceGp > 0
-					? "\n" + String.format(java.util.Locale.US, "%,d gp each", item.unitPriceGp)
-					: "\nPrice unavailable";
+				String price = priceText(item);
 				JTextArea text = note(item.quantity + " × " + item.name
 					+ (diagnostics ? " [" + item.id + "]" : "") + price, CARD);
 				text.setForeground(Color.WHITE);
@@ -215,6 +213,19 @@ final class NocturnePanel extends PluginPanel
 			}
 			if (diagnostics) card.add(note(record.group.displayText(), CARD));
 			return card;
+	}
+
+	static String priceText(LootItem item)
+	{
+		String price = item.unitPriceGp > 0
+			? "\n" + String.format(java.util.Locale.US, "%,d gp each", item.unitPriceGp)
+			: "\nPrice unavailable";
+		if (item.valuationRuleId != null)
+		{
+			price += "\nDerived from " + item.finishedOutputItemName + " ("
+				+ String.format(java.util.Locale.US, "%,d gp", item.finishedOutputMarketPriceGp) + ")";
+		}
+		return price;
 	}
 
 	private static JPanel column(Color background)
