@@ -7,6 +7,17 @@ import static org.junit.Assert.*;
 public class LootHistoryTest
 {
 	@Test
+	public void newestLootIsFirst()
+	{
+		LootHistory history = new LootHistory();
+		history.add(drop("First", "Goblin"));
+		history.add(drop("First", "Cow"));
+
+		assertEquals("Cow", history.getRecords().get(0).source);
+		assertEquals("Goblin", history.getRecords().get(1).source);
+	}
+
+	@Test
 	public void retainsNewestFiftyWithoutMergingIdenticalDrops()
 	{
 		LootHistory history = new LootHistory();

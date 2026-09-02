@@ -12,7 +12,9 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JScrollBar;
 import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.game.ItemManager;
 import java.awt.Dimension;
@@ -113,8 +115,23 @@ final class NocturnePanel extends PluginPanel
 	void recordLoot(LootRecord record)
 	{
 		setPlayer(record.rsn);
+		JScrollBar scrollBar = getScrollPane().getVerticalScrollBar();
+		int previousValue = scrollBar.getValue();
+		int previousMaximum = scrollBar.getMaximum();
 		history.add(record);
 		renderHistory();
+		SwingUtilities.invokeLater(() -> restoreViewportAfterPrepend(
+			scrollBar, previousValue, previousMaximum));
+	}
+
+	static void restoreViewportAfterPrepend(JScrollBar scrollBar, int previousValue, int previousMaximum)
+	{
+		if (previousValue <= scrollBar.getMinimum())
+		{
+			return;
+		}
+		int insertedHeight = Math.max(0, scrollBar.getMaximum() - previousMaximum);
+		scrollBar.setValue(previousValue + insertedHeight);
 	}
 
 	void setDiagnostics(boolean enabled)
