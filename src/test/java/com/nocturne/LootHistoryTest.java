@@ -18,7 +18,7 @@ public class LootHistoryTest
 	}
 
 	@Test
-	public void retainsNewestFiftyWithoutMergingIdenticalDrops()
+	public void displayWindowRetainsNewestFiftyWithoutDeletingPersistentCount()
 	{
 		LootHistory history = new LootHistory();
 		for (int i = 0; i < 60; i++)
@@ -35,7 +35,7 @@ public class LootHistoryTest
 	}
 
 	@Test
-	public void repeatedIdentityUpdatesPreserveLootButAccountSwitchClearsIt()
+	public void repeatedIdentityUpdatesPreserveLootAndAccountSwitchSelectsAnotherView()
 	{
 		LootHistory history = new LootHistory();
 		history.add(drop("First", "Goblin"));
@@ -47,14 +47,13 @@ public class LootHistoryTest
 	}
 
 	@Test
-	public void logoutAndManualClearResetCountsAndRecords()
+	public void logoutRetainsLastSelectedHistoryAndManualClearResetsView()
 	{
 		LootHistory history = new LootHistory();
 		history.add(drop("First", "Goblin"));
-		assertTrue(history.setPlayer(null));
-		assertEquals(0, history.getCount());
-		assertTrue(history.getRecords().isEmpty());
-		history.add(drop("First", "Cow"));
+		assertFalse(history.setPlayer(null));
+		assertEquals(1, history.getCount());
+		assertEquals("Goblin", history.getRecords().get(0).source);
 		history.clear();
 		assertEquals(0, history.getCount());
 		assertTrue(history.getRecords().isEmpty());

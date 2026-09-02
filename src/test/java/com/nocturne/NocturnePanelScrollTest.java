@@ -26,6 +26,16 @@ public class NocturnePanelScrollTest
 		assertEquals(0, scrollBar.getValue());
 	}
 
+	@Test
+	public void loadingOlderEntriesKeepsCurrentViewportValue()
+	{
+		JScrollBar scrollBar = scrollBar(300, 90);
+		int previousValue = scrollBar.getValue();
+		scrollBar.setMaximum(500);
+		scrollBar.setValue(previousValue);
+		assertEquals(90, scrollBar.getValue());
+	}
+
 	private static JScrollBar scrollBar(int maximum, int value)
 	{
 		JScrollBar scrollBar = new JScrollBar(JScrollBar.VERTICAL);

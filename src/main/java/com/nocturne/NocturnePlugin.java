@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.CompletableFuture;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -76,6 +78,9 @@ public class NocturnePlugin extends Plugin
 
 	private volatile SubmissionService submissions;
 	private DerivedValueCatalogue derivedValues;
+	private LootHistoryStore historyStore;
+	private CompletableFuture<Void> historyWork = CompletableFuture.completedFuture(null);
+	private String activeRsn;
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -91,6 +96,8 @@ public class NocturnePlugin extends Plugin
 		lifecycle = token;
 		groups = new GroupTracker(client);
 		derivedValues = DerivedValueCatalogue.load(gson);
+		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
+			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
 		SwingUtilities.invokeLater(() ->
 		{
@@ -98,7 +105,11 @@ public class NocturnePlugin extends Plugin
 			{
 				return;
 			}
-			panel = new NocturnePanel(itemManager);
+			panel = new NocturnePanel(itemManager, new NocturnePanel.HistoryActions()
+			{
+				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true); }
+				@Override public void clear(String rsn) { clearHistory(rsn); }
+			});
 			panel.setTracking(config.trackNpcLoot());
 			panel.setDiagnostics(config.showDiagnostics());
 			panel.setSubmissionEnabled(config.submitTestDrops());
@@ -128,6 +139,7 @@ public class NocturnePlugin extends Plugin
 		submissions = null;
 		if (sender != null) sender.close();
 		groups = null;
+		activeRsn = null;
 		SwingUtilities.invokeLater(() ->
 		{
 			if (navigation != null)
@@ -158,9 +170,10 @@ public class NocturnePlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
+			activeRsn = null;
 			if (groups != null) groups.reset();
 			if (submissions != null) submissions.cancelPending();
-			withPanel(view -> view.setPlayer(null));
+			withPanel(NocturnePanel::setLoggedOut);
 		}
 		else if (event.getGameState() == GameState.HOPPING)
 		{
@@ -296,14 +309,18 @@ public class NocturnePlugin extends Plugin
 		{
 			record.submission = SubmissionStatus.INELIGIBLE;
 		}
-		withPanel(view -> view.recordLoot(record));
+		persist(record, false);
 		SubmissionService sender = submissions;
 		Object token = lifecycle;
 		if (sender != null && config.submitTestDrops() && eligible)
 		{
 			Consumer<SubmissionStatus> update = status ->
 			{
-				if (lifecycle == token) withPanel(view -> view.setSubmission(record.id, status));
+				persist(record.withSubmission(status), true);
+				if (lifecycle == token) withPanel(view ->
+				{
+					view.setSubmission(record.id, status);
+				});
 			};
 			if (config.attachScreenshots())
 			{
@@ -336,9 +353,70 @@ public class NocturnePlugin extends Plugin
 			if (player != null && player.getName() != null)
 			{
 				String rsn = player.getName();
-				withPanel(view -> view.setPlayer(rsn));
+				if (!rsn.equals(activeRsn))
+				{
+					activeRsn = rsn;
+					withPanel(view -> view.setPlayer(rsn));
+					loadHistory(rsn, 0, false);
+				}
 			}
 		}
+	}
+
+	private synchronized void persist(LootRecord record, boolean update)
+	{
+		LootHistoryStore store = historyStore;
+		if (store == null) return;
+		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
+		{
+			try
+			{
+				if (update) store.update(record); else store.append(record);
+				LootHistoryStore.Page stats = store.load(record.rsn, 0, 1);
+				if (!update) withPanel(view -> view.recordLoot(record));
+				withPanel(view -> view.updateHistoryStats(record.rsn, stats.totalCount, stats.storageBytes));
+			}
+			catch (java.io.IOException e)
+			{
+				log.debug("Unable to persist local loot history", e);
+				if (!update) withPanel(view -> view.recordLoot(record));
+			}
+		}, executor);
+	}
+
+	private synchronized void loadHistory(String rsn, int offset, boolean append)
+	{
+		if (rsn == null || historyStore == null) return;
+		LootHistoryStore store = historyStore;
+		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
+		{
+			try
+			{
+				LootHistoryStore.Page page = store.load(rsn, offset, LootHistory.PAGE_SIZE);
+				withPanel(view -> view.showHistory(rsn, page, append));
+				if (page.malformedRecords > 0) log.debug("Recovered local history with {} malformed records skipped", page.malformedRecords);
+			}
+			catch (java.io.IOException e)
+			{
+				log.debug("Unable to load local loot history", e);
+				withPanel(view -> view.historyLoadFailed(rsn));
+			}
+		}, executor);
+	}
+
+	private synchronized void clearHistory(String rsn)
+	{
+		if (rsn == null || historyStore == null) return;
+		LootHistoryStore store = historyStore;
+		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
+		{
+			try
+			{
+				store.clear(rsn);
+				withPanel(view -> view.historyCleared(rsn));
+			}
+			catch (java.io.IOException e) { log.debug("Unable to clear local loot history", e); }
+		}, executor);
 	}
 
 	private void withPanel(Consumer<NocturnePanel> action)

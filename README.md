@@ -12,12 +12,25 @@ reveals them for local testing. Names are not presented as verified clan members
 
 - Enable **Nocturne** in RuneLite's plugin settings, then click the purple **N**.
 - **Track loot** pauses or resumes recording new NPC drops and raid rewards.
-- The latest 50 loot events are kept in memory, newest first. The counter includes
-  all recorded events since the history was cleared, including evicted entries.
-- Logout, character changes, disabling the plugin and closing the client clear
-  history. World hopping on the same character preserves it.
-- **Clear local history** resets the displayed history and counter.
+- Loot history is stored per normalized RSN under
+  `.runelite/nocturne/loot-history/`. The newest 50 events load first; use
+  **Load 50 older events** for bounded, newest-first pagination. Logout keeps the
+  last character visible, and switching back to a character restores its history.
+- The counter and approximate local file usage include the selected character's
+  complete history. Records are not automatically removed by age or count.
+- **Clear local history** requires confirmation and clears only the selected RSN.
+  With RuneLite closed, manual cleanup can remove individual `.jsonl` account
+  files or the whole `loot-history` directory.
 - Separate kills with identical drops are retained as separate events.
+
+History files contain the card's RSN, source, time, item IDs, names, quantities,
+captured unit-price/derived-value metadata, group snapshot and intake outcome.
+They never contain screenshots or screenshot bytes. Records are local and
+display-only: loading them cannot schedule a screenshot or replay a submission.
+JSON-lines overhead varies with item count; a typical one-item event is roughly
+0.5–1 KiB, so 10,000 simple events are approximately 5–10 MiB. Writes are forced
+and atomically replaced where rewriting is required. Versioned readers preserve
+valid records when malformed lines or interrupted temporary files are present.
 
 ### Optional test submissions
 
@@ -154,9 +167,10 @@ Manual test checklist:
 4. Pause **Track loot** and repeat. No new card should appear; resume afterward.
 5. Clear history. The counter should return to zero and the character stay visible.
 6. Hop worlds. Existing history should remain for the same character.
-7. Log out, then log into another character. Previous character loot should be gone.
+7. Log out, then log into another character. The first character's history must
+   remain stored; switching back must restore it.
 8. Disable and re-enable Nocturne. There should be exactly one sidebar icon and
-   a fresh history, with the current RSN restored.
+   the current RSN and its existing history restored.
 
 Group capture test:
 

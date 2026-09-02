@@ -15,6 +15,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.JOptionPane;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.game.ItemManager;
 import java.awt.Dimension;
@@ -28,6 +29,7 @@ final class NocturnePanel extends PluginPanel
 	private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
 	private final ItemManager itemManager;
+	private final HistoryActions historyActions;
 	private boolean diagnostics;
 	private GroupSnapshot liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 	private final JTextArea connection = note("Local capture · submissions off", BACKGROUND);
@@ -35,12 +37,19 @@ final class NocturnePanel extends PluginPanel
 	private final JLabel player = label("Log in to see your character", Color.WHITE);
 	private final JLabel tracking = label("Loot tracking enabled", PURPLE);
 	private final JLabel count = label("0 loot events", MUTED);
+	private final JButton loadOlder = new JButton("Load 50 older events");
 	private final JPanel feed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 
 	NocturnePanel(ItemManager itemManager)
 	{
+		this(itemManager, HistoryActions.NONE);
+	}
+
+	NocturnePanel(ItemManager itemManager, HistoryActions historyActions)
+	{
 		this.itemManager = itemManager;
+		this.historyActions = historyActions;
 		setBackground(BACKGROUND);
 		setLayout(new BorderLayout(0, 12));
 		setBorder(BorderFactory.createEmptyBorder(12, 9, 12, 9));
@@ -74,11 +83,25 @@ final class NocturnePanel extends PluginPanel
 		clear.setFocusable(false);
 		clear.addActionListener(event ->
 		{
-			history.clear();
-			renderHistory();
+			if (history.getPlayer() != null && JOptionPane.showConfirmDialog(this,
+				"Clear local loot history for " + history.getPlayer() + " only?",
+				"Clear local history", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE)
+				== JOptionPane.OK_OPTION)
+			{
+				historyActions.clear(history.getPlayer());
+			}
 		});
+		loadOlder.setBackground(CARD);
+		loadOlder.setForeground(Color.WHITE);
+		loadOlder.setFocusable(false);
+		loadOlder.addActionListener(event ->
+		{
+			loadOlder.setEnabled(false);
+			historyActions.loadOlder(history.getPlayer(), history.getRecords().size());
+		});
+		footer.add(loadOlder);
 		footer.add(clear);
-		footer.add(note("Latest 50 loot events. Clears on logout, character change or plugin restart.", BACKGROUND));
+		footer.add(note("Stored locally per character. Persisted records are display-only and are never resubmitted.", BACKGROUND));
 		add(footer, BorderLayout.SOUTH);
 		renderHistory();
 	}
@@ -91,6 +114,46 @@ final class NocturnePanel extends PluginPanel
 			liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 			setGroup(liveGroup);
 			renderHistory();
+		}
+	}
+
+	void setLoggedOut()
+	{
+		player.setText(history.getPlayer() == null ? "Log in to see your character"
+			: "Logged out · showing " + history.getPlayer());
+	}
+
+	void showHistory(String rsn, LootHistoryStore.Page page, boolean append)
+	{
+		if (!java.util.Objects.equals(history.getPlayer(), rsn)) return;
+		JScrollBar scrollBar = getScrollPane().getVerticalScrollBar();
+		int previousValue = scrollBar.getValue();
+		if (append) history.appendOlder(page); else history.replace(page);
+		renderHistory();
+		loadOlder.setEnabled(true);
+		if (append) SwingUtilities.invokeLater(() -> scrollBar.setValue(previousValue));
+	}
+
+	void historyLoadFailed(String rsn)
+	{
+		if (java.util.Objects.equals(history.getPlayer(), rsn)) loadOlder.setEnabled(true);
+	}
+
+	void historyCleared(String rsn)
+	{
+		if (java.util.Objects.equals(history.getPlayer(), rsn))
+		{
+			history.clear();
+			renderHistory();
+		}
+	}
+
+	void updateHistoryStats(String rsn, int totalCount, long bytes)
+	{
+		if (java.util.Objects.equals(history.getPlayer(), rsn))
+		{
+			history.updateStats(totalCount, bytes);
+			count.setText(history.getCount() + " loot events · " + storageText(history.getStorageBytes()) + " local");
 		}
 	}
 
@@ -166,7 +229,8 @@ final class NocturnePanel extends PluginPanel
 	private void renderHistory()
 	{
 		feed.removeAll();
-		count.setText(history.getCount() + " loot events");
+		count.setText(history.getCount() + " loot events · " + storageText(history.getStorageBytes()) + " local");
+		loadOlder.setVisible(history.hasOlder());
 		if (history.getRecords().isEmpty())
 		{
 			feed.add(note("No drops yet. Defeat an NPC that drops loot to test tracking.", CARD));
@@ -177,6 +241,21 @@ final class NocturnePanel extends PluginPanel
 		}
 		feed.revalidate();
 		feed.repaint();
+	}
+
+	static String storageText(long bytes)
+	{
+		if (bytes < 1024) return bytes + " B";
+		if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KiB", bytes / 1024d);
+		return String.format(java.util.Locale.US, "%.1f MiB", bytes / (1024d * 1024d));
+	}
+
+	interface HistoryActions
+	{
+		HistoryActions NONE = new HistoryActions() { public void loadOlder(String rsn, int offset) { }
+			public void clear(String rsn) { } };
+		void loadOlder(String rsn, int offset);
+		void clear(String rsn);
 	}
 
 	JPanel renderRecord(LootRecord record)
