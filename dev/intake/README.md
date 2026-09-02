@@ -248,6 +248,14 @@ Once every associated row is resolved, denied-only evidence is retained for 7
 days and evidence associated with an approval for 30 days. Digests and the
 append-only lifecycle audit remain after deletion.
 
+`screenshot_review_sync_support.py` is the guarded, dry-run-by-default upgrade
+for transactional review-state synchronization in the active admin. It backs
+up and preserves the active admin file's exact metadata and supports verified
+rollback. After applying it, restart only `osrs-drops-admin.service`. Existing
+drift is reported by `screenshot_lifecycle.py --reconcile`; the explicitly
+guarded `--apply-reconcile` mode changes lifecycle state/deadlines only and
+never deletes images or changes submissions, review audits, or points.
+
 `screenshot_lifecycle.py --cleanup` reports a locked, path-safe cleanup plan.
 Add `--apply-cleanup` only after review. It ignores symlinks, does not traverse
 directories, reports orphan regular JPEGs independently, and uses reversible
