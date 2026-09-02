@@ -13,12 +13,14 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
+import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.JOptionPane;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.game.ItemManager;
 import java.awt.Dimension;
+import java.awt.Component;
 
 final class NocturnePanel extends PluginPanel
 {
@@ -40,6 +42,9 @@ final class NocturnePanel extends PluginPanel
 	private final JButton loadOlder = new JButton("Load 50 older events");
 	private final JPanel feed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
+	private ViewportAnchor pendingPrependAnchor;
+	private int viewportGeneration;
+	private boolean viewportRestoreScheduled;
 
 	NocturnePanel(ItemManager itemManager)
 	{
@@ -108,8 +113,11 @@ final class NocturnePanel extends PluginPanel
 
 	void setPlayer(String rsn)
 	{
+		requireEdt();
 		if (history.setPlayer(rsn))
 		{
+			viewportGeneration++;
+			pendingPrependAnchor = null;
 			player.setText(rsn == null ? "Log in to see your character" : rsn);
 			liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 			setGroup(liveGroup);
@@ -125,13 +133,13 @@ final class NocturnePanel extends PluginPanel
 
 	void showHistory(String rsn, LootHistoryStore.Page page, boolean append)
 	{
+		requireEdt();
 		if (!java.util.Objects.equals(history.getPlayer(), rsn)) return;
-		JScrollBar scrollBar = getScrollPane().getVerticalScrollBar();
-		int previousValue = scrollBar.getValue();
+		ViewportAnchor anchor = append ? captureViewportAnchor() : ViewportAnchor.TOP;
 		if (append) history.appendOlder(page); else history.replace(page);
 		renderHistory();
 		loadOlder.setEnabled(true);
-		if (append) SwingUtilities.invokeLater(() -> scrollBar.setValue(previousValue));
+		restoreAfterLayout(anchor, ++viewportGeneration);
 	}
 
 	void historyLoadFailed(String rsn)
@@ -177,24 +185,106 @@ final class NocturnePanel extends PluginPanel
 
 	void recordLoot(LootRecord record)
 	{
+		requireEdt();
 		setPlayer(record.rsn);
-		JScrollBar scrollBar = getScrollPane().getVerticalScrollBar();
-		int previousValue = scrollBar.getValue();
-		int previousMaximum = scrollBar.getMaximum();
+		if (pendingPrependAnchor == null)
+		{
+			pendingPrependAnchor = captureViewportAnchor();
+		}
 		history.add(record);
 		renderHistory();
-		SwingUtilities.invokeLater(() -> restoreViewportAfterPrepend(
-			scrollBar, previousValue, previousMaximum));
+		schedulePrependRestore();
 	}
 
-	static void restoreViewportAfterPrepend(JScrollBar scrollBar, int previousValue, int previousMaximum)
+	private void schedulePrependRestore()
 	{
-		if (previousValue <= scrollBar.getMinimum())
+		if (viewportRestoreScheduled)
 		{
 			return;
 		}
-		int insertedHeight = Math.max(0, scrollBar.getMaximum() - previousMaximum);
-		scrollBar.setValue(previousValue + insertedHeight);
+		viewportRestoreScheduled = true;
+		int generation = viewportGeneration;
+		SwingUtilities.invokeLater(() ->
+		{
+			ViewportAnchor anchor = pendingPrependAnchor;
+			if (generation == viewportGeneration) restoreViewport(anchor);
+			SwingUtilities.invokeLater(() ->
+			{
+				viewportRestoreScheduled = false;
+				if (generation == viewportGeneration) restoreViewport(anchor);
+				if (pendingPrependAnchor == anchor) pendingPrependAnchor = null;
+			});
+		});
+	}
+
+	private void restoreAfterLayout(ViewportAnchor anchor, int generation)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			if (generation != viewportGeneration) return;
+			restoreViewport(anchor);
+			SwingUtilities.invokeLater(() ->
+			{
+				if (generation == viewportGeneration) restoreViewport(anchor);
+			});
+		});
+	}
+
+	private ViewportAnchor captureViewportAnchor()
+	{
+		JScrollBar scrollBar = getScrollPane().getVerticalScrollBar();
+		if (scrollBar.getValue() == scrollBar.getMinimum()) return ViewportAnchor.TOP;
+		Component view = getScrollPane().getViewport().getView();
+		int viewportY = getScrollPane().getViewport().getViewPosition().y;
+		for (Component component : feed.getComponents())
+		{
+			int componentY = SwingUtilities.convertPoint(component, 0, 0, view).y;
+			if (componentY + component.getHeight() > viewportY
+				&& component instanceof JPanel)
+			{
+				Object id = ((JPanel) component).getClientProperty("lootRecordId");
+				if (id != null) return new ViewportAnchor(id.toString(), viewportY - componentY);
+			}
+		}
+		return new ViewportAnchor(null, viewportY);
+	}
+
+	private void restoreViewport(ViewportAnchor anchor)
+	{
+		if (anchor == null) return;
+		if (anchor == ViewportAnchor.TOP)
+		{
+			getScrollPane().getVerticalScrollBar().setValue(0);
+			return;
+		}
+		if (anchor.recordId != null)
+		{
+			Component view = getScrollPane().getViewport().getView();
+			for (Component component : feed.getComponents())
+			{
+				if (component instanceof JPanel && anchor.recordId.equals(
+					((JPanel) component).getClientProperty("lootRecordId")))
+				{
+					int componentY = SwingUtilities.convertPoint(component, 0, 0, view).y;
+					getScrollPane().getVerticalScrollBar().setValue(componentY + anchor.pixelOffset);
+					return;
+				}
+			}
+		}
+		getScrollPane().getVerticalScrollBar().setValue(anchor.pixelOffset);
+	}
+
+	private static void requireEdt()
+	{
+		if (!SwingUtilities.isEventDispatchThread())
+		{
+			throw new IllegalStateException("Nocturne panel mutations must run on the EDT");
+		}
+	}
+
+	JScrollPane scrollPane()
+	{
+		return getScrollPane();
 	}
 
 	void setDiagnostics(boolean enabled)
@@ -261,6 +351,7 @@ final class NocturnePanel extends PluginPanel
 	JPanel renderRecord(LootRecord record)
 	{
 			JPanel card = column(CARD);
+			card.putClientProperty("lootRecordId", record.id);
 			card.setBorder(BorderFactory.createCompoundBorder(
 				BorderFactory.createMatteBorder(0, 0, 6, 0, BACKGROUND),
 				BorderFactory.createEmptyBorder(8, 8, 8, 8)));
@@ -292,6 +383,19 @@ final class NocturnePanel extends PluginPanel
 			}
 			if (diagnostics) card.add(note(record.group.displayText(), CARD));
 			return card;
+	}
+
+	private static final class ViewportAnchor
+	{
+		private static final ViewportAnchor TOP = new ViewportAnchor(null, 0);
+		private final String recordId;
+		private final int pixelOffset;
+
+		private ViewportAnchor(String recordId, int pixelOffset)
+		{
+			this.recordId = recordId;
+			this.pixelOffset = pixelOffset;
+		}
 	}
 
 	static String priceText(LootItem item)
