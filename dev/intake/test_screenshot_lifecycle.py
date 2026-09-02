@@ -7,6 +7,7 @@ import unittest
 
 from screenshot_lifecycle import (AUDIT, EVIDENCE, LINKS, VERSION_TABLE, cleanup,
                                   evidence_state, migrate, migration_sql,
+                                  reconcile, refresh_review_state,
                                   require_compatible_schema, schema_state)
 
 NOW = datetime(2026, 9, 2, tzinfo=timezone.utc)
@@ -49,6 +50,57 @@ class ScreenshotLifecycleTest(unittest.TestCase):
         self.add(event, ["denied", "pending"])
         with closing(sqlite3.connect(self.db)) as db:
             self.assertEqual(("pending", None), evidence_state(db, event, NOW))
+
+    def test_status_synchronization_and_deadlines_are_idempotent(self):
+        event = "00000000-0000-4000-8000-000000000024"
+        self.add(event, ["pending"])
+        with closing(sqlite3.connect(self.db)) as db:
+            sid = db.execute(f"SELECT submission_id FROM {LINKS} WHERE event_uuid=?", (event,)).fetchone()[0]
+            db.execute("UPDATE regular_submissions SET status='denied' WHERE submission_id=?", (sid,))
+            self.assertEqual(("denied", (NOW + timedelta(days=7)).isoformat()),
+                             refresh_review_state(db, event, NOW))
+            first = db.execute(f"SELECT purge_deadline FROM {EVIDENCE} WHERE event_uuid=?", (event,)).fetchone()[0]
+            refresh_review_state(db, event, NOW + timedelta(days=1))
+            self.assertEqual(first, db.execute(f"SELECT purge_deadline FROM {EVIDENCE} WHERE event_uuid=?", (event,)).fetchone()[0])
+            db.execute("UPDATE regular_submissions SET status='pending' WHERE submission_id=?", (sid,))
+            self.assertEqual(("pending", None), refresh_review_state(db, event, NOW + timedelta(days=2)))
+
+    def test_shared_final_denial_and_future_approved_policy(self):
+        event = "00000000-0000-4000-8000-000000000025"
+        self.add(event, ["denied", "pending"])
+        with closing(sqlite3.connect(self.db)) as db:
+            refresh_review_state(db, event, NOW)
+            self.assertEqual(("pending", None), db.execute(f"SELECT review_state,purge_deadline FROM {EVIDENCE} WHERE event_uuid=?", (event,)).fetchone())
+            pending = db.execute("SELECT submission_id FROM regular_submissions WHERE status='pending'").fetchone()[0]
+            db.execute("UPDATE regular_submissions SET status='denied' WHERE submission_id=?", (pending,))
+            self.assertEqual(("denied", (NOW + timedelta(days=7)).isoformat()), refresh_review_state(db, event, NOW))
+            db.execute("UPDATE regular_submissions SET status='approved' WHERE submission_id=?", (pending,))
+            self.assertEqual(("approved", (NOW + timedelta(days=30)).isoformat()), refresh_review_state(db, event, NOW))
+
+    def test_reconciliation_dry_run_apply_rerun_and_interrupt(self):
+        event = "00000000-0000-4000-8000-000000000026"
+        self.add(event, ["denied"])
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("CREATE TABLE rank_totals(member_id INTEGER PRIMARY KEY,total_points INTEGER)")
+            db.execute("INSERT INTO rank_totals VALUES(1,77)")
+            db.execute(f"INSERT INTO {AUDIT}(action,detail) VALUES('existing','immutable')")
+            db.commit()
+        report = reconcile(self.db, now=NOW)
+        self.assertTrue(report["dry_run"]); self.assertEqual(1, len(report["changes"]))
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(("pending", None), db.execute(f"SELECT review_state,purge_deadline FROM {EVIDENCE}").fetchone())
+        with self.assertRaises(KeyboardInterrupt):
+            reconcile(self.db, now=NOW, apply=True, fail=lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(("pending", None), db.execute(f"SELECT review_state,purge_deadline FROM {EVIDENCE}").fetchone())
+        self.assertFalse(reconcile(self.db, now=NOW, apply=True)["dry_run"])
+        self.assertEqual([], reconcile(self.db, now=NOW + timedelta(days=1))["changes"])
+        with closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual([(1, 77)], db.execute("SELECT * FROM rank_totals").fetchall())
+            self.assertEqual([("existing", "immutable")], db.execute(
+                f"SELECT action,detail FROM {AUDIT}").fetchall())
+            self.assertEqual("denied", db.execute(
+                "SELECT status FROM regular_submissions").fetchone()[0])
 
     def test_retention_periods_are_seven_and_thirty_days(self):
         denied = "00000000-0000-4000-8000-000000000022"

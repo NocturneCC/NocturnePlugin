@@ -129,11 +129,72 @@ def evidence_state(db, event_uuid, now):
     return label, (now + timedelta(days=days)).isoformat()
 
 
+def review_state_change(db, event_uuid, now):
+    """Return an idempotent lifecycle correction for one associated event."""
+    row = db.execute(f"SELECT review_state,purge_deadline FROM {EVIDENCE} WHERE event_uuid=?",
+                     (event_uuid,)).fetchone()
+    if row is None:
+        return None
+    state, proposed = evidence_state(db, event_uuid, now)
+    current_state, current_deadline = row
+    if state == "pending":
+        deadline = None
+    elif current_state == state and current_deadline:
+        deadline = current_deadline
+    else:
+        deadline = proposed
+    if (current_state, current_deadline) == (state, deadline):
+        return None
+    return {"event_uuid": event_uuid, "from_state": current_state,
+            "from_deadline": current_deadline, "to_state": state,
+            "to_deadline": deadline}
+
+
 def refresh_review_state(db, event_uuid, now):
-    state, deadline = evidence_state(db, event_uuid, now)
-    db.execute(f"UPDATE {EVIDENCE} SET review_state=?,purge_deadline=? WHERE event_uuid=?",
-               (state, deadline, event_uuid))
-    return state, deadline
+    change = review_state_change(db, event_uuid, now)
+    if change:
+        db.execute(f"UPDATE {EVIDENCE} SET review_state=?,purge_deadline=? WHERE event_uuid=?",
+                   (change["to_state"], change["to_deadline"], event_uuid))
+        return change["to_state"], change["to_deadline"]
+    row = db.execute(f"SELECT review_state,purge_deadline FROM {EVIDENCE} WHERE event_uuid=?",
+                     (event_uuid,)).fetchone()
+    return tuple(row) if row else (None, None)
+
+
+def refresh_submission_events(db, submission_ids, now):
+    ids = sorted({int(value) for value in submission_ids})
+    if not ids:
+        return []
+    marks = ",".join("?" for _ in ids)
+    events = [row[0] for row in db.execute(
+        f"SELECT DISTINCT event_uuid FROM {LINKS} WHERE submission_id IN ({marks})", ids)]
+    return [(event, *refresh_review_state(db, event, now)) for event in events]
+
+
+def reconciliation_plan(db, now):
+    events = [row[0] for row in db.execute(f"SELECT event_uuid FROM {EVIDENCE} ORDER BY event_uuid")]
+    return [change for event in events if (change := review_state_change(db, event, now))]
+
+
+def reconcile(database, *, now=None, apply=False, fail=None):
+    now = now or datetime.now(timezone.utc)
+    with closing(sqlite3.connect(database)) as db:
+        db.execute("PRAGMA foreign_keys=ON")
+        if not apply:
+            db.execute("PRAGMA query_only=ON")
+            return {"dry_run": True, "changes": reconciliation_plan(db, now)}
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            changes = reconciliation_plan(db, now)
+            for position, change in enumerate(changes):
+                db.execute(f"UPDATE {EVIDENCE} SET review_state=?,purge_deadline=? WHERE event_uuid=?",
+                           (change["to_state"], change["to_deadline"], change["event_uuid"]))
+                if fail: fail(f"reconcile_{position}")
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+    return {"dry_run": False, "changes": changes}
 
 
 def _safe_image(directory, filename):
@@ -228,12 +289,16 @@ def main():
     parser.add_argument("--apply-migration", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--apply-cleanup", action="store_true")
+    parser.add_argument("--reconcile", action="store_true")
+    parser.add_argument("--apply-reconcile", action="store_true")
     args = parser.parse_args()
     result = migrate(args.database, apply=args.apply_migration)
+    if args.reconcile or args.apply_reconcile:
+        result["reconciliation"] = reconcile(args.database, apply=args.apply_reconcile)
     if args.cleanup or args.apply_cleanup:
         result["cleanup"] = cleanup(args.database, args.image_dir, apply=args.apply_cleanup)
     print(json.dumps(result, sort_keys=True))
-    if not (args.apply_migration or args.apply_cleanup):
+    if not (args.apply_migration or args.apply_cleanup or args.apply_reconcile):
         print("Dry run only; no database or image was changed.")
 
 

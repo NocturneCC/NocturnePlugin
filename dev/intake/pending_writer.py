@@ -13,7 +13,8 @@ import sqlite3
 from import_pending import REQUIRED_COLUMNS, apply_candidates, plan, schema_columns
 from intake import MAX_BODY, validate, validate_screenshot
 from preview import identity, inspect_item, readonly
-from screenshot_lifecycle import AUDIT, EVIDENCE, LINKS, require_compatible_schema
+from screenshot_lifecycle import (AUDIT, EVIDENCE, LINKS, refresh_submission_events,
+                                  require_compatible_schema)
 
 
 MAX_RESPONSE = 2048
@@ -81,6 +82,7 @@ def evidence_inserter(data, stored, created_at):
                              stored and stored["bytes"], created_at, state))
         db.execute(f"INSERT OR IGNORE INTO {LINKS}(event_uuid,submission_id) VALUES(?,?)",
                    (event_id, submission_id))
+        refresh_submission_events(db, [submission_id], datetime.now(timezone.utc))
         if cursor.rowcount:
             detail = stored.get("failure", "stored") if stored else "screenshot_not_provided"
             db.execute(f"INSERT INTO {AUDIT}(event_uuid,image_filename,image_sha256,action,detail) VALUES(?,?,?,?,?)",
