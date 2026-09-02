@@ -19,7 +19,7 @@ public class NocturnePanelScrollTest
 	public void livePrependAtTopStaysAtZeroAndNewestIsFirst() throws Exception
 	{
 		Harness h = harness(12);
-		onEdt(() -> { h.bar().setValue(0); h.panel.recordLoot(record("live")); h.layout(); });
+		onEdt(() -> { h.bar().setValue(0); h.record("live"); h.layout(); });
 		flushEdt();
 		assertEquals(0, value(h));
 		assertEquals("live", cardIds(h).get(0));
@@ -30,7 +30,7 @@ public class NocturnePanelScrollTest
 	{
 		Harness h = harness(16);
 		Anchor before = positionAt(h, "old-7", 11);
-		onEdt(() -> { h.panel.recordLoot(record("live")); h.layout(); });
+		onEdt(() -> { h.record("live"); h.layout(); });
 		flushEdt();
 		assertAnchor(h, before);
 	}
@@ -41,7 +41,7 @@ public class NocturnePanelScrollTest
 		Harness h = harness(18);
 		onEdt(() -> h.bar().setValue(h.bar().getMaximum() - h.bar().getVisibleAmount()));
 		Anchor before = visibleAnchor(h);
-		onEdt(() -> { h.panel.recordLoot(record("live")); h.layout(); });
+		onEdt(() -> { h.record("live"); h.layout(); });
 		flushEdt();
 		assertAnchor(h, before);
 	}
@@ -53,7 +53,7 @@ public class NocturnePanelScrollTest
 		Anchor before = positionAt(h, "old-4", 9);
 		onEdt(() ->
 		{
-			for (int i = 0; i < 5; i++) h.panel.recordLoot(record("live-" + i));
+			for (int i = 0; i < 5; i++) h.record("live-" + i);
 			h.layout();
 		});
 		flushEdt();
@@ -219,7 +219,12 @@ public class NocturnePanelScrollTest
 	private static final class Harness
 	{
 		private final NocturnePanel panel;
-		private Harness(NocturnePanel panel) { this.panel = panel; }
+		private int total;
+		private Harness(NocturnePanel panel) { this.panel = panel; this.total = cards(this).size(); }
+		private void record(String id)
+		{
+			panel.recordPersistedLoot(NocturnePanelScrollTest.record(id), ++total, 100 + total, 1);
+		}
 		private JScrollPane scroll() { return panel.scrollPane(); }
 		private javax.swing.JScrollBar bar() { return scroll().getVerticalScrollBar(); }
 		private void layout()

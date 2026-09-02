@@ -45,6 +45,7 @@ final class NocturnePanel extends PluginPanel
 	private ViewportAnchor pendingPrependAnchor;
 	private int viewportGeneration;
 	private boolean viewportRestoreScheduled;
+	private long selectedHistoryGeneration;
 
 	NocturnePanel(ItemManager itemManager)
 	{
@@ -113,7 +114,13 @@ final class NocturnePanel extends PluginPanel
 
 	void setPlayer(String rsn)
 	{
+		setPlayer(rsn, selectedHistoryGeneration + 1);
+	}
+
+	void setPlayer(String rsn, long generation)
+	{
 		requireEdt();
+		selectedHistoryGeneration = generation;
 		if (history.setPlayer(rsn))
 		{
 			viewportGeneration++;
@@ -133,8 +140,13 @@ final class NocturnePanel extends PluginPanel
 
 	void showHistory(String rsn, LootHistoryStore.Page page, boolean append)
 	{
+		showHistory(rsn, page, append, selectedHistoryGeneration);
+	}
+
+	void showHistory(String rsn, LootHistoryStore.Page page, boolean append, long generation)
+	{
 		requireEdt();
-		if (!java.util.Objects.equals(history.getPlayer(), rsn)) return;
+		if (!matchesHistorySelection(rsn, generation)) return;
 		ViewportAnchor anchor = append ? captureViewportAnchor() : ViewportAnchor.TOP;
 		if (append) history.appendOlder(page); else history.replace(page);
 		renderHistory();
@@ -142,14 +154,14 @@ final class NocturnePanel extends PluginPanel
 		restoreAfterLayout(anchor, ++viewportGeneration);
 	}
 
-	void historyLoadFailed(String rsn)
+	void historyLoadFailed(String rsn, long generation)
 	{
-		if (java.util.Objects.equals(history.getPlayer(), rsn)) loadOlder.setEnabled(true);
+		if (matchesHistorySelection(rsn, generation)) loadOlder.setEnabled(true);
 	}
 
-	void historyCleared(String rsn)
+	void historyCleared(String rsn, long generation)
 	{
-		if (java.util.Objects.equals(history.getPlayer(), rsn))
+		if (matchesHistorySelection(rsn, generation))
 		{
 			history.clear();
 			renderHistory();
@@ -161,7 +173,7 @@ final class NocturnePanel extends PluginPanel
 		if (java.util.Objects.equals(history.getPlayer(), rsn))
 		{
 			history.updateStats(totalCount, bytes);
-			count.setText(history.getCount() + " loot events · " + storageText(history.getStorageBytes()) + " local");
+			count.setText(historySummary());
 		}
 	}
 
@@ -183,17 +195,37 @@ final class NocturnePanel extends PluginPanel
 		}
 	}
 
-	void recordLoot(LootRecord record)
+	void recordPersistedLoot(LootRecord record, int totalCount, long bytes, long generation)
 	{
 		requireEdt();
-		setPlayer(record.rsn);
+		if (!matchesHistorySelection(record.rsn, generation)) return;
+		prepend(record, () -> history.updateStats(totalCount, bytes));
+	}
+
+	void recordUnsavedLoot(LootRecord record, long generation)
+	{
+		requireEdt();
+		if (!matchesHistorySelection(record.rsn, generation)) return;
+		history.markStorageFailure();
+		prepend(record, null);
+	}
+
+	private void prepend(LootRecord record, Runnable afterAdd)
+	{
 		if (pendingPrependAnchor == null)
 		{
 			pendingPrependAnchor = captureViewportAnchor();
 		}
 		history.add(record);
+		if (afterAdd != null) afterAdd.run();
 		renderHistory();
 		schedulePrependRestore();
+	}
+
+	private boolean matchesHistorySelection(String rsn, long generation)
+	{
+		return selectedHistoryGeneration == generation
+			&& java.util.Objects.equals(history.getPlayer(), rsn);
 	}
 
 	private void schedulePrependRestore()
@@ -319,7 +351,7 @@ final class NocturnePanel extends PluginPanel
 	private void renderHistory()
 	{
 		feed.removeAll();
-		count.setText(history.getCount() + " loot events · " + storageText(history.getStorageBytes()) + " local");
+		count.setText(historySummary());
 		loadOlder.setVisible(history.hasOlder());
 		if (history.getRecords().isEmpty())
 		{
@@ -331,6 +363,12 @@ final class NocturnePanel extends PluginPanel
 		}
 		feed.revalidate();
 		feed.repaint();
+	}
+
+	String historySummary()
+	{
+		return history.getCount() + " loot events · " + (history.hasStorageFailure()
+			? "history not saved" : storageText(history.getStorageBytes()) + " local");
 	}
 
 	static String storageText(long bytes)

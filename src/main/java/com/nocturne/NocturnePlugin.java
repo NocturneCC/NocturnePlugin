@@ -81,6 +81,8 @@ public class NocturnePlugin extends Plugin
 	private LootHistoryStore historyStore;
 	private CompletableFuture<Void> historyWork = CompletableFuture.completedFuture(null);
 	private String activeRsn;
+	private volatile String historyRsn;
+	private volatile long historyGeneration;
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -107,7 +109,7 @@ public class NocturnePlugin extends Plugin
 			}
 			panel = new NocturnePanel(itemManager, new NocturnePanel.HistoryActions()
 			{
-				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true); }
+				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true, historyGeneration); }
 				@Override public void clear(String rsn) { clearHistory(rsn); }
 			});
 			panel.setTracking(config.trackNpcLoot());
@@ -140,6 +142,7 @@ public class NocturnePlugin extends Plugin
 		if (sender != null) sender.close();
 		groups = null;
 		activeRsn = null;
+		historyRsn = null;
 		SwingUtilities.invokeLater(() ->
 		{
 			if (navigation != null)
@@ -364,8 +367,10 @@ public class NocturnePlugin extends Plugin
 				if (!rsn.equals(activeRsn))
 				{
 					activeRsn = rsn;
-					withPanel(view -> view.setPlayer(rsn));
-					loadHistory(rsn, 0, false);
+					historyRsn = rsn;
+					long generation = ++historyGeneration;
+					withPanel(view -> view.setPlayer(rsn, generation));
+					loadHistory(rsn, 0, false, generation);
 				}
 			}
 		}
@@ -375,24 +380,31 @@ public class NocturnePlugin extends Plugin
 	{
 		LootHistoryStore store = historyStore;
 		if (store == null) return;
+		long generation = historyGeneration;
 		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
 		{
 			try
 			{
-				if (update) store.update(record); else store.append(record);
+				if (update && !store.update(record)) return;
+				if (!update) store.append(record);
 				LootHistoryStore.Page stats = store.load(record.rsn, 0, 1);
-				if (!update) withPanel(view -> view.recordLoot(record));
-				withPanel(view -> view.updateHistoryStats(record.rsn, stats.totalCount, stats.storageBytes));
+				if (!update) withPanel(view -> view.recordPersistedLoot(
+					record, stats.totalCount, stats.storageBytes, generation));
+				else withPanel(view ->
+				{
+					if (matchesHistorySelection(record.rsn, generation))
+						view.updateHistoryStats(record.rsn, stats.totalCount, stats.storageBytes);
+				});
 			}
 			catch (java.io.IOException e)
 			{
 				log.debug("Unable to persist local loot history", e);
-				if (!update) withPanel(view -> view.recordLoot(record));
+				if (!update) withPanel(view -> view.recordUnsavedLoot(record, generation));
 			}
 		}, executor);
 	}
 
-	private synchronized void loadHistory(String rsn, int offset, boolean append)
+	private synchronized void loadHistory(String rsn, int offset, boolean append, long generation)
 	{
 		if (rsn == null || historyStore == null) return;
 		LootHistoryStore store = historyStore;
@@ -401,27 +413,33 @@ public class NocturnePlugin extends Plugin
 			try
 			{
 				LootHistoryStore.Page page = store.load(rsn, offset, LootHistory.PAGE_SIZE);
-				withPanel(view -> view.showHistory(rsn, page, append));
+				withPanel(view -> view.showHistory(rsn, page, append, generation));
 				if (page.malformedRecords > 0) log.debug("Recovered local history with {} malformed records skipped", page.malformedRecords);
 			}
 			catch (java.io.IOException e)
 			{
 				log.debug("Unable to load local loot history", e);
-				withPanel(view -> view.historyLoadFailed(rsn));
+				withPanel(view -> view.historyLoadFailed(rsn, generation));
 			}
 		}, executor);
+	}
+
+	private boolean matchesHistorySelection(String rsn, long generation)
+	{
+		return generation == historyGeneration && java.util.Objects.equals(rsn, historyRsn);
 	}
 
 	private synchronized void clearHistory(String rsn)
 	{
 		if (rsn == null || historyStore == null) return;
 		LootHistoryStore store = historyStore;
+		long generation = historyGeneration;
 		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
 		{
 			try
 			{
 				store.clear(rsn);
-				withPanel(view -> view.historyCleared(rsn));
+				withPanel(view -> view.historyCleared(rsn, generation));
 			}
 			catch (java.io.IOException e) { log.debug("Unable to clear local loot history", e); }
 		}, executor);

@@ -55,15 +55,16 @@ final class LootHistoryStore
 		rewrite(path, line -> line, gson.toJson(toJson(record)));
 	}
 
-	synchronized void update(LootRecord record) throws IOException
+	synchronized boolean update(LootRecord record) throws IOException
 	{
 		Path path = pathFor(record.rsn);
-		if (!Files.isRegularFile(path)) return;
+		if (!Files.isRegularFile(path) || !contains(path, record.id)) return false;
 		rewrite(path, line ->
 		{
 			LootRecord existing = parseRecord(line);
 			return existing != null && existing.id.equals(record.id) ? gson.toJson(toJson(record)) : line;
 		}, null);
+		return true;
 	}
 
 	synchronized Page load(String rsn, int offset, int limit) throws IOException

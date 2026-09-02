@@ -13,6 +13,7 @@ final class LootHistory
 	private int count;
 	private long storageBytes;
 	private boolean hasOlder;
+	private boolean storageFailure;
 	private int displayLimit = PAGE_SIZE;
 
 	boolean setPlayer(String rsn)
@@ -27,6 +28,7 @@ final class LootHistory
 		records.clear();
 		count = 0;
 		storageBytes = 0;
+		storageFailure = false;
 		hasOlder = false;
 		displayLimit = PAGE_SIZE;
 		return true;
@@ -46,6 +48,7 @@ final class LootHistory
 		records.addAll(page.records);
 		count = page.totalCount;
 		storageBytes = page.storageBytes;
+		storageFailure = false;
 		hasOlder = page.hasOlder;
 		displayLimit = Math.max(PAGE_SIZE, records.size());
 	}
@@ -63,13 +66,17 @@ final class LootHistory
 	{
 		count = totalCount;
 		storageBytes = bytes;
+		storageFailure = false;
 	}
+
+	void markStorageFailure() { storageFailure = true; }
 
 	void clear()
 	{
 		records.clear();
 		count = 0;
 		storageBytes = 0;
+		storageFailure = false;
 		hasOlder = false;
 		displayLimit = PAGE_SIZE;
 	}
@@ -87,4 +94,5 @@ final class LootHistory
 	String getPlayer() { return player; }
 	long getStorageBytes() { return storageBytes; }
 	boolean hasOlder() { return hasOlder; }
+	boolean hasStorageFailure() { return storageFailure; }
 }

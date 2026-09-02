@@ -43,6 +43,31 @@ public class LootHistoryStoreTest
 		assertFalse(Files.readString(second.pathFor("First")).toLowerCase().contains("screenshot"));
 	}
 
+	@Test public void reportsExactPostWriteFileSize() throws Exception
+	{
+		LootHistoryStore store = store();
+		store.append(record("one", "First", 1));
+		LootHistoryStore.Page page = store.load("First", 0, 1);
+		assertEquals(Files.size(store.pathFor("First")), page.storageBytes);
+		assertTrue(page.storageBytes > 0);
+	}
+
+	@Test public void writeFailureDoesNotCreateAFalseStoredRecord() throws Exception
+	{
+		Path blockedRoot = temporary.getRoot().toPath().resolve("not-a-directory");
+		Files.writeString(blockedRoot, "blocked");
+		LootHistoryStore store = new LootHistoryStore(blockedRoot, new Gson());
+		try
+		{
+			store.append(record("one", "First", 1));
+			fail("expected write failure");
+		}
+		catch (java.io.IOException expected)
+		{
+			assertFalse(Files.exists(store.pathFor("First")));
+		}
+	}
+
 	@Test public void persistedLoadPathCannotInvokeCaptureOrSubmission() throws Exception
 	{
 		String source = Files.readString(Path.of("src/main/java/com/nocturne/NocturnePlugin.java"));
