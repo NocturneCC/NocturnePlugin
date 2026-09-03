@@ -39,6 +39,7 @@ final class GroupTracker
 	private GroupSnapshot current = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 	private RaidDiagnostics diagnostics = RaidDiagnostics.INACTIVE;
 	private boolean diagnosticsEnabled;
+	private boolean diagnosticsFrozen;
 	private String lastStructure;
 
 	GroupTracker(Client client)
@@ -56,6 +57,7 @@ final class GroupTracker
 		scanTicks = 0;
 		current = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 		diagnostics = RaidDiagnostics.INACTIVE;
+		diagnosticsFrozen = false;
 		lastStructure = null;
 	}
 
@@ -109,6 +111,7 @@ final class GroupTracker
 			active = raid;
 			outsideObserved = false;
 			scanTicks = 5;
+			diagnosticsFrozen = false;
 		}
 		else if (raid == RaidType.COX && session != null)
 		{
@@ -167,7 +170,7 @@ final class GroupTracker
 				size = client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE);
 				ChambersRoster.Observation observation = ChambersRoster.inspect(list, size);
 				names.addAll(observation.names);
-				if (diagnosticsEnabled)
+				if (shouldSampleDiagnostics(diagnosticsEnabled, diagnosticsFrozen))
 				{
 					String structure = ChambersRoster.structuralSummary(list,
 						client.getWidget(InterfaceID.RaidsSidepanel.LISTLAYER),
@@ -177,20 +180,27 @@ final class GroupTracker
 					GroupSnapshot snapshot = session.snapshot();
 					diagnostics = new RaidDiagnostics(mode, size, session.partyGroup(),
 						observation.candidateCount, observation.names.size(), snapshot.status.name(),
-						structure);
-					if (!structure.equals(lastStructure))
+						structure + "\nChildren: " + observation.children);
+					String diagnosticShape = structure + "|" + observation.children;
+					if (!diagnosticShape.equals(lastStructure))
 					{
-						log.debug("Chambers roster widget structure: {}", structure);
-						lastStructure = structure;
+						log.debug("Chambers roster widget structure: {}; children: {}",
+							structure, observation.children);
+						lastStructure = diagnosticShape;
 					}
 				}
 				break;
 		}
 		session.observe(names, size, tick);
-		if (diagnosticsEnabled && active == RaidType.COX)
+		if (shouldSampleDiagnostics(diagnosticsEnabled, diagnosticsFrozen) && active == RaidType.COX)
 		{
 			diagnostics = diagnostics.withSnapshotState(session.snapshot().status.name());
 		}
+	}
+
+	static boolean shouldSampleDiagnostics(boolean enabled, boolean frozen)
+	{
+		return enabled && !frozen;
 	}
 
 	private void readNames(int first, int last, List<String> names)
@@ -241,6 +251,7 @@ final class GroupTracker
 		sorted.sort(String::compareTo);
 		if (!session.acceptReward(String.join("|", sorted))) return null;
 		GroupSnapshot snapshot = session.snapshot();
+		diagnosticsFrozen = true;
 		session.clearRoster();
 		current = GroupSnapshot.unavailable("Chambers roster consumed by the reward event.");
 		return snapshot;

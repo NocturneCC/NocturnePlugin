@@ -51,23 +51,67 @@ public class ChambersRosterTest
 	@Test
 	public void liveThreePlayerRowsSelectNamesAndRejectSixNumericStats()
 	{
-		List<Node> fields = List.of(
-			node(null), node("Bifuor"), node("117"), node("123"), node(null), node(null), node(null),
-			node(null), node("De Lena"), node("1409"), node("1932"), node(null), node(null), node(null),
-			node(null), node("Not ZB"), node("2044"), node("86"), node(null), node(null), node(null));
+		List<ChambersRoster.Field> fields = List.of(
+			field(0, "Bifuor", 10, 0), field(1, "117", 90, 0), field(2, "123", 130, 0),
+			field(3, "De Lena", 10, 20), field(4, "1409", 90, 20), field(5, "1932", 130, 20),
+			field(6, "Not ZB", 10, 40), field(7, "2044", 90, 40), field(8, "86", 130, 40));
 
-		assertEquals(List.of("Bifuor", "De Lena", "Not ZB"), ChambersRoster.extractRows(fields, 3));
+		assertEquals(List.of("Bifuor", "De Lena", "Not ZB"),
+			ChambersRoster.extractRowsByGeometry(fields, 3));
 		assertNull(ChambersRoster.characterName("117"));
 		assertNull(ChambersRoster.characterName("2044"));
 	}
 
 	@Test
-	public void rowParsingRefusesAmbiguityAndDoesNotTruncateToPartySize()
+	public void columnMajorAndInterleavedArraysUseGeometryNotArrayOrder()
 	{
-		List<Node> ambiguous = List.of(node("Bifuor"), node("Other Name"), node("117"),
-			node("De Lena"), node("1409"), node("1932"));
-		assertTrue(ChambersRoster.extractRows(ambiguous, 2).isEmpty());
-		assertTrue(ChambersRoster.extractRows(List.of(node("Bifuor"), node("117")), 3).isEmpty());
+		List<ChambersRoster.Field> columnMajor = List.of(
+			field(0, "Bifuor", 10, 0), field(1, "De Lena", 10, 20), field(2, "Not ZB", 10, 40),
+			field(3, "117", 90, 0), field(4, "1409", 90, 20), field(5, "2044", 90, 40),
+			field(6, "123", 130, 0), field(7, "1932", 130, 20), field(8, "86", 130, 40));
+		List<ChambersRoster.Field> interleaved = List.of(columnMajor.get(5), columnMajor.get(0),
+			columnMajor.get(7), columnMajor.get(2), columnMajor.get(3), columnMajor.get(8),
+			columnMajor.get(1), columnMajor.get(6), columnMajor.get(4));
+		List<String> expected = List.of("Bifuor", "De Lena", "Not ZB");
+		assertEquals(expected, ChambersRoster.extractRowsByGeometry(columnMajor, 3));
+		assertEquals(expected, ChambersRoster.extractRowsByGeometry(interleaved, 3));
+	}
+
+	@Test
+	public void hiddenAndMalformedGeometryFailClosedWithoutTruncation()
+	{
+		List<ChambersRoster.Field> hidden = List.of(field(0, "Bifuor", 10, 0),
+			field(1, "De Lena", 10, 20, true), field(2, "Not ZB", 10, 40));
+		List<ChambersRoster.Field> ambiguous = List.of(field(0, "Bifuor", 10, 0),
+			field(1, "Other Name", 50, 0), field(2, "De Lena", 10, 20));
+		List<ChambersRoster.Field> malformed = List.of(field(0, "Bifuor", 10, 0),
+			field(1, "De Lena", 10, 0), field(2, "Not ZB", 10, 40));
+		assertTrue(ChambersRoster.extractRowsByGeometry(hidden, 3).isEmpty());
+		assertTrue(ChambersRoster.extractRowsByGeometry(ambiguous, 2).isEmpty());
+		assertTrue(ChambersRoster.extractRowsByGeometry(malformed, 3).isEmpty());
+	}
+
+	@Test
+	public void childDiagnosticsContainGeometryAndClassificationButNeverText()
+	{
+		ChambersRoster.Field alpha = field(4, "De Lena", 12, 34);
+		ChambersRoster.Field numeric = field(5, "1,409", 70, 34);
+		assertEquals("alphabetic", alpha.classification());
+		assertEquals("numeric", numeric.classification());
+		assertTrue(alpha.diagnostic().contains("index=4,id=1004,x=12,y=34,w=50,h=15"));
+		assertFalse(alpha.diagnostic().contains("De Lena"));
+		assertEquals("mixed", field(6, "Player2", 0, 0).classification());
+		assertEquals("empty", field(7, "", 0, 0).classification());
+	}
+
+	private static ChambersRoster.Field field(int index, String text, int x, int y)
+	{
+		return field(index, text, x, y, false);
+	}
+
+	private static ChambersRoster.Field field(int index, String text, int x, int y, boolean hidden)
+	{
+		return new ChambersRoster.Field(index, 1000 + index, x, y, 50, 15, hidden, text);
 	}
 
 	private static Node node(String text, Node... children)

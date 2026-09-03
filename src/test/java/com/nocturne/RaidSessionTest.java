@@ -163,6 +163,14 @@ public class RaidSessionTest
 	}
 
 	@Test
+	public void rewardDiagnosticsStayFrozenUntilTheNextRaid()
+	{
+		assertTrue(GroupTracker.shouldSampleDiagnostics(true, false));
+		assertFalse(GroupTracker.shouldSampleDiagnostics(true, true));
+		assertFalse(GroupTracker.shouldSampleDiagnostics(false, false));
+	}
+
+	@Test
 	public void chambersSnapshotsUnionMembersAndSurviveWidgetDisappearance()
 	{
 		RaidSession session = chambers(true, 1, 44);

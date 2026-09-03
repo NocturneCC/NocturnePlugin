@@ -3,6 +3,7 @@ package com.nocturne;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import net.runelite.api.widgets.Widget;
@@ -20,45 +21,71 @@ final class ChambersRoster
 
 	static Observation inspect(Widget root, int expectedSize)
 	{
-		if (root == null) return new Observation(List.of(), 0, "missing");
-		CandidateCounter counter = new CandidateCounter();
-		WidgetNode node = new WidgetNode(root, counter);
-		List<WidgetNode> fields = node.children();
-		boolean rowStructureAvailable = expectedSize > 0 && fields.size() >= expectedSize
-			&& fields.size() % expectedSize == 0;
-		List<String> names = extractRows(fields, expectedSize);
-		if (!rowStructureAvailable)
-		{
-			counter.count = 0;
-			names = extract(node);
-		}
-		return new Observation(names, counter.count, structure(root));
+		if (root == null) return new Observation(List.of(), 0, "missing", "none");
+		List<Field> fields = fields(root.getDynamicChildren());
+		List<String> names = expectedSize > 0 ? extractRowsByGeometry(fields, expectedSize)
+			: extract(new WidgetNode(root));
+		int candidates = 0;
+		for (Field field : fields) if (!"empty".equals(field.classification())) candidates++;
+		return new Observation(names, candidates, structure(root), childDiagnostics(fields));
 	}
 
-	static List<String> extractRows(List<? extends Node> fields, int expectedSize)
+	static List<String> extractRowsByGeometry(List<Field> fields, int expectedSize)
 	{
-		if (expectedSize <= 0 || fields == null || fields.size() < expectedSize
-			|| fields.size() % expectedSize != 0) return List.of();
-		int fieldsPerRow = fields.size() / expectedSize;
+		if (expectedSize <= 0 || fields == null) return List.of();
+		List<Field> visible = new ArrayList<>();
+		for (Field field : fields) if (!field.hidden) visible.add(field);
+		visible.sort(Comparator.comparingInt((Field field) -> field.y).thenComparingInt(field -> field.x));
+		List<Row> rows = new ArrayList<>();
+		for (Field field : visible)
+		{
+			Row match = null;
+			for (Row row : rows)
+			{
+				if (row.overlaps(field))
+				{
+					if (match != null) return List.of();
+					match = row;
+				}
+			}
+			if (match == null) rows.add(new Row(field)); else match.add(field);
+		}
+		if (rows.size() != expectedSize) return List.of();
 		List<String> names = new ArrayList<>();
-		boolean unambiguous = true;
-		for (int row = 0; row < expectedSize; row++)
+		for (Row row : rows)
 		{
 			List<String> rowNames = new ArrayList<>();
-			for (int field = 0; field < fieldsPerRow; field++)
+			for (Field field : row.fields)
 			{
-				rowNames.addAll(extract(fields.get(row * fieldsPerRow + field)));
+				String name = characterName(field.text);
+				if (name != null) rowNames.add(name);
 			}
 			rowNames = GroupSnapshot.uniqueNames(rowNames);
-			// Live Chambers rows have one display-name field plus numeric stat fields.
-			// Refuse ambiguous rows instead of selecting by candidate order or truncating.
-			if (rowNames.size() != 1)
-			{
-				unambiguous = false;
-			}
-			else names.add(rowNames.get(0));
+			if (rowNames.size() != 1) return List.of();
+			names.add(rowNames.get(0));
 		}
-		return unambiguous ? GroupSnapshot.uniqueNames(names) : List.of();
+		return GroupSnapshot.uniqueNames(names);
+	}
+
+	private static List<Field> fields(Widget[] children)
+	{
+		List<Field> fields = new ArrayList<>();
+		if (children == null) return fields;
+		for (int index = 0; index < children.length; index++)
+		{
+			Widget child = children[index];
+			if (child != null) fields.add(new Field(index, child.getId(), child.getRelativeX(),
+				child.getRelativeY(), child.getWidth(), child.getHeight(),
+				child.isHidden() || child.isSelfHidden(), child.getText()));
+		}
+		return fields;
+	}
+
+	private static String childDiagnostics(List<Field> fields)
+	{
+		List<String> values = new ArrayList<>();
+		for (Field field : fields) values.add(field.diagnostic());
+		return String.join("; ", values);
 	}
 
 	static String structuralSummary(Widget list, Widget layer, Widget universe)
@@ -116,12 +143,69 @@ final class ChambersRoster
 		final List<String> names;
 		final int candidateCount;
 		final String structure;
+		final String children;
 
-		private Observation(List<String> names, int candidateCount, String structure)
+		private Observation(List<String> names, int candidateCount, String structure, String children)
 		{
 			this.names = names;
 			this.candidateCount = candidateCount;
 			this.structure = structure;
+			this.children = children;
+		}
+	}
+
+	static final class Field
+	{
+		final int index, id, x, y, width, height;
+		final boolean hidden;
+		final String text;
+
+		Field(int index, int id, int x, int y, int width, int height, boolean hidden, String text)
+		{
+			this.index = index; this.id = id; this.x = x; this.y = y;
+			this.width = width; this.height = height; this.hidden = hidden; this.text = text;
+		}
+
+		String classification()
+		{
+			String value = text == null ? "" : Text.removeTags(text).trim();
+			if (value.isEmpty()) return "empty";
+			if (value.matches("[0-9,]+")) return "numeric";
+			if (value.matches("[A-Za-z _-]+")) return "alphabetic";
+			return "mixed";
+		}
+
+		String diagnostic()
+		{
+			return "index=" + index + ",id=" + id + ",x=" + x + ",y=" + y + ",w=" + width
+				+ ",h=" + height + ",hidden=" + hidden + ",text=" + classification();
+		}
+	}
+
+	private static final class Row
+	{
+		private final List<Field> fields = new ArrayList<>();
+		private int commonTop;
+		private int commonBottom;
+
+		private Row(Field field)
+		{
+			commonTop = field.y;
+			commonBottom = field.y + Math.max(1, field.height);
+			fields.add(field);
+		}
+
+		private boolean overlaps(Field field)
+		{
+			int bottom = field.y + Math.max(1, field.height);
+			return field.y < commonBottom && bottom > commonTop;
+		}
+
+		private void add(Field field)
+		{
+			commonTop = Math.max(commonTop, field.y);
+			commonBottom = Math.min(commonBottom, field.y + Math.max(1, field.height));
+			fields.add(field);
 		}
 	}
 
@@ -163,30 +247,18 @@ final class ChambersRoster
 		return count;
 	}
 
-	private static final class CandidateCounter { private int count; }
-
 	private static final class WidgetNode implements Node
 	{
 		private final Widget widget;
-		private final CandidateCounter counter;
-		private WidgetNode(Widget widget, CandidateCounter counter)
-		{
-			this.widget = widget;
-			this.counter = counter;
-		}
-		@Override public String text()
-		{
-			String text = widget.getText();
-			if (text != null && !text.isEmpty()) counter.count++;
-			return text;
-		}
+		private WidgetNode(Widget widget) { this.widget = widget; }
+		@Override public String text() { return widget.getText(); }
 		@Override public boolean visible() { return !widget.isHidden() && !widget.isSelfHidden(); }
 		@Override public List<WidgetNode> children()
 		{
 			Widget[] children = widget.getChildren();
 			if (children == null || children.length == 0) return List.of();
 			List<WidgetNode> result = new ArrayList<>();
-			for (Widget child : children) if (child != null) result.add(new WidgetNode(child, counter));
+			for (Widget child : children) if (child != null) result.add(new WidgetNode(child));
 			return result;
 		}
 	}
