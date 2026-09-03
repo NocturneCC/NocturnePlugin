@@ -44,8 +44,30 @@ public class ChambersRosterTest
 	@Test
 	public void missingCurrentListIsExplicitRatherThanBorrowingAnotherPlayerSource()
 	{
-		assertEquals("missing", ChambersRoster.inspect(null).structure);
+		assertEquals("missing", ChambersRoster.inspect(null, 3).structure);
 		assertTrue(ChambersRoster.extract((net.runelite.api.widgets.Widget) null).isEmpty());
+	}
+
+	@Test
+	public void liveThreePlayerRowsSelectNamesAndRejectSixNumericStats()
+	{
+		List<Node> fields = List.of(
+			node(null), node("Bifuor"), node("117"), node("123"), node(null), node(null), node(null),
+			node(null), node("De Lena"), node("1409"), node("1932"), node(null), node(null), node(null),
+			node(null), node("Not ZB"), node("2044"), node("86"), node(null), node(null), node(null));
+
+		assertEquals(List.of("Bifuor", "De Lena", "Not ZB"), ChambersRoster.extractRows(fields, 3));
+		assertNull(ChambersRoster.characterName("117"));
+		assertNull(ChambersRoster.characterName("2044"));
+	}
+
+	@Test
+	public void rowParsingRefusesAmbiguityAndDoesNotTruncateToPartySize()
+	{
+		List<Node> ambiguous = List.of(node("Bifuor"), node("Other Name"), node("117"),
+			node("De Lena"), node("1409"), node("1932"));
+		assertTrue(ChambersRoster.extractRows(ambiguous, 2).isEmpty());
+		assertTrue(ChambersRoster.extractRows(List.of(node("Bifuor"), node("117")), 3).isEmpty());
 	}
 
 	private static Node node(String text, Node... children)

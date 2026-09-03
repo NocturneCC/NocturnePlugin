@@ -135,6 +135,34 @@ public class RaidSessionTest
 	}
 
 	@Test
+	public void outsideEntrySurvivesPartyAssemblyHolderChangesInNormalAndChallengeMode()
+	{
+		assertEquals(RaidType.COX, RaidType.fromSource("Chambers of Xeric"));
+		assertEquals(RaidType.COX, RaidType.fromSource("Chambers of Xeric Challenge Mode"));
+		for (String ignored : List.of("normal", "challenge"))
+		{
+			RaidSession session = chambers(true, 11, -1);
+			session.observe(List.of("De Lena"), 1, 1);
+			session.updatePartyGroup(41);
+			session.updatePartyGroup(42);
+			session.observe(List.of("Bifuor", "De Lena", "Not ZB"), 3, 2);
+			assertEquals(42, session.partyGroup());
+			assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
+			assertFalse(GroupTracker.startsNewRaidSession(RaidType.COX, RaidType.COX));
+		}
+	}
+
+	@Test
+	public void lateEnableReconnectAndDifferentRaidStillStartIncompleteOrFresh()
+	{
+		RaidSession late = chambers(false, 11, 42);
+		late.observe(List.of("Bifuor", "De Lena", "Not ZB"), 3, 1);
+		assertEquals(GroupSnapshot.Status.INCOMPLETE, late.snapshot().status);
+		assertTrue(GroupTracker.startsNewRaidSession(null, RaidType.COX));
+		assertTrue(GroupTracker.startsNewRaidSession(RaidType.TOA, RaidType.COX));
+	}
+
+	@Test
 	public void chambersSnapshotsUnionMembersAndSurviveWidgetDisappearance()
 	{
 		RaidSession session = chambers(true, 1, 44);

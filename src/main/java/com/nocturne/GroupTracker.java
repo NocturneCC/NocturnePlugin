@@ -101,9 +101,7 @@ final class GroupTracker
 		}
 		int partyGroup = raid == RaidType.COX
 			? client.getVarpValue(VarPlayerID.RAIDS_PARTY_GROUPHOLDER) : -1;
-		boolean chambersPartyChanged = raid == RaidType.COX && active == RaidType.COX
-			&& session != null && partyGroup >= 0 && partyGroup != session.partyGroup;
-		if (raid != active || chambersPartyChanged)
+		if (startsNewRaidSession(active, raid))
 		{
 			boolean spectator = raid == RaidType.TOB && client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 3;
 			session = new RaidSession(raid, name, outsideObserved && !spectator, tick,
@@ -112,12 +110,23 @@ final class GroupTracker
 			outsideObserved = false;
 			scanTicks = 5;
 		}
+		else if (raid == RaidType.COX && session != null)
+		{
+			// The holder can change while a scouted party is assembled. It is a
+			// session signal, not proof that the client missed entry into a new raid.
+			session.updatePartyGroup(partyGroup);
+		}
 		if (++scanTicks >= 5)
 		{
 			scanTicks = 0;
 			capture();
 		}
 		current = session.snapshot();
+	}
+
+	static boolean startsNewRaidSession(RaidType activeRaid, RaidType detectedRaid)
+	{
+		return activeRaid != detectedRaid;
 	}
 
 	GroupSnapshot current()
@@ -155,9 +164,9 @@ final class GroupTracker
 				break;
 			case COX:
 				Widget list = client.getWidget(InterfaceID.RaidsSidepanel.LIST);
-				ChambersRoster.Observation observation = ChambersRoster.inspect(list);
-				names.addAll(observation.names);
 				size = client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE);
+				ChambersRoster.Observation observation = ChambersRoster.inspect(list, size);
+				names.addAll(observation.names);
 				if (diagnosticsEnabled)
 				{
 					String structure = ChambersRoster.structuralSummary(list,
@@ -166,7 +175,7 @@ final class GroupTracker
 					String mode = client.getVarbitValue(VarbitID.RAIDS_CHALLENGE_MODE) == 1
 						? "Chambers of Xeric: Challenge Mode" : "Chambers of Xeric: Normal";
 					GroupSnapshot snapshot = session.snapshot();
-					diagnostics = new RaidDiagnostics(mode, size, session.partyGroup,
+					diagnostics = new RaidDiagnostics(mode, size, session.partyGroup(),
 						observation.candidateCount, observation.names.size(), snapshot.status.name(),
 						structure);
 					if (!structure.equals(lastStructure))
@@ -269,9 +278,9 @@ final class GroupTracker
 		int currentPartyGroup, long tick)
 	{
 		return candidate != null && candidate.type == RaidType.COX && !candidate.expired(tick)
-			&& candidate.isRun(epoch, candidate.partyGroup)
+			&& candidate.isRun(epoch, candidate.partyGroup())
 			&& (active == RaidType.COX || currentPartyGroup < 0
-				|| currentPartyGroup == candidate.partyGroup);
+				|| currentPartyGroup == candidate.partyGroup());
 	}
 
 	private void syncIdentity()

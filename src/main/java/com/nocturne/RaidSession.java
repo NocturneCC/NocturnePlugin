@@ -12,7 +12,7 @@ final class RaidSession
 	static final long RETENTION_TICKS = 1000; // About ten minutes after the last active tick.
 	final RaidType type;
 	final long runEpoch;
-	final int partyGroup;
+	private int partyGroup;
 	private final String localName;
 	private final boolean entryObserved;
 	private final Set<String> names = new LinkedHashSet<>();
@@ -41,6 +41,16 @@ final class RaidSession
 	boolean isRun(long epoch, int group)
 	{
 		return runEpoch == epoch && (type != RaidType.COX || partyGroup == group);
+	}
+
+	int partyGroup()
+	{
+		return partyGroup;
+	}
+
+	void updatePartyGroup(int group)
+	{
+		if (!completed && group >= 0) partyGroup = group;
 	}
 
 	void observe(Collection<String> observedNames, int reportedSize, long tick)

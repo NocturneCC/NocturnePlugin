@@ -15,15 +15,50 @@ final class ChambersRoster
 
 	static List<String> extract(Widget root)
 	{
-		return inspect(root).names;
+		return inspect(root, 0).names;
 	}
 
-	static Observation inspect(Widget root)
+	static Observation inspect(Widget root, int expectedSize)
 	{
 		if (root == null) return new Observation(List.of(), 0, "missing");
 		CandidateCounter counter = new CandidateCounter();
-		List<String> names = extract(new WidgetNode(root, counter));
+		WidgetNode node = new WidgetNode(root, counter);
+		List<WidgetNode> fields = node.children();
+		boolean rowStructureAvailable = expectedSize > 0 && fields.size() >= expectedSize
+			&& fields.size() % expectedSize == 0;
+		List<String> names = extractRows(fields, expectedSize);
+		if (!rowStructureAvailable)
+		{
+			counter.count = 0;
+			names = extract(node);
+		}
 		return new Observation(names, counter.count, structure(root));
+	}
+
+	static List<String> extractRows(List<? extends Node> fields, int expectedSize)
+	{
+		if (expectedSize <= 0 || fields == null || fields.size() < expectedSize
+			|| fields.size() % expectedSize != 0) return List.of();
+		int fieldsPerRow = fields.size() / expectedSize;
+		List<String> names = new ArrayList<>();
+		boolean unambiguous = true;
+		for (int row = 0; row < expectedSize; row++)
+		{
+			List<String> rowNames = new ArrayList<>();
+			for (int field = 0; field < fieldsPerRow; field++)
+			{
+				rowNames.addAll(extract(fields.get(row * fieldsPerRow + field)));
+			}
+			rowNames = GroupSnapshot.uniqueNames(rowNames);
+			// Live Chambers rows have one display-name field plus numeric stat fields.
+			// Refuse ambiguous rows instead of selecting by candidate order or truncating.
+			if (rowNames.size() != 1)
+			{
+				unambiguous = false;
+			}
+			else names.add(rowNames.get(0));
+		}
+		return unambiguous ? GroupSnapshot.uniqueNames(names) : List.of();
 	}
 
 	static String structuralSummary(Widget list, Widget layer, Widget universe)
@@ -62,8 +97,10 @@ final class ChambersRoster
 	{
 		if (raw == null) return null;
 		String name = Text.toJagexName(Text.removeTags(raw)).trim();
+		// RuneScape display names used here must contain a letter. This deliberately
+		// rejects all-numeric raid statistics exposed beside the name in each row.
 		if (name.length() < 1 || name.length() > 12 || !name.matches("[A-Za-z0-9 _-]+")
-			|| !name.matches(".*[A-Za-z0-9].*")) return null;
+			|| !name.matches(".*[A-Za-z].*")) return null;
 		return name;
 	}
 
