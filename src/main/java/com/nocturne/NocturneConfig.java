@@ -18,7 +18,7 @@ public interface NocturneConfig extends Config
 	)
 	default boolean trackNpcLoot()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(

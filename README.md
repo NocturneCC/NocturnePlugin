@@ -42,7 +42,9 @@ presence check-ins to `https://nocturne.events/api/plugin/dev/raid-presence`.
 These include your RSN, world, raid timing/group signals and your own final raid
 points; they never include another player's name. The server also receives your IP
 address as part of the connection. No group names, credentials, membership data
-or points are sent. **Attach drop screenshots** is a separate opt-in setting for
+or points are sent. Loot tracking and presence start automatically when Nocturne
+is enabled; disable **Track loot** to stop both local tracking and presence network
+requests. **Attach drop screenshots** is a separate opt-in setting for
 likely point-eligible loot. It sends one compressed RuneLite-canvas JPEG; chat is
 excluded by default unless **Include chat in screenshots** is separately enabled.
 The cropped game view can still contain visible players, overhead names and

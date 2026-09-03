@@ -40,7 +40,7 @@ import net.runelite.client.ui.NavigationButton;
 @Slf4j
 @PluginDescriptor(
 	name = "Nocturne",
-	description = "View loot and locally captured raid groups",
+	description = "Tracks loot locally and automatically sends your RSN and self-only CoX presence facts to nocturne.events; disable Track loot to stop network tracking",
 	tags = {"nocturne", "clan", "loot"}
 )
 public class NocturnePlugin extends Plugin
