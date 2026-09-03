@@ -47,5 +47,25 @@ class RaidPresenceRouteSupportTest(unittest.TestCase):
                 self.assertTrue((Path(result["backup"]) / "MANIFEST.json").is_file())
                 self.assertEqual("already_applied", install(target, source, backups)["state"])
 
+    def test_post_activation_validation_failure_restores_verified_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); target = root / "nocturne"
+            source = root / "source"; source.mkdir(); backups = root / "backups"
+            target.write_text(self.active)
+            (source / "nginx-location.conf").write_text(self.drop)
+            (source / "nginx-raid-presence-location.conf").write_text(self.presence)
+            metadata = {"uid": 0, "gid": 0, "mode": 0o640,
+                        "acl": "user::rw-\ngroup::r--\nother::---\n"}
+            with patch("raid_presence_route_support._capture_safe_metadata", return_value=metadata), \
+                 patch("raid_presence_route_support._apply_metadata"), \
+                 patch("raid_presence_route_support._verify_metadata"):
+                with self.assertRaises(RuntimeError):
+                    install(target, source, backups, True,
+                            lambda: (_ for _ in ()).throw(RuntimeError("nginx check failed")))
+            self.assertEqual(self.active, target.read_text())
+            backup_dirs = list(backups.iterdir())
+            self.assertEqual(1, len(backup_dirs))
+            self.assertEqual(self.active, (backup_dirs[0] / "nocturne.before").read_text())
+
 
 if __name__ == "__main__": unittest.main()

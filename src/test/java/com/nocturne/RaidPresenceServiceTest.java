@@ -73,6 +73,26 @@ public class RaidPresenceServiceTest
 		finally { service.close(); close(http); }
 	}
 
+	@Test public void oldIntakeNotFoundIsOnlyPresenceUnavailable() throws Exception
+	{
+		OkHttpClient http = new OkHttpClient.Builder().addInterceptor(chain ->
+			new Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+				.code(404).message("Not Found").body(ResponseBody.create(
+					MediaType.parse("application/json"), "{\"status\":\"not_accepted\"}")).build()).build();
+		RaidPresenceService service = new RaidPresenceService(http, new Gson());
+		CompletableFuture<RaidVerificationStatus> result = new CompletableFuture<>();
+		try
+		{
+			service.submit(report("completion", 1_000), result::complete);
+			assertSame(RaidVerificationStatus.UNAVAILABLE, result.get(3, TimeUnit.SECONDS));
+			// Presence uses its own service and endpoint; loot payload construction remains intact.
+			LootRecord loot = new LootRecord("De Lena", "Chambers of Xeric", java.util.List.of(
+				new LootItem(526, 1, "Bones", 31)));
+			assertEquals(4, SubmissionService.payload(loot).get("version").getAsInt());
+		}
+		finally { service.close(); close(http); }
+	}
+
 	@Test public void responseCanNeverEnableAwards()
 	{
 		JsonObject valid = new JsonObject();
