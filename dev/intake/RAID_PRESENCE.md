@@ -28,3 +28,10 @@ directory. It stores one current row per normalized self-reporting RSN/session
 and idempotency receipts, not heartbeat history. Expired sessions and their
 dependent rows are removed during later check-ins. No screenshot or loot item is
 stored in this file.
+
+The existing public Nginx configuration uses an exact-match loot route, so the
+presence endpoint needs its own exact-match route. `raid_presence_route_support.py`
+is dry-run by default, refuses a changed/partial route, preserves exact file
+metadata and ACLs, creates a verified backup, validates Nginx syntax after an
+explicit `--apply`, and restores the file on failure. It never reloads Nginx or
+controls any service.
