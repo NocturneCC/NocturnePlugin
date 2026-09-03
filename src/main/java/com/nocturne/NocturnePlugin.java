@@ -40,7 +40,7 @@ import net.runelite.client.ui.NavigationButton;
 @Slf4j
 @PluginDescriptor(
 	name = "Nocturne",
-	description = "Tracks loot locally and automatically sends your RSN and self-only CoX presence facts to nocturne.events; disable Track loot to stop network tracking",
+	description = "Tracks loot locally and automatically sends your RSN and self-only CoX presence facts to nocturne.events; disable Nocturne to stop network tracking",
 	tags = {"nocturne", "clan", "loot"}
 )
 public class NocturnePlugin extends Plugin
@@ -117,7 +117,7 @@ public class NocturnePlugin extends Plugin
 				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true, historyGeneration); }
 				@Override public void clear(String rsn) { clearHistory(rsn); }
 			});
-			panel.setTracking(config.trackNpcLoot());
+			panel.setTracking(true);
 			panel.setDiagnostics(config.showDiagnostics());
 			panel.setSubmissionEnabled(config.submitTestDrops());
 			navigation = NavigationButton.builder()
@@ -169,7 +169,7 @@ public class NocturnePlugin extends Plugin
 	{
 		updatePlayer();
 		GroupTracker tracker = groups;
-		if (tracker != null && config.trackNpcLoot())
+		if (tracker != null)
 		{
 			tracker.onTick();
 			RaidPresenceService presence = raidPresence;
@@ -220,10 +220,8 @@ public class NocturnePlugin extends Plugin
 			if (!config.submitTestDrops() && submissions != null) submissions.cancelPending();
 			GroupTracker diagnosticsTracker = groups;
 			if (diagnosticsTracker != null) diagnosticsTracker.setDiagnosticsEnabled(config.showDiagnostics());
-			boolean enabled = config.trackNpcLoot();
 			withPanel(view ->
 			{
-				view.setTracking(enabled);
 				view.setDiagnostics(config.showDiagnostics());
 				view.setSubmissionEnabled(config.submitTestDrops());
 			});
@@ -241,7 +239,7 @@ public class NocturnePlugin extends Plugin
 	public void onPlayerSpawned(PlayerSpawned event)
 	{
 		GroupTracker tracker = groups;
-		if (tracker != null && config.trackNpcLoot()) tracker.onPlayerObserved(event.getPlayer());
+		if (tracker != null) tracker.onPlayerObserved(event.getPlayer());
 	}
 
 	@Subscribe
@@ -285,7 +283,7 @@ public class NocturnePlugin extends Plugin
 	public void onChatMessage(ChatMessage event)
 	{
 		GroupTracker tracker = groups;
-		if (tracker != null && config.trackNpcLoot()
+		if (tracker != null
 			&& (event.getType() == ChatMessageType.GAMEMESSAGE || event.getType() == ChatMessageType.FRIENDSCHATNOTIFICATION))
 		{
 			if (tracker.onGameMessage(event.getMessage()))
@@ -298,7 +296,7 @@ public class NocturnePlugin extends Plugin
 
 	private void recordLoot(String source, Collection<ItemStack> stacks, LootOrigin origin)
 	{
-		if (!config.trackNpcLoot() || client.getGameState() != GameState.LOGGED_IN)
+		if (client.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
 		}
