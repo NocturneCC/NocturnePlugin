@@ -67,6 +67,7 @@ final class GroupTracker
 	{
 		diagnosticsEnabled = enabled;
 		if (!enabled) diagnostics = RaidDiagnostics.INACTIVE;
+		else if (session != null) diagnostics = RaidDiagnostics.awaiting(session.type);
 	}
 
 	void onTick()
@@ -117,6 +118,8 @@ final class GroupTracker
 			outsideObserved = false;
 			scanTicks = 5;
 			diagnosticsFrozen = false;
+			lastStructure = null;
+			diagnostics = diagnosticsEnabled ? RaidDiagnostics.awaiting(raid) : RaidDiagnostics.INACTIVE;
 			if (raid == RaidType.COX) instanceObserved.begin(session.runEpoch, visibleRaidPlayers(), tick);
 		}
 		else if (raid == RaidType.COX && session != null)
@@ -250,6 +253,11 @@ final class GroupTracker
 		if (shouldSampleDiagnostics(diagnosticsEnabled, diagnosticsFrozen) && active == RaidType.COX)
 		{
 			diagnostics = diagnostics.withSnapshotState(session.snapshot().status.name());
+		}
+		else if (shouldSampleDiagnostics(diagnosticsEnabled, diagnosticsFrozen))
+		{
+			diagnostics = RaidDiagnostics.partySlots(active, size, names.size(),
+				session.snapshot().status.name());
 		}
 	}
 

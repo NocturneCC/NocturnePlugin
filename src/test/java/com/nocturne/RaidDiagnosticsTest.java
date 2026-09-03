@@ -31,6 +31,31 @@ public class RaidDiagnosticsTest
 		assertEquals("MATCHED", after.snapshotState);
 	}
 
+	@Test
+	public void raidSessionChangeReplacesStaleChambersDiagnostics()
+	{
+		RaidDiagnostics chambers = diagnostic("Chambers of Xeric: Normal");
+		RaidDiagnostics tombs = RaidDiagnostics.awaiting(RaidType.TOA);
+		assertTrue(chambers.displayText().contains("Chambers of Xeric"));
+		assertTrue(tombs.displayText().contains("Tombs of Amascut"));
+		assertFalse(tombs.displayText().contains("Chambers of Xeric"));
+		assertTrue(tombs.displayText().contains("AWAITING_SNAPSHOT"));
+	}
+
+	@Test
+	public void tombsDiagnosticsDescribeOnlyCurrentPartySlotSnapshot()
+	{
+		RaidDiagnostics tombs = RaidDiagnostics.partySlots(RaidType.TOA, 3, 3, "MATCHED");
+		String text = tombs.displayText();
+		assertTrue(text.contains("Tombs of Amascut"));
+		assertTrue(text.contains("Expected party size: 3"));
+		assertTrue(text.contains("Roster candidates / accepted names: 3 / 3"));
+		assertTrue(text.contains("RuneLite party-name slots"));
+		assertFalse(text.contains("Bifuor"));
+		assertFalse(text.contains("De Lena"));
+		assertFalse(text.contains("Smooth"));
+	}
+
 	private static RaidDiagnostics diagnostic(String type)
 	{
 		return new RaidDiagnostics(type, 4, 81, 7, 0, "INCOMPLETE",

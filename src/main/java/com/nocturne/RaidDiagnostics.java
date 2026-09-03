@@ -26,6 +26,21 @@ final class RaidDiagnostics
 		this.widgetStructure = widgetStructure;
 	}
 
+	static RaidDiagnostics awaiting(RaidType raid)
+	{
+		return new RaidDiagnostics(raid.title, 0, raid == RaidType.COX ? 0 : -1,
+			0, 0, "AWAITING_SNAPSHOT", raid == RaidType.COX
+				? "Raiding-party sidebar not sampled yet"
+				: "RuneLite party-name slots not sampled yet");
+	}
+
+	static RaidDiagnostics partySlots(RaidType raid, int expectedSize, int acceptedNames,
+		String snapshotState)
+	{
+		return new RaidDiagnostics(raid.title, expectedSize, -1, acceptedNames, acceptedNames,
+			snapshotState, "RuneLite party-name slots; no roster widget traversal");
+	}
+
 	String displayText()
 	{
 		return "Raid diagnostics (local only)\nDetected: " + raidType
