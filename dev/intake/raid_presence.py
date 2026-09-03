@@ -102,7 +102,7 @@ def process(db_path, data, identity_resolver, now=None):
     now = int(datetime.now(timezone.utc).timestamp()) if now is None else int(now)
     rsn, fingerprint, canonical = validate(data, now)
     member_key = identity_resolver(rsn)
-    if member_key is None:
+    if type(member_key) is not int or member_key <= 0:
         raise PermissionError("identity not uniquely eligible")
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     with sqlite3.connect(db_path) as db:
@@ -150,7 +150,7 @@ def process(db_path, data, identity_resolver, now=None):
 
 
 def _result(db, fingerprint, duplicate):
-    rows = db.execute("SELECT rsn,state,final_party_size,final_team_points,contribution_bp,scoring_mode,completion_at "
+    rows = db.execute("SELECT rsn,state,final_party_size,final_team_points,contribution_bp,scoring_mode,completion_at,member_key "
                       "FROM raid_presence_checkins WHERE fingerprint=?", (fingerprint,)).fetchall()
     completed = [row for row in rows if row[1] in {"completion", "reward_observed"}]
     sizes = {row[2] for row in completed}
@@ -162,6 +162,9 @@ def _result(db, fingerprint, duplicate):
     complete = consistent and len(completed) == expected and len({row[0] for row in completed}) == expected
     mode = completed[0][5] if consistent else "INVALID"
     contributions = all(row[4] is not None and row[4] >= 500 for row in completed)
+    eligible_accounts = [row for row in completed if row[4] is not None and
+                         (row[4] >= 500 if mode == "NORMAL_GROUP" else row[4] > 0)]
+    distinct_eligible_members = len({row[7] for row in eligible_accounts})
     same_mode = len({row[5] for row in completed}) == 1
     qualifies = complete and same_mode and mode == "NORMAL_GROUP" and contributions
     if not consistent:
@@ -178,6 +181,10 @@ def _result(db, fingerprint, duplicate):
         reason = "all Nocturne clients verified"
     return {"status": "duplicate" if duplicate else "stored", "presence_version": VERSION,
             "fingerprint": fingerprint, "verified": len(completed), "expected": expected,
+            "participant_account_count": expected,
+            "verified_account_count": len({row[0] for row in completed}),
+            "distinct_eligible_member_count": distinct_eligible_members,
+            "proposed_recipient_count": distinct_eligible_members,
             "consistent": consistent, "group_qualified": qualifies,
             "personal_only": mode in {"SOLO_PERSONAL_ONLY", "MASS_PERSONAL_ONLY"},
             "reason": reason, "automatic_awards_enabled": False, "point_writes": 0}

@@ -12,6 +12,13 @@ final party size. The server recomputes consistency and requires at least 500
 basis points for every credited self-reporter in a normal group. Solo and raids
 whose maximum authoritative scale exceeds 20 remain personal-only.
 
+Participant identity is account-scoped: unique normalized RSNs are compared to
+the game's final party size, even when two linked accounts resolve to the same
+clan member. Each check-in retains its resolved member ID. Recipient accounting
+is separately member-scoped and deduplicates eligible accounts by member ID.
+Responses expose participant account count, verified account count, and distinct
+eligible member count, but never create shares or write points in this phase.
+
 The matching key uses raid type, world, party-group holder, and a bounded local
 raid-start bucket. The holder is not assumed to be cross-client authoritative;
 that assumption must be tested with multiple real clients. Final party size,

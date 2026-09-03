@@ -26,6 +26,9 @@ class RaidPresenceTest(unittest.TestCase):
     def test_three_clients_complete_consistently_and_exact_five_percent_passes(self):
         results=[self.send(self.payload(rsn,personal=500)) for rsn in ("One","Two","Three")]
         self.assertTrue(results[-1]["group_qualified"]); self.assertEqual(3,results[-1]["verified"])
+        self.assertEqual((3, 3, 1), (results[-1]["participant_account_count"],
+            results[-1]["verified_account_count"], results[-1]["distinct_eligible_member_count"]))
+        self.assertEqual(1, results[-1]["proposed_recipient_count"])
     def test_missing_client_and_just_below_do_not_qualify(self):
         self.send(self.payload("One",personal=499)); result=self.send(self.payload("Two"))
         self.assertFalse(result["group_qualified"]); self.assertEqual(2,result["verified"])
@@ -91,6 +94,31 @@ class RaidPresenceTest(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertEqual({"raid_presence_sessions", "raid_presence_checkins",
                           "raid_presence_receipts"}, tables)
+
+    def test_linked_accounts_count_as_participants_but_one_member_recipient(self):
+        self.send(self.payload("One", size=2, personal=500))
+        both = self.send(self.payload("Two", size=2, personal=500))
+        self.assertEqual((2, 2, 1, 1), (both["participant_account_count"],
+            both["verified_account_count"], both["distinct_eligible_member_count"],
+            both["proposed_recipient_count"]))
+        self.assertTrue(both["group_qualified"])
+        with sqlite3.connect(self.db) as db:
+            rows = db.execute("SELECT rsn,member_key FROM raid_presence_checkins ORDER BY rsn").fetchall()
+        self.assertEqual([("one", "2"), ("two", "2")], rows)
+
+    def test_linked_account_contributions_stay_account_specific(self):
+        self.send(self.payload("One", size=2, personal=500))
+        below = self.send(self.payload("Two", size=2, personal=499))
+        self.assertEqual((2, 1), (below["verified_account_count"],
+                                  below["distinct_eligible_member_count"]))
+        self.assertFalse(below["group_qualified"])
+
+    def test_zero_point_scaler_counts_as_account_but_not_eligible_member(self):
+        self.send(self.payload("One", size=2, personal=500))
+        zero = self.send(self.payload("Two", size=2, personal=0))
+        self.assertEqual((2, 2, 1), (zero["participant_account_count"],
+            zero["verified_account_count"], zero["distinct_eligible_member_count"]))
+        self.assertFalse(zero["group_qualified"])
 
     def test_late_heartbeat_cannot_erase_completion_and_expiry_cascades(self):
         epoch = str(uuid4())

@@ -48,6 +48,8 @@ class IntakeTest(unittest.TestCase):
         return body, self.send(raw=raw, PATH_INFO="/api/plugin/dev/raid-presence")
 
     def test_presence_protocol_is_separate_idempotent_and_allowlisted(self):
+        self.app = create_app(self.temp.name, ["Simons Alt"], clock=lambda: self.now,
+                              presence_identity_resolver=lambda _rsn: 2)
         body, (code, receipt) = self.presence()
         self.assertEqual((201, "stored"), (code, receipt["status"]))
         raw = json.dumps(body).encode()

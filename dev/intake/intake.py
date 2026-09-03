@@ -182,7 +182,10 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
                 receipt = socket_handoff(socket_path, request)
                 return receipt.get("member_key") if receipt.get("status") == "presence_identity" else None
         else:
-            presence_identity_resolver = lambda rsn: rsn if rsn in allowed else None
+            # Production must resolve through the isolated writer's read-only
+            # Members.db RPC. No socket means presence fails closed unless a
+            # test or embedding explicitly provides an equivalent resolver.
+            presence_identity_resolver = lambda _rsn: None
 
     @contextmanager
     def connect():
