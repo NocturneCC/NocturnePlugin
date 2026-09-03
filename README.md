@@ -36,7 +36,11 @@ valid records when malformed lines or interrupted temporary files are present.
 
 **Send drops to test intake** is off by default. When enabled, new drops send
 only your RSN, source, item IDs, quantities, RuneLite unit prices, timestamp and a random event UUID to
-`https://nocturne.events/api/plugin/dev/drops`. The server also receives your IP
+`https://nocturne.events/api/plugin/dev/drops`. During Chambers of Xeric and
+Challenge Mode, enabled loot tracking also sends automatic, bounded self-only
+presence check-ins to `https://nocturne.events/api/plugin/dev/raid-presence`.
+These include your RSN, world, raid timing/group signals and your own final raid
+points; they never include another player's name. The server also receives your IP
 address as part of the connection. No group names, credentials, membership data
 or points are sent. **Attach drop screenshots** is a separate opt-in setting for
 likely point-eligible loot. It sends one compressed RuneLite-canvas JPEG; chat is

@@ -78,6 +78,8 @@ public class NocturnePlugin extends Plugin
 	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
+	private volatile RaidPresenceService raidPresence;
+	private volatile RaidVerificationStatus raidVerification = RaidVerificationStatus.INACTIVE;
 	private DerivedValueCatalogue derivedValues;
 	private LootHistoryStore historyStore;
 	private CompletableFuture<Void> historyWork = CompletableFuture.completedFuture(null);
@@ -103,6 +105,7 @@ public class NocturnePlugin extends Plugin
 		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
+		raidPresence = new RaidPresenceService(http, gson);
 		SwingUtilities.invokeLater(() ->
 		{
 			if (lifecycle != token)
@@ -142,6 +145,10 @@ public class NocturnePlugin extends Plugin
 		SubmissionService sender = submissions;
 		submissions = null;
 		if (sender != null) sender.close();
+		RaidPresenceService presence = raidPresence;
+		raidPresence = null;
+		if (presence != null) presence.close();
+		raidVerification = RaidVerificationStatus.INACTIVE;
 		groups = null;
 		activeRsn = null;
 		historyRsn = null;
@@ -162,15 +169,23 @@ public class NocturnePlugin extends Plugin
 	{
 		updatePlayer();
 		GroupTracker tracker = groups;
-		if (tracker != null && config.captureGroups())
+		if (tracker != null && config.trackNpcLoot())
 		{
 			tracker.onTick();
+			RaidPresenceService presence = raidPresence;
+			if (presence != null && tracker.isActiveChambers())
+			{
+				presence.heartbeat(tracker.presenceReport("heartbeat"), this::updateRaidVerification);
+			}
 			GroupSnapshot snapshot = tracker.current();
 			RaidDiagnostics diagnostics = tracker.diagnostics();
+			InstanceObservedEvidence.Snapshot observed = tracker.instanceObserved();
+			RaidVerificationStatus verification = raidVerification;
 			withPanel(view ->
 			{
 				view.setGroup(snapshot);
 				view.setRaidDiagnostics(diagnostics);
+				view.setRaidEvidence(snapshot, observed, verification);
 			});
 		}
 	}
@@ -182,6 +197,7 @@ public class NocturnePlugin extends Plugin
 		{
 			activeRsn = null;
 			if (groups != null) groups.reset();
+			raidVerification = RaidVerificationStatus.INACTIVE;
 			if (submissions != null) submissions.cancelPending();
 			withPanel(NocturnePanel::setLoggedOut);
 		}
@@ -211,16 +227,6 @@ public class NocturnePlugin extends Plugin
 				view.setDiagnostics(config.showDiagnostics());
 				view.setSubmissionEnabled(config.submitTestDrops());
 			});
-			if ("captureGroups".equals(event.getKey()))
-			{
-				GroupTracker tracker = groups;
-				clientThread.invoke(() ->
-				{
-					if (tracker != null && groups == tracker) tracker.reset();
-				});
-				withPanel(view -> view.setGroup(GroupSnapshot.unavailable(
-					config.captureGroups() ? "Waiting for group capture." : "Group capture is off.")));
-			}
 		}
 	}
 
@@ -279,10 +285,14 @@ public class NocturnePlugin extends Plugin
 	public void onChatMessage(ChatMessage event)
 	{
 		GroupTracker tracker = groups;
-		if (tracker != null && config.captureGroups()
+		if (tracker != null && config.trackNpcLoot()
 			&& (event.getType() == ChatMessageType.GAMEMESSAGE || event.getType() == ChatMessageType.FRIENDSCHATNOTIFICATION))
 		{
-			tracker.onGameMessage(event.getMessage());
+			if (tracker.onGameMessage(event.getMessage()))
+			{
+				RaidPresenceService presence = raidPresence;
+				if (presence != null) presence.submit(tracker.presenceReport("completion"), this::updateRaidVerification);
+			}
 		}
 	}
 
@@ -320,7 +330,7 @@ public class NocturnePlugin extends Plugin
 		GroupTracker tracker = groups;
 		GroupSnapshot group = GroupSnapshot.unavailable(origin == LootOrigin.GENERIC_EVENT
 			? "Generic reward; no raid group context." : "Group capture is off.");
-		if (tracker != null && config.captureGroups() && usesGroupContext(origin))
+		if (tracker != null && usesGroupContext(origin))
 		{
 			List<String> signature = items.stream().map(LootItem::signature)
 				.collect(java.util.stream.Collectors.toList());
@@ -328,6 +338,9 @@ public class NocturnePlugin extends Plugin
 			{
 				group = tracker.takeChambersReward(source, signature);
 				if (group == null) return;
+				RaidPresenceService presence = raidPresence;
+				if (presence != null) presence.submit(tracker.presenceReport("reward_observed"),
+					this::updateRaidVerification);
 			}
 			else
 			{
@@ -376,6 +389,21 @@ public class NocturnePlugin extends Plugin
 			}
 		}
 		log.debug("Nocturne detected loot: {} from {}, {} item stacks", rsn, source, items.size());
+	}
+
+	private void updateRaidVerification(RaidVerificationStatus status)
+	{
+		raidVerification = status;
+		clientThread.invoke(() ->
+		{
+			GroupTracker tracker = groups;
+			if (tracker != null)
+			{
+				GroupSnapshot snapshot = tracker.current();
+				InstanceObservedEvidence.Snapshot observed = tracker.instanceObserved();
+				withPanel(view -> view.setRaidEvidence(snapshot, observed, status));
+			}
+		});
 	}
 
 	private void updatePlayer()

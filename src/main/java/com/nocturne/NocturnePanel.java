@@ -43,6 +43,7 @@ final class NocturnePanel extends PluginPanel
 	private final JPanel feed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 	private final JTextArea raidDiagnostics = note("Raid diagnostics inactive.", BACKGROUND);
+	private final JTextArea raidVerification = note("Raid verification: waiting for Chambers.", BACKGROUND);
 	private ViewportAnchor pendingPrependAnchor;
 	private int viewportGeneration;
 	private boolean viewportRestoreScheduled;
@@ -74,6 +75,7 @@ final class NocturnePanel extends PluginPanel
 		header.add(connection);
 		header.add(spacer());
 		header.add(groupPreview);
+		header.add(raidVerification);
 		header.add(raidDiagnostics);
 		header.add(spacer());
 		header.add(label("RECENT LOOT", PURPLE));
@@ -201,6 +203,29 @@ final class NocturnePanel extends PluginPanel
 	{
 		raidDiagnostics.setText(value.displayText());
 		raidDiagnostics.setVisible(diagnostics);
+	}
+
+	void setRaidEvidence(GroupSnapshot game, InstanceObservedEvidence.Snapshot observed,
+		RaidVerificationStatus verified)
+	{
+		requireEdt();
+		String roster = game.rosterState == null ? "unavailable" : game.rosterState.replace('_', ' ');
+		String instance = observed.epoch == 0 ? "inactive" : observed.players.size() + " observed"
+			+ (observed.accepting ? " (active)" : ", " + observed.nearCompletionCount() + " near completion");
+		String contribution = game.eligibilityNote == null ? "not yet final" : game.eligibilityNote;
+		String mode = game.scoringMode == null ? "not yet final" : game.scoringMode;
+		raidVerification.setText("GAME_ROSTER: " + roster
+			+ "\nINSTANCE_OBSERVED: " + instance
+			+ "\nNOCTURNE_VERIFIED: " + verified.verified + "/" + verified.expected
+			+ "\nLocal contribution: " + contribution
+			+ "\nSession: " + (verified.consistent ? "consistent" : "not verified")
+			+ "\nProposed scoring: " + mode
+			+ "\n" + verified.reason);
+	}
+
+	String raidEvidenceText()
+	{
+		return raidVerification.getText();
 	}
 
 	void recordPersistedLoot(LootRecord record, int totalCount, long bytes, long generation)

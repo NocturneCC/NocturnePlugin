@@ -110,7 +110,8 @@ final class GroupTracker
 		{
 			boolean spectator = raid == RaidType.TOB && client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) == 3;
 			session = new RaidSession(raid, name, outsideObserved && !spectator, tick,
-				++nextRunEpoch, partyGroup);
+				++nextRunEpoch, partyGroup, raid == RaidType.COX
+					&& client.getVarbitValue(VarbitID.RAIDS_CHALLENGE_MODE) == 1);
 			active = raid;
 			outsideObserved = false;
 			scanTicks = 5;
@@ -149,6 +150,18 @@ final class GroupTracker
 	InstanceObservedEvidence.Snapshot instanceObserved()
 	{
 		return instanceObserved.snapshot();
+	}
+
+	RaidPresenceReport presenceReport(String state)
+	{
+		if (session == null || session.type != RaidType.COX) return null;
+		return session.presenceReport(state, client.getWorld(),
+			java.time.Instant.now().getEpochSecond());
+	}
+
+	boolean isActiveChambers()
+	{
+		return active == RaidType.COX && session != null;
 	}
 
 	void onPlayerObserved(Player player)
@@ -298,10 +311,10 @@ final class GroupTracker
 		return snapshot;
 	}
 
-	void onGameMessage(String text)
+	boolean onGameMessage(String text)
 	{
 		syncIdentity();
-		if (text == null) return;
+		if (text == null) return false;
 		// Freeze the roster before reward-room state/party widgets are cleared.
 		String message = Text.removeTags(text).toLowerCase(Locale.ROOT);
 		if (session != null && session.type == RaidType.COX && isChambersCompletionMessage(message))
@@ -311,7 +324,7 @@ final class GroupTracker
 			session.finishChambers(client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSCORE),
 				client.getVarpValue(VarPlayerID.RAIDS_PLAYERSCORE));
 			current = session.snapshot();
-			return;
+			return true;
 		}
 		if (session != null && message.startsWith("your ") && message.contains("count is")
 			&& RaidType.fromSource(message) == session.type)
@@ -320,6 +333,7 @@ final class GroupTracker
 			session.finish();
 			current = session.snapshot();
 		}
+		return false;
 	}
 
 	static boolean isChambersCompletionMessage(String message)

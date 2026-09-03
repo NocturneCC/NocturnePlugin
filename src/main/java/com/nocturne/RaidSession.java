@@ -5,6 +5,8 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.time.Instant;
+import java.util.UUID;
 
 /** Client-thread state for one run. Old loot records hold immutable snapshots. */
 final class RaidSession
@@ -12,6 +14,9 @@ final class RaidSession
 	static final long RETENTION_TICKS = 1000; // About ten minutes after the last active tick.
 	final RaidType type;
 	final long runEpoch;
+	final String presenceEpoch;
+	final long startedAt;
+	final boolean challengeMode;
 	private int partyGroup;
 	private final String localName;
 	private final boolean entryObserved;
@@ -32,6 +37,7 @@ final class RaidSession
 	private boolean finalPointsCaptured;
 	private int finalTeamPoints;
 	private int finalPersonalPoints;
+	private long completedAt;
 	private long lastActiveTick;
 
 	RaidSession(RaidType type, String localName, boolean entryObserved, long tick)
@@ -42,9 +48,18 @@ final class RaidSession
 	RaidSession(RaidType type, String localName, boolean entryObserved, long tick,
 		long runEpoch, int partyGroup)
 	{
+		this(type, localName, entryObserved, tick, runEpoch, partyGroup, false);
+	}
+
+	RaidSession(RaidType type, String localName, boolean entryObserved, long tick,
+		long runEpoch, int partyGroup, boolean challengeMode)
+	{
 		this.type = type;
 		this.runEpoch = runEpoch;
 		this.partyGroup = partyGroup;
+		this.challengeMode = challengeMode;
+		this.presenceEpoch = UUID.randomUUID().toString();
+		this.startedAt = Instant.now().getEpochSecond();
 		this.localName = localName;
 		this.entryObserved = entryObserved;
 		lastActiveTick = tick;
@@ -117,6 +132,7 @@ final class RaidSession
 		finalTeamPoints = teamPoints;
 		finalPersonalPoints = Math.max(0, personalPoints);
 		finalPointsCaptured = teamPoints > 0 && personalPoints >= 0;
+		completedAt = Instant.now().getEpochSecond();
 		completed = true;
 	}
 
@@ -142,7 +158,18 @@ final class RaidSession
 		currentNames.clear();
 		completionNames.clear();
 		observedNames.clear();
-		maxReportedSize = 0;
+	}
+
+	RaidPresenceReport presenceReport(String state, int world, long now)
+	{
+		boolean finalState = "completion".equals(state) || "reward_observed".equals(state);
+		ChambersScoringPolicy policy = ChambersScoringPolicy.evaluate(this);
+		return new RaidPresenceReport(localName, challengeMode ? "COX_CM" : "COX", state,
+			world, partyGroup, presenceEpoch, startedAt, now, maxReportedSize,
+			finalState ? completionReportedSize : null,
+			finalState ? finalPersonalPoints : null, finalState ? finalTeamPoints : null,
+			policy.mode.name(), finalState ? completedAt : null,
+			"reward_observed".equals(state) ? now : null);
 	}
 
 	int maxReportedSize() { return maxReportedSize; }

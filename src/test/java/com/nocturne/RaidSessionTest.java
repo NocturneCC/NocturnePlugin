@@ -222,6 +222,25 @@ public class RaidSessionTest
 		assertFalse(session.acceptReward("loot"));
 	}
 
+	@Test public void presenceReportSeparatesSessionFactsFromRosterNames()
+	{
+		RaidSession session = new RaidSession(RaidType.COX, "De Lena", true, 0, 9, 44, true);
+		session.observe(List.of("Bifuor", "De Lena", "Not ZB"), 3, 1);
+		session.finishChambers(10_000, 500);
+		JsonAssertions.assertOwnPresenceOnly(session.presenceReport("completion", 420, 1_000).json());
+	}
+
+	private static final class JsonAssertions
+	{
+		static void assertOwnPresenceOnly(com.google.gson.JsonObject json)
+		{
+			assertEquals("COX_CM", json.get("raid_type").getAsString());
+			assertEquals(500, json.get("contribution_basis_points").getAsInt());
+			assertFalse(json.toString().contains("Bifuor"));
+			assertFalse(json.toString().contains("Not ZB"));
+		}
+	}
+
 	private static RaidSession chambers(boolean entryObserved, long epoch, int partyGroup)
 	{
 		return new RaidSession(RaidType.COX, "De Lena", entryObserved, 0, epoch, partyGroup);

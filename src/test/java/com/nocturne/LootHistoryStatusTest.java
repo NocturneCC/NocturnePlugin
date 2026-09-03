@@ -62,6 +62,28 @@ public class LootHistoryStatusTest
 		});
 	}
 
+	@Test public void raidEvidenceClassesAndQualificationReasonAreDisplayed() throws Exception
+	{
+		NocturnePanel panel = panel("De Lena", 10);
+		InstanceObservedEvidence observed = new InstanceObservedEvidence();
+		observed.begin(4, List.of("De Lena", "Other"), 1);
+		onEdt(() ->
+		{
+			GroupSnapshot game = new GroupSnapshot("Chambers", List.of("De Lena"), 3,
+				GroupSnapshot.Status.INCOMPLETE, "partial", true, "Local contribution met 5%",
+				"COMPLETION", "NORMAL_GROUP");
+			panel.setRaidEvidence(game, observed.snapshot(),
+				new RaidVerificationStatus(2, 3, true, false, "not all Nocturne clients verified"));
+			String text = panel.raidEvidenceText();
+			assertTrue(text.contains("GAME_ROSTER: COMPLETION"));
+			assertTrue(text.contains("INSTANCE_OBSERVED: 2 observed"));
+			assertTrue(text.contains("NOCTURNE_VERIFIED: 2/3"));
+			assertTrue(text.contains("Proposed scoring: NORMAL_GROUP"));
+			assertTrue(text.contains("not all Nocturne clients verified"));
+			assertFalse(text.contains("Other"));
+		});
+	}
+
 	private static NocturnePanel panel(String rsn, long generation) throws Exception
 	{
 		final NocturnePanel[] result = new NocturnePanel[1];
