@@ -97,6 +97,7 @@ public class NocturnePlugin extends Plugin
 		Object token = new Object();
 		lifecycle = token;
 		groups = new GroupTracker(client);
+		groups.setDiagnosticsEnabled(config.showDiagnostics());
 		derivedValues = DerivedValueCatalogue.load(gson);
 		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
 			.resolve("nocturne").resolve("loot-history"), gson);
@@ -164,7 +165,12 @@ public class NocturnePlugin extends Plugin
 		{
 			tracker.onTick();
 			GroupSnapshot snapshot = tracker.current();
-			withPanel(view -> view.setGroup(snapshot));
+			RaidDiagnostics diagnostics = tracker.diagnostics();
+			withPanel(view ->
+			{
+				view.setGroup(snapshot);
+				view.setRaidDiagnostics(diagnostics);
+			});
 		}
 	}
 
@@ -195,6 +201,8 @@ public class NocturnePlugin extends Plugin
 		if (NocturneConfig.GROUP.equals(event.getGroup()))
 		{
 			if (!config.submitTestDrops() && submissions != null) submissions.cancelPending();
+			GroupTracker diagnosticsTracker = groups;
+			if (diagnosticsTracker != null) diagnosticsTracker.setDiagnosticsEnabled(config.showDiagnostics());
 			boolean enabled = config.trackNpcLoot();
 			withPanel(view ->
 			{

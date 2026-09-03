@@ -17,12 +17,14 @@ import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Local-only group capture. Raid source mapping is adapted from DropTracker's
  * NearbyPlayerTracker (BSD-2-Clause); see THIRD_PARTY_NOTICES.md.
  * All game reads and state mutations happen on the client thread.
  */
+@Slf4j
 final class GroupTracker
 {
 	private final Client client;
@@ -35,6 +37,9 @@ final class GroupTracker
 	private int scanTicks;
 	private long nextRunEpoch;
 	private GroupSnapshot current = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
+	private RaidDiagnostics diagnostics = RaidDiagnostics.INACTIVE;
+	private boolean diagnosticsEnabled;
+	private String lastStructure;
 
 	GroupTracker(Client client)
 	{
@@ -50,6 +55,14 @@ final class GroupTracker
 		world = 0;
 		scanTicks = 0;
 		current = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
+		diagnostics = RaidDiagnostics.INACTIVE;
+		lastStructure = null;
+	}
+
+	void setDiagnosticsEnabled(boolean enabled)
+	{
+		diagnosticsEnabled = enabled;
+		if (!enabled) diagnostics = RaidDiagnostics.INACTIVE;
 	}
 
 	void onTick()
@@ -112,6 +125,11 @@ final class GroupTracker
 		return current;
 	}
 
+	RaidDiagnostics diagnostics()
+	{
+		return diagnostics;
+	}
+
 	private RaidType activeRaid()
 	{
 		if (client.getVarbitValue(VarbitID.TOB_CLIENT_PARTYSTATUS) >= 2) return RaidType.TOB;
@@ -137,11 +155,33 @@ final class GroupTracker
 				break;
 			case COX:
 				Widget list = client.getWidget(InterfaceID.RaidsSidepanel.LIST);
-				names.addAll(ChambersRoster.extract(list));
+				ChambersRoster.Observation observation = ChambersRoster.inspect(list);
+				names.addAll(observation.names);
 				size = client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSIZE);
+				if (diagnosticsEnabled)
+				{
+					String structure = ChambersRoster.structuralSummary(list,
+						client.getWidget(InterfaceID.RaidsSidepanel.LISTLAYER),
+						client.getWidget(InterfaceID.RaidsSidepanel.UNIVERSE));
+					String mode = client.getVarbitValue(VarbitID.RAIDS_CHALLENGE_MODE) == 1
+						? "Chambers of Xeric: Challenge Mode" : "Chambers of Xeric: Normal";
+					GroupSnapshot snapshot = session.snapshot();
+					diagnostics = new RaidDiagnostics(mode, size, session.partyGroup,
+						observation.candidateCount, observation.names.size(), snapshot.status.name(),
+						structure);
+					if (!structure.equals(lastStructure))
+					{
+						log.debug("Chambers roster widget structure: {}", structure);
+						lastStructure = structure;
+					}
+				}
 				break;
 		}
 		session.observe(names, size, tick);
+		if (diagnosticsEnabled && active == RaidType.COX)
+		{
+			diagnostics = diagnostics.withSnapshotState(session.snapshot().status.name());
+		}
 	}
 
 	private void readNames(int first, int last, List<String> names)

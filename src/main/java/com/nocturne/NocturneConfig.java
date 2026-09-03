@@ -34,7 +34,7 @@ public interface NocturneConfig extends Config
 	@ConfigItem(
 		keyName = "showDiagnostics",
 		name = "Show capture diagnostics",
-		description = "Show item IDs, nearby observations and detailed roster checks locally.",
+		description = "Show item IDs and name-free raid widget structure diagnostics locally. Disabled by default.",
 		position = 2
 	)
 	default boolean showDiagnostics() { return false; }

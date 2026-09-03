@@ -67,6 +67,17 @@ public class LootEventCoverageTest
 		assertTrue(NocturnePlugin.usesGroupContext(NocturnePlugin.LootOrigin.NPC));
 	}
 
+	@Test
+	public void npcLootInsideRaidIsLabeledAsContextNotAsItsOwnRoster()
+	{
+		GroupSnapshot group = new GroupSnapshot("Chambers of Xeric / Raiding-party sidebar",
+			List.of(), 4, GroupSnapshot.Status.INCOMPLETE, "No names accepted");
+		LootRecord record = new LootRecord("First", "Scavenger beast", List.of(), group);
+		List<String> labels = labels(new NocturnePanel(null).renderRecord(record));
+		assertTrue(labels.stream().anyMatch(text -> text.startsWith("Active raid context (incomplete)")));
+		assertFalse(labels.stream().anyMatch(text -> text.startsWith("Raid roster")));
+	}
+
 	private static List<String> labels(Container root)
 	{
 		List<String> result = new ArrayList<>();

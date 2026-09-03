@@ -42,6 +42,7 @@ final class NocturnePanel extends PluginPanel
 	private final JButton loadOlder = new JButton("Load 50 older events");
 	private final JPanel feed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
+	private final JTextArea raidDiagnostics = note("Raid diagnostics inactive.", BACKGROUND);
 	private ViewportAnchor pendingPrependAnchor;
 	private int viewportGeneration;
 	private boolean viewportRestoreScheduled;
@@ -73,6 +74,7 @@ final class NocturnePanel extends PluginPanel
 		header.add(connection);
 		header.add(spacer());
 		header.add(groupPreview);
+		header.add(raidDiagnostics);
 		header.add(spacer());
 		header.add(label("RECENT LOOT", PURPLE));
 		header.add(count);
@@ -193,6 +195,12 @@ final class NocturnePanel extends PluginPanel
 			groupPreview.setText(text);
 			revalidate();
 		}
+	}
+
+	void setRaidDiagnostics(RaidDiagnostics value)
+	{
+		raidDiagnostics.setText(value.displayText());
+		raidDiagnostics.setVisible(diagnostics);
 	}
 
 	void recordPersistedLoot(LootRecord record, int totalCount, long bytes, long generation)
@@ -328,6 +336,7 @@ final class NocturnePanel extends PluginPanel
 			renderHistory();
 		}
 		groupPreview.setVisible(enabled);
+		raidDiagnostics.setVisible(enabled);
 	}
 
 	void setSubmissionEnabled(boolean enabled)
@@ -415,7 +424,9 @@ final class NocturnePanel extends PluginPanel
 			if (record.group.status == GroupSnapshot.Status.MATCHED
 				|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
 			{
-				card.add(note("Raid roster" + (record.group.status == GroupSnapshot.Status.INCOMPLETE
+				boolean rewardRoster = RaidType.fromSource(record.source) != null;
+				card.add(note((rewardRoster ? "Raid roster" : "Active raid context")
+					+ (record.group.status == GroupSnapshot.Status.INCOMPLETE
 					? " (incomplete)" : "") + " · local only\n"
 					+ (record.group.names.isEmpty() ? "Unavailable" : String.join(", ", record.group.names)), CARD));
 			}

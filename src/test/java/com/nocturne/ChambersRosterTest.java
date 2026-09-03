@@ -30,6 +30,24 @@ public class ChambersRosterTest
 		assertNull(ChambersRoster.characterName("This name is much too long"));
 	}
 
+	@Test
+	public void currentWidgetChildViewsAreReportedWithoutRosterText()
+	{
+		// RuneLite's current Widget API exposes dynamic, static, and all nested
+		// descendants separately. Counts show where runtime roster rows landed.
+		String structure = ChambersRoster.structure(0x01f4000a, false, 0, 4, 12, 4, 0);
+		assertEquals("id=32768010, hidden=false, dynamic=0, static=4, nested=12, "
+			+ "text-present=4, name-present=0", structure);
+		assertFalse(structure.contains("De Lena"));
+	}
+
+	@Test
+	public void missingCurrentListIsExplicitRatherThanBorrowingAnotherPlayerSource()
+	{
+		assertEquals("missing", ChambersRoster.inspect(null).structure);
+		assertTrue(ChambersRoster.extract((net.runelite.api.widgets.Widget) null).isEmpty());
+	}
+
 	private static Node node(String text, Node... children)
 	{
 		return new Node(text, true, List.of(children));

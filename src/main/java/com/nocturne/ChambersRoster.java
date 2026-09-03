@@ -15,7 +15,26 @@ final class ChambersRoster
 
 	static List<String> extract(Widget root)
 	{
-		return extract(root == null ? null : new WidgetNode(root));
+		return inspect(root).names;
+	}
+
+	static Observation inspect(Widget root)
+	{
+		if (root == null) return new Observation(List.of(), 0, "missing");
+		CandidateCounter counter = new CandidateCounter();
+		List<String> names = extract(new WidgetNode(root, counter));
+		return new Observation(names, counter.count, structure(root));
+	}
+
+	static String structuralSummary(Widget list, Widget layer, Widget universe)
+	{
+		return "list{" + structureOrMissing(list) + "}; layer{" + structureOrMissing(layer)
+			+ "}; universe{" + structureOrMissing(universe) + "}";
+	}
+
+	private static String structureOrMissing(Widget widget)
+	{
+		return widget == null ? "missing" : structure(widget);
 	}
 
 	static List<String> extract(Node root)
@@ -55,18 +74,82 @@ final class ChambersRoster
 		List<? extends Node> children();
 	}
 
+	static final class Observation
+	{
+		final List<String> names;
+		final int candidateCount;
+		final String structure;
+
+		private Observation(List<String> names, int candidateCount, String structure)
+		{
+			this.names = names;
+			this.candidateCount = candidateCount;
+			this.structure = structure;
+		}
+	}
+
+	private static String structure(Widget widget)
+	{
+		Widget[] dynamic = widget.getDynamicChildren();
+		Widget[] statics = widget.getStaticChildren();
+		Widget[] nested = widget.getNestedChildren();
+		return structure(widget.getId(), widget.isHidden() || widget.isSelfHidden(),
+			populated(dynamic), populated(statics), populated(nested), presentText(nested, false),
+			presentText(nested, true));
+	}
+
+	static String structure(int id, boolean hidden, int dynamic, int statics, int nested,
+		int textPresent, int namePresent)
+	{
+		return "id=" + id + ", hidden=" + hidden + ", dynamic=" + dynamic + ", static=" + statics
+			+ ", nested=" + nested + ", text-present=" + textPresent + ", name-present=" + namePresent;
+	}
+
+	private static int populated(Widget[] widgets)
+	{
+		if (widgets == null) return 0;
+		int count = 0;
+		for (Widget widget : widgets) if (widget != null) count++;
+		return count;
+	}
+
+	private static int presentText(Widget[] widgets, boolean name)
+	{
+		if (widgets == null) return 0;
+		int count = 0;
+		for (Widget widget : widgets)
+		{
+			if (widget == null) continue;
+			String value = name ? widget.getName() : widget.getText();
+			if (value != null && !value.isEmpty()) count++;
+		}
+		return count;
+	}
+
+	private static final class CandidateCounter { private int count; }
+
 	private static final class WidgetNode implements Node
 	{
 		private final Widget widget;
-		private WidgetNode(Widget widget) { this.widget = widget; }
-		@Override public String text() { return widget.getText(); }
+		private final CandidateCounter counter;
+		private WidgetNode(Widget widget, CandidateCounter counter)
+		{
+			this.widget = widget;
+			this.counter = counter;
+		}
+		@Override public String text()
+		{
+			String text = widget.getText();
+			if (text != null && !text.isEmpty()) counter.count++;
+			return text;
+		}
 		@Override public boolean visible() { return !widget.isHidden() && !widget.isSelfHidden(); }
 		@Override public List<WidgetNode> children()
 		{
 			Widget[] children = widget.getChildren();
 			if (children == null || children.length == 0) return List.of();
 			List<WidgetNode> result = new ArrayList<>();
-			for (Widget child : children) if (child != null) result.add(new WidgetNode(child));
+			for (Widget child : children) if (child != null) result.add(new WidgetNode(child, counter));
 			return result;
 		}
 	}
