@@ -88,7 +88,7 @@ final class RaidSession
 		}
 		lastActiveTick = tick;
 		List<String> unique = GroupSnapshot.uniqueNames(observedNames);
-		if (type == RaidType.COX || type == RaidType.TOA)
+		if (type == RaidType.COX || type == RaidType.TOA || type == RaidType.TOB)
 		{
 			lastReportedSize = reportedSize;
 			lastRosterObservationVerified = reportedSize > 0 && unique.size() == reportedSize
@@ -96,7 +96,7 @@ final class RaidSession
 		}
 		if (!unique.isEmpty())
 		{
-			if (type == RaidType.COX || type == RaidType.TOA) currentNames.clear();
+			if (type == RaidType.COX || type == RaidType.TOA || type == RaidType.TOB) currentNames.clear();
 			for (String name : unique)
 			{
 				if (currentNames.size() >= 100) { overflow = true; break; }
@@ -112,7 +112,7 @@ final class RaidSession
 		if (reportedSize > 0)
 		{
 			maxReportedSize = Math.max(maxReportedSize, reportedSize);
-			currentReportedSize = type == RaidType.COX || type == RaidType.TOA
+			currentReportedSize = type == RaidType.COX || type == RaidType.TOA || type == RaidType.TOB
 				? reportedSize : maxReportedSize;
 		}
 	}
@@ -124,7 +124,19 @@ final class RaidSession
 
 	void finishTombs(boolean freshCompletionRead)
 	{
-		if (completed || type != RaidType.TOA) return;
+		if (type != RaidType.TOA) return;
+		finishPartySlots(freshCompletionRead);
+	}
+
+	void finishTheatre(boolean freshCompletionRead)
+	{
+		if (type != RaidType.TOB) return;
+		finishPartySlots(freshCompletionRead);
+	}
+
+	private void finishPartySlots(boolean freshCompletionRead)
+	{
+		if (completed) return;
 		completionNames.clear();
 		completionNames.addAll(currentNames);
 		completionReportedSize = lastReportedSize > 0 ? lastReportedSize : currentReportedSize;
@@ -209,7 +221,8 @@ final class RaidSession
 
 	GroupSnapshot snapshot()
 	{
-		GroupSnapshot base = completed && (type == RaidType.COX || type == RaidType.TOA)
+		GroupSnapshot base = completed
+			&& (type == RaidType.COX || type == RaidType.TOA || type == RaidType.TOB)
 			? completionSnapshot() : currentSnapshot();
 		if (!completed || type != RaidType.COX) return base;
 		return chambersRewardSnapshot();

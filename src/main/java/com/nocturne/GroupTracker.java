@@ -85,6 +85,7 @@ final class GroupTracker
 			if (active != null && session != null)
 			{
 				if (session.type == RaidType.TOA) session.finishTombs(false);
+				else if (session.type == RaidType.TOB) session.finishTheatre(false);
 				else if (session.type != RaidType.COX) session.finish();
 			}
 			active = null;
@@ -295,6 +296,10 @@ final class GroupTracker
 			{
 				session.finishTombs(false);
 			}
+			else if (raid == RaidType.TOB && activeRaid() != RaidType.TOB)
+			{
+				session.finishTheatre(false);
+			}
 			return session.snapshot();
 		}
 		if (active != null && session != null) return session.snapshot();
@@ -345,11 +350,13 @@ final class GroupTracker
 		if (session != null && message.startsWith("your ") && message.contains("count is")
 			&& RaidType.fromSource(message) == session.type)
 		{
-			if (session.type == RaidType.TOA)
+			if (session.type == RaidType.TOA || session.type == RaidType.TOB)
 			{
-				boolean slotsStillActive = activeRaid() == RaidType.TOA;
+				boolean slotsStillActive = activeRaid() == session.type;
 				if (slotsStillActive) capture();
-				session.finishTombs(slotsStillActive && session.hasVerifiedCurrentRoster());
+				boolean fresh = slotsStillActive && session.hasVerifiedCurrentRoster();
+				if (session.type == RaidType.TOA) session.finishTombs(fresh);
+				else session.finishTheatre(fresh);
 			}
 			else
 			{

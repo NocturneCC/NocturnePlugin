@@ -7,15 +7,15 @@ import static org.junit.Assert.*;
 public class RaidSessionTest
 {
 	@Test
-	public void fullRosterIncludesRecipientAndSurvivesSizeDroppingAfterDeaths()
+	public void theatreCurrentRosterReflectsAuthoritativePointInTimeSlots()
 	{
 		RaidSession session = session(true);
 		session.observe(List.of("Simon", "Alice", "Bob"), 3, 5);
 		session.observe(List.of("Simon", "Alice"), 2, 10);
 		GroupSnapshot snapshot = session.snapshot();
 		assertEquals(GroupSnapshot.Status.MATCHED, snapshot.status);
-		assertEquals(3, snapshot.expectedSize);
-		assertEquals(List.of("Alice", "Bob", "Simon"), snapshot.names);
+		assertEquals(2, snapshot.expectedSize);
+		assertEquals(List.of("Alice", "Simon"), snapshot.names);
 	}
 
 	@Test
@@ -60,7 +60,7 @@ public class RaidSessionTest
 	{
 		RaidSession session = session(true);
 		session.observe(List.of("Simon", "Alice"), 2, 5);
-		session.finish();
+		session.finishTheatre(true);
 		session.observe(List.of("Simon", "Stranger"), 2, 6);
 		assertEquals(List.of("Alice", "Simon"), session.snapshot().names);
 	}
@@ -101,6 +101,36 @@ public class RaidSessionTest
 	}
 
 	@Test
+	public void theatreFreshAndRetainedCompletionProvenanceAreDistinct()
+	{
+		List<String> party = List.of("Bifuor", "De Lena", "GoopObtainer", "L enk");
+		RaidSession fresh = new RaidSession(RaidType.TOB, "De Lena", true, 0);
+		fresh.observe(party, 4, 1);
+		fresh.finishTheatre(true);
+		assertEquals("COMPLETION", fresh.snapshot().rosterState);
+		assertEquals(GroupSnapshot.Status.MATCHED, fresh.snapshot().status);
+
+		RaidSession retained = new RaidSession(RaidType.TOB, "De Lena", true, 0);
+		retained.observe(party, 4, 1);
+		retained.observe(List.of(), 0, 2);
+		retained.finishTheatre(false);
+		assertEquals(party, retained.snapshot().names);
+		assertEquals("RETAINED_PRE_COMPLETION", retained.snapshot().rosterState);
+	}
+
+	@Test
+	public void theatreSlotsArePointInTimeAndDoNotCompletionVerifyDeparture()
+	{
+		RaidSession session = new RaidSession(RaidType.TOB, "De Lena", true, 0);
+		session.observe(List.of("Bifuor", "De Lena", "GoopObtainer", "L enk"), 4, 1);
+		session.observe(List.of("Bifuor", "De Lena", "L enk"), 3, 2);
+		session.finishTheatre(true);
+		assertEquals(List.of("Bifuor", "De Lena", "L enk"), session.snapshot().names);
+		assertEquals(3, session.snapshot().expectedSize);
+		assertFalse(session.snapshot().names.contains("GoopObtainer"));
+	}
+
+	@Test
 	public void changedTeamAndOldSnapshotsStayDistinct()
 	{
 		RaidSession session = session(true);
@@ -108,7 +138,8 @@ public class RaidSessionTest
 		GroupSnapshot earlier = session.snapshot();
 		session.observe(List.of("Simon", "Bob"), 2, 10);
 		assertEquals(List.of("Alice", "Simon"), earlier.names);
-		assertEquals(GroupSnapshot.Status.INCOMPLETE, session.snapshot().status);
+		assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
+		assertEquals(List.of("Bob", "Simon"), session.snapshot().names);
 		RaidSession next = session(true);
 		next.observe(List.of("Simon", "Bob"), 2, 20);
 		assertEquals(List.of("Bob", "Simon"), next.snapshot().names);
