@@ -81,7 +81,7 @@ final class GroupTracker
 		{
 			if (active != null && session != null)
 			{
-				session.finish();
+				if (session.type != RaidType.COX) session.finish();
 			}
 			active = null;
 			outsideObserved = true;
@@ -250,7 +250,7 @@ final class GroupTracker
 		List<String> sorted = new ArrayList<>(itemSignature);
 		sorted.sort(String::compareTo);
 		if (!session.acceptReward(String.join("|", sorted))) return null;
-		GroupSnapshot snapshot = session.snapshot();
+		GroupSnapshot snapshot = session.chambersRewardSnapshot();
 		diagnosticsFrozen = true;
 		session.clearRoster();
 		current = GroupSnapshot.unavailable("Chambers roster consumed by the reward event.");
@@ -266,7 +266,8 @@ final class GroupTracker
 		if (session != null && session.type == RaidType.COX && isChambersCompletionMessage(message))
 		{
 			capture();
-			session.finish();
+			session.finishChambers(client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSCORE),
+				client.getVarpValue(VarPlayerID.RAIDS_PLAYERSCORE));
 			current = session.snapshot();
 			return;
 		}

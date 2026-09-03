@@ -6,7 +6,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Immutable evidence captured alongside a drop; never a membership or scoring decision. */
+/** Immutable local evidence and client-side eligibility proposal; never a server award decision. */
 final class GroupSnapshot
 {
 	enum Status { MATCHED, INCOMPLETE, OBSERVED, UNAVAILABLE }
@@ -16,14 +16,29 @@ final class GroupSnapshot
 	final int expectedSize;
 	final Status status;
 	final String detail;
+	final Boolean submissionEligible;
+	final String eligibilityNote;
 
 	GroupSnapshot(String source, Collection<String> names, int expectedSize, Status status, String detail)
+	{
+		this(source, names, expectedSize, status, detail, null, null);
+	}
+
+	GroupSnapshot(String source, Collection<String> names, int expectedSize, Status status, String detail,
+		Boolean submissionEligible, String eligibilityNote)
 	{
 		this.source = source;
 		this.names = uniqueNames(names);
 		this.expectedSize = expectedSize;
 		this.status = status;
 		this.detail = detail;
+		this.submissionEligible = submissionEligible;
+		this.eligibilityNote = eligibilityNote;
+	}
+
+	boolean allowsSubmission()
+	{
+		return submissionEligible == null || submissionEligible;
 	}
 
 	static List<String> uniqueNames(Collection<String> names)

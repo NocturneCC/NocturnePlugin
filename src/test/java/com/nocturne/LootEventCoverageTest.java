@@ -36,6 +36,20 @@ public class LootEventCoverageTest
 	}
 
 	@Test
+	public void chambersContributionPolicyBlocksScreenshotAndSubmissionEligibility()
+	{
+		LootItem valuable = new LootItem(2, 1, "Valuable unit", 500_000);
+		GroupSnapshot blocked = new GroupSnapshot("Chambers", List.of("First"), 1,
+			GroupSnapshot.Status.MATCHED, "", false, "Below 5.00%");
+		assertFalse(NocturnePlugin.isSubmissionEligible(List.of(valuable), blocked));
+		LootRecord record = new LootRecord("First", "Chambers of Xeric", List.of(), blocked);
+		record.submission = SubmissionStatus.INELIGIBLE;
+		List<String> labels = labels(new NocturnePanel(null).renderRecord(record));
+		assertTrue(labels.contains("Below 5.00%"));
+		assertTrue(labels.contains(SubmissionStatus.INELIGIBLE.label));
+	}
+
+	@Test
 	public void recognizedRaidsRetainRaidClassification()
 	{
 		assertEquals(NocturnePlugin.LootOrigin.RAID_EVENT,

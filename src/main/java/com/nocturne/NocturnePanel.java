@@ -421,6 +421,10 @@ final class NocturnePanel extends PluginPanel
 				card.add(row);
 			}
 			card.add(note(record.submission.label, CARD));
+			if (record.group.eligibilityNote != null)
+			{
+				card.add(note(record.group.eligibilityNote, CARD));
+			}
 			if (record.group.status == GroupSnapshot.Status.MATCHED
 				|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
 			{

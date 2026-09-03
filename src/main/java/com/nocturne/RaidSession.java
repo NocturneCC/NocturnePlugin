@@ -15,11 +15,20 @@ final class RaidSession
 	private int partyGroup;
 	private final String localName;
 	private final boolean entryObserved;
-	private final Set<String> names = new LinkedHashSet<>();
+	private final Set<String> initialNames = new LinkedHashSet<>();
+	private final Set<String> currentNames = new LinkedHashSet<>();
+	private final Set<String> completionNames = new LinkedHashSet<>();
+	private final Set<String> observedNames = new LinkedHashSet<>();
 	private final Set<String> rewardSignatures = new HashSet<>();
 	private int maxReportedSize;
+	private int initialReportedSize;
+	private int currentReportedSize;
+	private int completionReportedSize;
 	private boolean completed;
 	private boolean overflow;
+	private boolean finalPointsCaptured;
+	private int finalTeamPoints;
+	private int finalPersonalPoints;
 	private long lastActiveTick;
 
 	RaidSession(RaidType type, String localName, boolean entryObserved, long tick)
@@ -60,23 +69,43 @@ final class RaidSession
 			return;
 		}
 		lastActiveTick = tick;
-		for (String name : GroupSnapshot.uniqueNames(observedNames))
+		List<String> unique = GroupSnapshot.uniqueNames(observedNames);
+		if (!unique.isEmpty())
 		{
-			if (names.stream().anyMatch(existing -> existing.equalsIgnoreCase(name))) continue;
-			if (names.size() < 100)
+			if (type == RaidType.COX) currentNames.clear();
+			for (String name : unique)
 			{
-				names.add(name);
+				if (currentNames.size() >= 100) { overflow = true; break; }
+				currentNames.add(name);
+				this.observedNames.add(name);
 			}
-			else
+			if (initialNames.isEmpty())
 			{
-				overflow = true;
+				initialNames.addAll(currentNames);
+				initialReportedSize = reportedSize;
 			}
 		}
-		maxReportedSize = Math.max(maxReportedSize, reportedSize);
+		if (reportedSize > 0)
+		{
+			maxReportedSize = Math.max(maxReportedSize, reportedSize);
+			currentReportedSize = type == RaidType.COX ? reportedSize : maxReportedSize;
+		}
 	}
 
 	void finish()
 	{
+		completed = true;
+	}
+
+	void finishChambers(int teamPoints, int personalPoints)
+	{
+		if (completed) return;
+		completionNames.clear();
+		completionNames.addAll(currentNames);
+		completionReportedSize = currentReportedSize;
+		finalTeamPoints = teamPoints;
+		finalPersonalPoints = Math.max(0, personalPoints);
+		finalPointsCaptured = teamPoints > 0 && personalPoints >= 0;
 		completed = true;
 	}
 
@@ -98,13 +127,40 @@ final class RaidSession
 
 	void clearRoster()
 	{
-		names.clear();
+		initialNames.clear();
+		currentNames.clear();
+		completionNames.clear();
+		observedNames.clear();
 		maxReportedSize = 0;
 	}
 
+	int maxReportedSize() { return maxReportedSize; }
+	boolean hasFinalPoints() { return completed && finalPointsCaptured; }
+	int finalTeamPoints() { return finalTeamPoints; }
+	int finalPersonalPoints() { return finalPersonalPoints; }
+
+	GroupSnapshot initialSnapshot() { return snapshot(initialNames, initialReportedSize); }
+	GroupSnapshot currentSnapshot() { return snapshot(currentNames, currentReportedSize); }
+	GroupSnapshot completionSnapshot() { return snapshot(completionNames, completionReportedSize); }
+
 	GroupSnapshot snapshot()
 	{
-		List<String> unique = GroupSnapshot.uniqueNames(names);
+		GroupSnapshot base = completed && type == RaidType.COX ? completionSnapshot() : currentSnapshot();
+		if (!completed || type != RaidType.COX) return base;
+		return chambersRewardSnapshot();
+	}
+
+	GroupSnapshot chambersRewardSnapshot()
+	{
+		GroupSnapshot base = completed ? completionSnapshot() : currentSnapshot();
+		ChambersScoringPolicy policy = ChambersScoringPolicy.evaluate(this);
+		return new GroupSnapshot(base.source, base.names, base.expectedSize, base.status,
+			base.detail, policy.eligible, policy.explanation);
+	}
+
+	private GroupSnapshot snapshot(Collection<String> selectedNames, int reportedSize)
+	{
+		List<String> unique = GroupSnapshot.uniqueNames(selectedNames);
 		boolean includesLocal = unique.stream().anyMatch(name -> name.equalsIgnoreCase(localName));
 		String detail;
 		GroupSnapshot.Status status = GroupSnapshot.Status.INCOMPLETE;
@@ -120,11 +176,11 @@ final class RaidSession
 		{
 			detail = "Your RSN was not found in the game roster.";
 		}
-		else if (maxReportedSize <= 0)
+		else if (reportedSize <= 0)
 		{
 			detail = "The game team-size signal was unavailable.";
 		}
-		else if (unique.size() != maxReportedSize)
+		else if (unique.size() != reportedSize)
 		{
 			detail = "Name count and team-size signal disagree.";
 		}
@@ -133,6 +189,13 @@ final class RaidSession
 			status = GroupSnapshot.Status.MATCHED;
 			detail = "Includes you. Membership and bonuses not checked.";
 		}
-		return new GroupSnapshot(type.title + " / " + type.rosterSource, unique, maxReportedSize, status, detail);
+		if (completed && type == RaidType.COX)
+		{
+			List<String> departed = new java.util.ArrayList<>();
+			for (String name : observedNames)
+				if (unique.stream().noneMatch(current -> current.equalsIgnoreCase(name))) departed.add(name);
+			if (!departed.isEmpty()) detail += " departed_before_completion=" + departed.size() + ".";
+		}
+		return new GroupSnapshot(type.title + " / " + type.rosterSource, unique, reportedSize, status, detail);
 	}
 }

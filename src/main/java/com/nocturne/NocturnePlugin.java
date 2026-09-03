@@ -262,6 +262,11 @@ public class NocturnePlugin extends Plugin
 		return ScreenshotCapture.isLikelyEligible(items);
 	}
 
+	static boolean isSubmissionEligible(List<LootItem> items, GroupSnapshot group)
+	{
+		return isSubmissionEligible(items) && group.allowsSubmission();
+	}
+
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
@@ -323,7 +328,7 @@ public class NocturnePlugin extends Plugin
 			}
 		}
 		LootRecord record = new LootRecord(rsn, source, items, group);
-		boolean eligible = isSubmissionEligible(items);
+		boolean eligible = isSubmissionEligible(items, group);
 		if (!eligible)
 		{
 			record.submission = SubmissionStatus.INELIGIBLE;

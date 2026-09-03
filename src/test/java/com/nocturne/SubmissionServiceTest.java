@@ -40,6 +40,19 @@ public class SubmissionServiceTest
 	}
 
 	@Test
+	public void clientOnlyChambersPolicyDoesNotChangeVersionFourPayload()
+	{
+		GroupSnapshot group = new GroupSnapshot("Chambers", List.of("PrivateOtherPlayer"), 2,
+			GroupSnapshot.Status.MATCHED, "", false, "Below local contribution threshold");
+		JsonObject body = SubmissionService.payload(new LootRecord("Simons Alt", "Chambers of Xeric",
+			List.of(new LootItem(526, 1, "Bones", 32)), group));
+		assertEquals(6, body.entrySet().size());
+		assertFalse(body.has("group"));
+		assertFalse(body.toString().contains("PrivateOtherPlayer"));
+		assertFalse(body.toString().contains("contribution"));
+	}
+
+	@Test
 	public void payloadContainsConsolidatedStacksInFirstOccurrenceOrder()
 	{
 		LootRecord record = new LootRecord("Simons Alt", "Man", List.of(

@@ -171,14 +171,17 @@ public class RaidSessionTest
 	}
 
 	@Test
-	public void chambersSnapshotsUnionMembersAndSurviveWidgetDisappearance()
+	public void chambersCompletionUsesCurrentRosterAndSurvivesWidgetDisappearance()
 	{
 		RaidSession session = chambers(true, 1, 44);
 		session.observe(List.of("De Lena", "One"), 3, 2);
 		session.observe(List.of("De Lena", "Two"), 3, 7);
 		session.observe(List.of(), 0, 12);
-		assertEquals(List.of("De Lena", "One", "Two"), session.snapshot().names);
-		assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
+		assertEquals(List.of("De Lena", "One"), session.initialSnapshot().names);
+		assertEquals(List.of("De Lena", "Two"), session.currentSnapshot().names);
+		session.finishChambers(10_000, 1_000);
+		assertEquals(List.of("De Lena", "Two"), session.completionSnapshot().names);
+		assertTrue(session.snapshot().detail.contains("departed_before_completion=1"));
 	}
 
 	@Test
