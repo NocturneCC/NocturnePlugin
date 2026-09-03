@@ -21,6 +21,10 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.game.ItemManager;
 import java.awt.Dimension;
 import java.awt.Component;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 
 final class NocturnePanel extends PluginPanel
 {
@@ -44,9 +48,8 @@ final class NocturnePanel extends PluginPanel
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 	private final JTextArea raidDiagnostics = note("Raid diagnostics inactive.", BACKGROUND);
 	private final JTextArea raidVerification = note("Raid verification: waiting for Chambers.", BACKGROUND);
-	private ViewportAnchor pendingPrependAnchor;
-	private int viewportGeneration;
-	private boolean viewportRestoreScheduled;
+	private RestoreContext pendingPrependRestore;
+	private long viewportGeneration;
 	private long selectedHistoryGeneration;
 
 	NocturnePanel(ItemManager itemManager)
@@ -113,6 +116,7 @@ final class NocturnePanel extends PluginPanel
 		footer.add(clear);
 		footer.add(note("Stored locally per character. Persisted records are display-only and are never resubmitted.", BACKGROUND));
 		add(footer, BorderLayout.SOUTH);
+		installViewportInputTracking();
 		renderHistory();
 	}
 
@@ -127,8 +131,7 @@ final class NocturnePanel extends PluginPanel
 		selectedHistoryGeneration = generation;
 		if (history.setPlayer(rsn))
 		{
-			viewportGeneration++;
-			pendingPrependAnchor = null;
+			invalidateViewportRestores();
 			player.setText(rsn == null ? "Log in to see your character" : rsn);
 			liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 			setGroup(liveGroup);
@@ -155,7 +158,7 @@ final class NocturnePanel extends PluginPanel
 		if (append) history.appendOlder(page); else history.replace(page);
 		renderHistory();
 		loadOlder.setEnabled(true);
-		restoreAfterLayout(anchor, ++viewportGeneration);
+		restoreAfterLayout(anchor, beginIndependentRestore());
 	}
 
 	void historyLoadFailed(String rsn, long generation)
@@ -245,9 +248,9 @@ final class NocturnePanel extends PluginPanel
 
 	private void prepend(LootRecord record, Runnable afterAdd)
 	{
-		if (pendingPrependAnchor == null)
+		if (pendingPrependRestore == null)
 		{
-			pendingPrependAnchor = captureViewportAnchor();
+			pendingPrependRestore = new RestoreContext(captureViewportAnchor(), viewportGeneration);
 		}
 		history.add(record);
 		if (afterAdd != null) afterAdd.run();
@@ -263,26 +266,27 @@ final class NocturnePanel extends PluginPanel
 
 	private void schedulePrependRestore()
 	{
-		if (viewportRestoreScheduled)
-		{
-			return;
-		}
-		viewportRestoreScheduled = true;
-		int generation = viewportGeneration;
+		RestoreContext context = pendingPrependRestore;
+		if (context == null || context.scheduled) return;
+		context.scheduled = true;
 		SwingUtilities.invokeLater(() ->
 		{
-			ViewportAnchor anchor = pendingPrependAnchor;
-			if (generation == viewportGeneration) restoreViewport(anchor);
+			restoreIfCurrent(context);
 			SwingUtilities.invokeLater(() ->
 			{
-				viewportRestoreScheduled = false;
-				if (generation == viewportGeneration) restoreViewport(anchor);
-				if (pendingPrependAnchor == anchor) pendingPrependAnchor = null;
+				restoreIfCurrent(context);
+				if (pendingPrependRestore == context) pendingPrependRestore = null;
 			});
 		});
 	}
 
-	private void restoreAfterLayout(ViewportAnchor anchor, int generation)
+	private void restoreIfCurrent(RestoreContext context)
+	{
+		if (pendingPrependRestore == context && context.generation == viewportGeneration)
+			restoreViewport(context.anchor);
+	}
+
+	private void restoreAfterLayout(ViewportAnchor anchor, long generation)
 	{
 		SwingUtilities.invokeLater(() ->
 		{
@@ -293,6 +297,32 @@ final class NocturnePanel extends PluginPanel
 				if (generation == viewportGeneration) restoreViewport(anchor);
 			});
 		});
+	}
+
+	private void installViewportInputTracking()
+	{
+		getScrollPane().addMouseWheelListener(event -> invalidateViewportRestores());
+		JScrollBar bar = getScrollPane().getVerticalScrollBar();
+		bar.addMouseListener(new MouseAdapter()
+		{
+			@Override public void mousePressed(MouseEvent event) { invalidateViewportRestores(); }
+		});
+		bar.addKeyListener(new KeyAdapter()
+		{
+			@Override public void keyPressed(KeyEvent event) { invalidateViewportRestores(); }
+		});
+	}
+
+	private void invalidateViewportRestores()
+	{
+		viewportGeneration++;
+		pendingPrependRestore = null;
+	}
+
+	private long beginIndependentRestore()
+	{
+		invalidateViewportRestores();
+		return viewportGeneration;
 	}
 
 	private ViewportAnchor captureViewportAnchor()
@@ -356,9 +386,11 @@ final class NocturnePanel extends PluginPanel
 	{
 		if (diagnostics != enabled)
 		{
+			ViewportAnchor anchor = captureViewportAnchor();
 			diagnostics = enabled;
 			setGroup(liveGroup);
 			renderHistory();
+			restoreAfterLayout(anchor, beginIndependentRestore());
 		}
 		groupPreview.setVisible(enabled);
 		raidDiagnostics.setVisible(enabled);
@@ -375,8 +407,10 @@ final class NocturnePanel extends PluginPanel
 		{
 			if (record.id.equals(id))
 			{
+				ViewportAnchor anchor = captureViewportAnchor();
 				record.submission = status;
 				renderHistory();
+				restoreAfterLayout(anchor, beginIndependentRestore());
 				break;
 			}
 		}
@@ -481,6 +515,19 @@ final class NocturnePanel extends PluginPanel
 		{
 			this.recordId = recordId;
 			this.pixelOffset = pixelOffset;
+		}
+	}
+
+	private static final class RestoreContext
+	{
+		private final ViewportAnchor anchor;
+		private final long generation;
+		private boolean scheduled;
+
+		private RestoreContext(ViewportAnchor anchor, long generation)
+		{
+			this.anchor = anchor;
+			this.generation = generation;
 		}
 	}
 

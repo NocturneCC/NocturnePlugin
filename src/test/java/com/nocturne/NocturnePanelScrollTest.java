@@ -2,6 +2,11 @@ package com.nocturne;
 
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.awt.event.MouseWheelEvent;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.JComponent;
@@ -63,6 +68,66 @@ public class NocturnePanelScrollTest
 	}
 
 	@Test
+	public void userScrollAfterQueuedTopRestoreInvalidatesBothCallbacks() throws Exception
+	{
+		Harness h = harness(18);
+		onEdt(() ->
+		{
+			h.bar().setValue(0);
+			h.record("live");
+			h.layout();
+			h.mouseWheel();
+			h.bar().setValue(cardY(h, "old-5") + 8);
+		});
+		Anchor chosen = visibleAnchor(h);
+		flushEdt();
+		assertAnchor(h, chosen);
+		assertNotEquals(0, value(h));
+	}
+
+	@Test
+	public void userScrollBetweenRapidPrependsStartsANewAnchorGeneration() throws Exception
+	{
+		Harness h = harness(20);
+		positionAt(h, "old-3", 5);
+		onEdt(() ->
+		{
+			h.record("live-1");
+			h.layout();
+			h.scrollbarPress();
+			h.bar().setValue(cardY(h, "old-9") + 13);
+			h.record("live-2");
+			h.layout();
+		});
+		Anchor chosen = visibleAnchor(h);
+		flushEdt();
+		assertAnchor(h, chosen);
+	}
+
+	@Test
+	public void wheelThumbTrackAndKeyboardInputInvalidateQueuedRestore() throws Exception
+	{
+		for (int input = 0; input < 4; input++)
+		{
+			Harness h = harness(18);
+			final int kind = input;
+			onEdt(() ->
+			{
+				h.record("live-" + kind);
+				h.layout();
+				if (kind == 0) h.mouseWheel();
+				else if (kind == 1) h.scrollbarPressAt(4);
+				else if (kind == 2) h.scrollbarPressAt(Math.max(5, h.bar().getHeight() / 2));
+				else h.keyboardScroll();
+				h.bar().setValue(cardY(h, "old-6") + kind + 3);
+			});
+			Anchor chosen = visibleAnchor(h);
+			flushEdt();
+			assertAnchor(h, chosen);
+		}
+	}
+
+	@Test
 	public void paginationAppendsBelowWithoutMovingViewport() throws Exception
 	{
 		Harness h = harness(12);
@@ -77,6 +142,70 @@ public class NocturnePanelScrollTest
 		assertAnchor(h, before);
 		List<String> ids = cardIds(h);
 		assertEquals(List.of("older-1", "older-2"), ids.subList(ids.size() - 2, ids.size()));
+	}
+
+	@Test
+	public void paginationPreservesTopMiddleAndBottom() throws Exception
+	{
+		for (int position = 0; position < 3; position++)
+		{
+			Harness h = harness(18);
+			if (position == 0) onEdt(() -> h.bar().setValue(0));
+			else if (position == 1) positionAt(h, "old-7", 9);
+			else onEdt(() -> h.bar().setValue(h.bar().getMaximum() - h.bar().getVisibleAmount()));
+			Anchor before = visibleAnchor(h);
+			onEdt(() ->
+			{
+				h.panel.showHistory("Tester", new LootHistoryStore.Page(
+					List.of(record("older-a"), record("older-b")), 20, 200, false, 0), true);
+				h.layout();
+			});
+			flushEdt();
+			assertAnchor(h, before);
+		}
+	}
+
+	@Test
+	public void deferredCardRebuildPreservesVisualAnchorUnlessUserMoves() throws Exception
+	{
+		Harness h = harness(18);
+		Anchor before = positionAt(h, "old-8", 7);
+		onEdt(() -> { h.panel.setSubmission("old-1", SubmissionStatus.REJECTED); h.layout(); });
+		flushEdt();
+		assertAnchor(h, before);
+
+		onEdt(() ->
+		{
+			h.panel.setSubmission("old-2", SubmissionStatus.ACCEPTED);
+			h.layout();
+			h.keyboardScroll();
+			h.bar().setValue(cardY(h, "old-11") + 4);
+		});
+		Anchor chosen = visibleAnchor(h);
+		flushEdt();
+		assertAnchor(h, chosen);
+	}
+
+	@Test
+	public void callbacksFromEarlierSelectionCannotAffectSameAccountAfterRoundTrip() throws Exception
+	{
+		Harness h = harness(18);
+		onEdt(() ->
+		{
+			h.record("queued");
+			h.panel.setPlayer("Second");
+			h.panel.showHistory("Second", new LootHistoryStore.Page(
+				List.of(recordFor("second", "Second")), 1, 20, false, 0), false);
+			h.panel.setPlayer("Tester");
+			h.panel.showHistory("Tester", new LootHistoryStore.Page(
+				List.of(record("return-new"), record("return-old")), 2, 20, false, 0), false);
+			h.layout();
+			h.mouseWheel();
+			h.bar().setValue(cardY(h, "return-old") + 2);
+		});
+		Anchor chosen = visibleAnchor(h);
+		flushEdt();
+		assertAnchor(h, chosen);
 	}
 
 	@Test
@@ -227,6 +356,27 @@ public class NocturnePanelScrollTest
 		}
 		private JScrollPane scroll() { return panel.scrollPane(); }
 		private javax.swing.JScrollBar bar() { return scroll().getVerticalScrollBar(); }
+		private void mouseWheel()
+		{
+			MouseWheelEvent event = new MouseWheelEvent(scroll(), MouseEvent.MOUSE_WHEEL,
+				System.currentTimeMillis(), 0, 10, 10, 0, false,
+				MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1);
+			for (java.awt.event.MouseWheelListener listener : scroll().getMouseWheelListeners())
+				listener.mouseWheelMoved(event);
+		}
+		private void scrollbarPress() { scrollbarPressAt(8); }
+		private void scrollbarPressAt(int y)
+		{
+			MouseEvent event = new MouseEvent(bar(), MouseEvent.MOUSE_PRESSED,
+				System.currentTimeMillis(), 0, 2, y, 1, false);
+			for (MouseListener listener : bar().getMouseListeners()) listener.mousePressed(event);
+		}
+		private void keyboardScroll()
+		{
+			KeyEvent event = new KeyEvent(bar(), KeyEvent.KEY_PRESSED,
+				System.currentTimeMillis(), 0, KeyEvent.VK_PAGE_DOWN, KeyEvent.CHAR_UNDEFINED);
+			for (KeyListener listener : bar().getKeyListeners()) listener.keyPressed(event);
+		}
 		private void layout()
 		{
 			scroll().setSize(260, 320);
