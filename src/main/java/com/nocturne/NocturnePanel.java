@@ -425,6 +425,14 @@ final class NocturnePanel extends PluginPanel
 			{
 				card.add(note(record.group.eligibilityNote, CARD));
 			}
+			if (record.group.rosterState != null)
+			{
+				card.add(note("Roster snapshot: " + record.group.rosterState.replace('_', ' '), CARD));
+			}
+			if (record.group.scoringMode != null)
+			{
+				card.add(note("Proposed scoring mode: " + record.group.scoringMode, CARD));
+			}
 			if (record.group.status == GroupSnapshot.Status.MATCHED
 				|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
 			{

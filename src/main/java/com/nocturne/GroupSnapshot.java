@@ -18,14 +18,22 @@ final class GroupSnapshot
 	final String detail;
 	final Boolean submissionEligible;
 	final String eligibilityNote;
+	final String rosterState;
+	final String scoringMode;
 
 	GroupSnapshot(String source, Collection<String> names, int expectedSize, Status status, String detail)
 	{
-		this(source, names, expectedSize, status, detail, null, null);
+		this(source, names, expectedSize, status, detail, null, null, null, null);
 	}
 
 	GroupSnapshot(String source, Collection<String> names, int expectedSize, Status status, String detail,
 		Boolean submissionEligible, String eligibilityNote)
+	{
+		this(source, names, expectedSize, status, detail, submissionEligible, eligibilityNote, null, null);
+	}
+
+	GroupSnapshot(String source, Collection<String> names, int expectedSize, Status status, String detail,
+		Boolean submissionEligible, String eligibilityNote, String rosterState, String scoringMode)
 	{
 		this.source = source;
 		this.names = uniqueNames(names);
@@ -34,6 +42,8 @@ final class GroupSnapshot
 		this.detail = detail;
 		this.submissionEligible = submissionEligible;
 		this.eligibilityNote = eligibilityNote;
+		this.rosterState = rosterState;
+		this.scoringMode = scoringMode;
 	}
 
 	boolean allowsSubmission()

@@ -87,6 +87,31 @@ public class ChambersScoringPolicyTest
 		session.observe(List.of(), 0, 2);
 		session.finishChambers(10_000, 1_000);
 		assertEquals(List.of("Local", "One", "Two"), session.completionSnapshot().names);
+		assertEquals("RETAINED_PRE_COMPLETION", session.completionSnapshot().rosterState);
+		assertFalse(ChambersScoringPolicy.evaluate(session).eligible);
+	}
+
+	@Test public void deadMembersStillListedAtCompletionRemainInTheRoster()
+	{
+		RaidSession session = session(true);
+		session.observe(List.of("Local", "Dead Player", "Alive"), 3, 1);
+		// Death is not departure: the authoritative sidebar still supplies the row.
+		session.observe(List.of("Local", "Dead Player", "Alive"), 3, 2);
+		session.finishChambers(10_000, 1_000);
+		assertEquals(List.of("Alive", "Dead Player", "Local"), session.completionSnapshot().names);
+		assertEquals("COMPLETION", session.completionSnapshot().rosterState);
+		assertTrue(ChambersScoringPolicy.evaluate(session).eligible);
+	}
+
+	@Test public void completionPointsCannotBeOverwrittenByPostCompletionResetValues()
+	{
+		RaidSession session = session(true);
+		session.observe(List.of("Local", "One"), 2, 1);
+		session.finishChambers(20_000, 1_000);
+		session.finishChambers(0, 0);
+		assertEquals(20_000, session.finalTeamPoints());
+		assertEquals(1_000, session.finalPersonalPoints());
+		assertTrue(ChambersScoringPolicy.evaluate(session).eligible);
 	}
 
 	@Test public void rewardBeforeOfficialCompletionAndStaleSessionFailClosed()

@@ -24,7 +24,10 @@ final class RaidSession
 	private int initialReportedSize;
 	private int currentReportedSize;
 	private int completionReportedSize;
+	private int lastReportedSize;
 	private boolean completed;
+	private boolean lastRosterObservationVerified;
+	private boolean completionRosterRetained;
 	private boolean overflow;
 	private boolean finalPointsCaptured;
 	private int finalTeamPoints;
@@ -70,6 +73,12 @@ final class RaidSession
 		}
 		lastActiveTick = tick;
 		List<String> unique = GroupSnapshot.uniqueNames(observedNames);
+		if (type == RaidType.COX)
+		{
+			lastReportedSize = reportedSize;
+			lastRosterObservationVerified = reportedSize > 0 && unique.size() == reportedSize
+				&& unique.stream().anyMatch(name -> name.equalsIgnoreCase(localName));
+		}
 		if (!unique.isEmpty())
 		{
 			if (type == RaidType.COX) currentNames.clear();
@@ -102,7 +111,9 @@ final class RaidSession
 		if (completed) return;
 		completionNames.clear();
 		completionNames.addAll(currentNames);
-		completionReportedSize = currentReportedSize;
+		completionRosterRetained = !lastRosterObservationVerified;
+		completionReportedSize = completionRosterRetained && lastReportedSize > 0
+			? lastReportedSize : currentReportedSize;
 		finalTeamPoints = teamPoints;
 		finalPersonalPoints = Math.max(0, personalPoints);
 		finalPointsCaptured = teamPoints > 0 && personalPoints >= 0;
@@ -138,10 +149,19 @@ final class RaidSession
 	boolean hasFinalPoints() { return completed && finalPointsCaptured; }
 	int finalTeamPoints() { return finalTeamPoints; }
 	int finalPersonalPoints() { return finalPersonalPoints; }
+	boolean completionRosterRetained() { return completionRosterRetained; }
 
-	GroupSnapshot initialSnapshot() { return snapshot(initialNames, initialReportedSize); }
-	GroupSnapshot currentSnapshot() { return snapshot(currentNames, currentReportedSize); }
-	GroupSnapshot completionSnapshot() { return snapshot(completionNames, completionReportedSize); }
+	GroupSnapshot initialSnapshot() { return snapshot(initialNames, initialReportedSize, "INITIAL_OBSERVED"); }
+	GroupSnapshot currentSnapshot()
+	{
+		return snapshot(currentNames, currentReportedSize,
+			lastRosterObservationVerified ? "CURRENT_OBSERVED" : "RETAINED_CURRENT");
+	}
+	GroupSnapshot completionSnapshot()
+	{
+		return snapshot(completionNames, completionReportedSize,
+			completionRosterRetained ? "RETAINED_PRE_COMPLETION" : "COMPLETION");
+	}
 
 	GroupSnapshot snapshot()
 	{
@@ -155,10 +175,10 @@ final class RaidSession
 		GroupSnapshot base = completed ? completionSnapshot() : currentSnapshot();
 		ChambersScoringPolicy policy = ChambersScoringPolicy.evaluate(this);
 		return new GroupSnapshot(base.source, base.names, base.expectedSize, base.status,
-			base.detail, policy.eligible, policy.explanation);
+			base.detail, policy.eligible, policy.explanation, base.rosterState, policy.mode.name());
 	}
 
-	private GroupSnapshot snapshot(Collection<String> selectedNames, int reportedSize)
+	private GroupSnapshot snapshot(Collection<String> selectedNames, int reportedSize, String rosterState)
 	{
 		List<String> unique = GroupSnapshot.uniqueNames(selectedNames);
 		boolean includesLocal = unique.stream().anyMatch(name -> name.equalsIgnoreCase(localName));
@@ -196,6 +216,7 @@ final class RaidSession
 				if (unique.stream().noneMatch(current -> current.equalsIgnoreCase(name))) departed.add(name);
 			if (!departed.isEmpty()) detail += " departed_before_completion=" + departed.size() + ".";
 		}
-		return new GroupSnapshot(type.title + " / " + type.rosterSource, unique, reportedSize, status, detail);
+		return new GroupSnapshot(type.title + " / " + type.rosterSource, unique, reportedSize,
+			status, detail, null, null, rosterState, null);
 	}
 }

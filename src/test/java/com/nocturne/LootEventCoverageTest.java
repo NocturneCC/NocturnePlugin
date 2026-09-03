@@ -50,6 +50,18 @@ public class LootEventCoverageTest
 	}
 
 	@Test
+	public void panelLabelsRosterProvenanceAndProposedScoringMode()
+	{
+		GroupSnapshot group = new GroupSnapshot("Chambers", List.of("First"), 1,
+			GroupSnapshot.Status.MATCHED, "", true, "Eligible",
+			"RETAINED_PRE_COMPLETION", "SOLO_PERSONAL_ONLY");
+		List<String> labels = labels(new NocturnePanel(null).renderRecord(
+			new LootRecord("First", "Chambers of Xeric", List.of(), group)));
+		assertTrue(labels.contains("Roster snapshot: RETAINED PRE COMPLETION"));
+		assertTrue(labels.contains("Proposed scoring mode: SOLO_PERSONAL_ONLY"));
+	}
+
+	@Test
 	public void recognizedRaidsRetainRaidClassification()
 	{
 		assertEquals(NocturnePlugin.LootOrigin.RAID_EVENT,

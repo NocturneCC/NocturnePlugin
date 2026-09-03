@@ -143,10 +143,13 @@ public class RaidSessionTest
 		{
 			RaidSession session = chambers(true, 11, -1);
 			session.observe(List.of("De Lena"), 1, 1);
+			assertEquals(List.of("De Lena"), session.initialSnapshot().names);
 			session.updatePartyGroup(41);
 			session.updatePartyGroup(42);
 			session.observe(List.of("Bifuor", "De Lena", "Not ZB"), 3, 2);
 			assertEquals(42, session.partyGroup());
+			assertEquals(3, session.maxReportedSize());
+			assertEquals(List.of("De Lena"), session.initialSnapshot().names);
 			assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
 			assertFalse(GroupTracker.startsNewRaidSession(RaidType.COX, RaidType.COX));
 		}

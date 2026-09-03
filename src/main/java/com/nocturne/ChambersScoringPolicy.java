@@ -37,6 +37,11 @@ final class ChambersScoringPolicy
 			return new ChambersScoringPolicy(mode, true,
 				"Mass raid: local recipient only, standard personal 1x; no roster split or 5% test.");
 		}
+		if (session.completionRosterRetained())
+		{
+			return new ChambersScoringPolicy(mode, false,
+				"Not eligible: completion used a retained pre-completion roster; departures cannot be ruled out.");
+		}
 		if (session.completionSnapshot().status != GroupSnapshot.Status.MATCHED)
 		{
 			return new ChambersScoringPolicy(mode, false,
