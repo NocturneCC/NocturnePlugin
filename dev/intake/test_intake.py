@@ -34,6 +34,36 @@ class IntakeTest(unittest.TestCase):
         output = self.app(environ, lambda status, headers: result.append(int(status.split()[0])))
         return result[0], json.loads(b"".join(output))
 
+    def presence(self, rsn="Simons Alt", **changes):
+        body = {"presence_version": 1, "checkin_id": str(uuid4()), "rsn": rsn,
+                "raid_type": "COX_CM", "state": "heartbeat", "world": 420,
+                "party_group_holder": 7, "raid_epoch": str(uuid4()),
+                "raid_started_at": int(self.now) - 10, "observed_at": int(self.now),
+                "max_scale": 3, "final_party_size": None, "final_personal_points": None,
+                "final_team_points": None, "contribution_basis_points": None,
+                "proposed_scoring_mode": "NORMAL_GROUP", "completion_at": None,
+                "reward_observed_at": None}
+        body.update(changes)
+        raw = json.dumps(body).encode()
+        return body, self.send(raw=raw, PATH_INFO="/api/plugin/dev/raid-presence")
+
+    def test_presence_protocol_is_separate_idempotent_and_allowlisted(self):
+        body, (code, receipt) = self.presence()
+        self.assertEqual((201, "stored"), (code, receipt["status"]))
+        raw = json.dumps(body).encode()
+        code, receipt = self.send(raw=raw, PATH_INFO="/api/plugin/dev/raid-presence")
+        self.assertEqual((200, "duplicate"), (code, receipt["status"]))
+        self.assertFalse(receipt["automatic_awards_enabled"])
+        self.assertEqual(0, receipt["point_writes"])
+        self.assertEqual(403, self.presence("Other Player")[1][0])
+        with closing(sqlite3.connect(Path(self.temp.name) / "test-drops.sqlite3")) as db:
+            self.assertEqual(0, db.execute("SELECT count(*) FROM test_drops").fetchone()[0])
+
+    def test_presence_eligible_identity_outside_pilot_allowlist_is_rejected(self):
+        self.app = create_app(self.temp.name, ["Simons Alt"], clock=lambda: self.now,
+                              presence_identity_resolver=lambda _rsn: 2)
+        self.assertEqual(403, self.presence("Other Player")[1][0])
+
     def test_receipt_matches_committed_record_and_duplicate_does_not_add_row(self):
         code, receipt = self.send()
         self.assertEqual(201, code)

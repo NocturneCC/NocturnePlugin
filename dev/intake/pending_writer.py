@@ -11,7 +11,7 @@ import socket
 import sqlite3
 
 from import_pending import REQUIRED_COLUMNS, apply_candidates, plan, schema_columns
-from intake import MAX_BODY, validate, validate_screenshot
+from intake import MAX_BODY, normalize_rsn, validate, validate_screenshot
 from preview import identity, inspect_item, readonly
 from screenshot_lifecycle import (AUDIT, EVIDENCE, LINKS, refresh_submission_events,
                                   require_compatible_schema)
@@ -214,7 +214,16 @@ def response_bytes(body):
 
 def handle_connection(connection, database_dir):
     try:
-        body = process_payload(read_request(connection), database_dir)
+        request = read_request(connection)
+        if isinstance(request, dict) and set(request) == {"operation", "rsn"} \
+                and request["operation"] == "raid_presence_identity":
+            normalized = normalize_rsn(request["rsn"])
+            with readonly(Path(database_dir) / "Members.db") as members:
+                match = identity(members, normalized)
+            body = ({"status": "presence_identity", "member_key": match["member_id"]}
+                    if match.get("status") == "matched" else {"status": "rejected"})
+        else:
+            body = process_payload(request, database_dir)
     except (ValueError, TypeError, AttributeError, OverflowError,
             RecursionError, json.JSONDecodeError):
         body = {"status": "rejected"}

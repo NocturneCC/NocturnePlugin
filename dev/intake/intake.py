@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 from derived_values import validate_item_valuation
+from raid_presence import process as process_raid_presence
 
 MAX_METADATA_BODY = 8192
 MAX_SCREENSHOT_BYTES = 240 * 1024
@@ -52,7 +53,7 @@ def socket_handoff(socket_path, canonical, timeout=0.5):
         raise ValueError("handoff response too large")
     receipt = json.loads(response)
     if not isinstance(receipt, dict) or receipt.get("status") not in {
-        "pending_stored", "duplicate", "excluded"
+        "pending_stored", "duplicate", "excluded", "presence_identity"
     }:
         raise ValueError("invalid handoff receipt")
     return receipt
@@ -156,7 +157,8 @@ def screenshot_digest(data):
     return data.get("screenshot", {}).get("sha256")
 
 
-def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
+def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
+               presence_identity_resolver=None):
     state_dir = state_dir or os.environ["NOCTURNE_INTAKE_STATE"]
     if allowed_rsns is None:
         allowed_rsns = os.environ["NOCTURNE_TEST_RSNS"].split(",")
@@ -164,13 +166,23 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
     if not allowed:
         raise ValueError("At least one test RSN is required")
     clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
+    socket_path = os.environ.get("NOCTURNE_PENDING_SOCKET")
     if handoff is None:
-        socket_path = os.environ.get("NOCTURNE_PENDING_SOCKET")
         handoff = ((lambda canonical: socket_handoff(socket_path, canonical))
                    if socket_path else (lambda canonical: None))
     directory = Path(state_dir)
     directory.mkdir(parents=True, exist_ok=True)
     database = directory / "test-drops.sqlite3"
+    presence_database = directory / "raid-presence-v1.sqlite3"
+    if presence_identity_resolver is None:
+        if socket_path:
+            def presence_identity_resolver(rsn):
+                request = json.dumps({"operation": "raid_presence_identity", "rsn": rsn},
+                                     sort_keys=True, separators=(",", ":"))
+                receipt = socket_handoff(socket_path, request)
+                return receipt.get("member_key") if receipt.get("status") == "presence_identity" else None
+        else:
+            presence_identity_resolver = lambda rsn: rsn if rsn in allowed else None
 
     @contextmanager
     def connect():
@@ -210,7 +222,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
     def application(environ, start_response):
         def error(code):
             return reply(start_response, code, {"status": "not_accepted", "storage": "development"})
-        if environ.get("PATH_INFO") != "/api/plugin/dev/drops":
+        path = environ.get("PATH_INFO")
+        if path not in {"/api/plugin/dev/drops", "/api/plugin/dev/raid-presence"}:
             return error(404)
         if environ.get("REQUEST_METHOD") != "POST":
             return error(405)
@@ -220,7 +233,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
             length = int(environ.get("CONTENT_LENGTH", ""))
         except (ValueError, TypeError):
             return error(411)
-        if length < 1 or length > MAX_BODY:
+        limit = MAX_METADATA_BODY if path == "/api/plugin/dev/raid-presence" else MAX_BODY
+        if length < 1 or length > limit:
             return error(413)
         try:
             raw = environ["wsgi.input"].read(length)
@@ -228,9 +242,22 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None):
                 return error(400)
             data = json.loads(raw)
             now = clock()
+            if path == "/api/plugin/dev/raid-presence":
+                submitted_rsn = normalize_rsn(data.get("rsn"))
+                if submitted_rsn not in allowed:
+                    return error(403)
+                result = process_raid_presence(
+                    presence_database, data,
+                    lambda rsn: presence_identity_resolver(rsn) if rsn in allowed else None,
+                    now)
+                return reply(start_response, 200 if result["status"] == "duplicate" else 201, result)
             name, canonical = validate(data, now)
             stored = storage_payload(data, name)
             digest = screenshot_digest(data)
+        except PermissionError:
+            return error(403)
+        except sqlite3.Error:
+            return error(503)
         except (ValueError, TypeError, OverflowError, RecursionError, AttributeError):
             return error(400)
         if name not in allowed:

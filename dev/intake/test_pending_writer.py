@@ -279,6 +279,22 @@ class PendingWriterTest(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual("pending_stored", receipt["status"])
 
+    def test_presence_identity_rpc_requires_unique_active_identity(self):
+        def request(rsn):
+            server, client = socket.socketpair()
+            self.addCleanup(server.close)
+            self.addCleanup(client.close)
+            worker = threading.Thread(target=handle_connection, args=(server, self.root))
+            worker.start()
+            client.sendall(json.dumps({"operation": "raid_presence_identity", "rsn": rsn}).encode())
+            client.shutdown(socket.SHUT_WR)
+            receipt = json.loads(client.recv(2048))
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            return receipt
+        self.assertEqual({"member_key": 2, "status": "presence_identity"}, request("Test Alt"))
+        self.assertEqual("rejected", request("Unknown")["status"])
+
     def test_socket_handoff_accepts_writer_receipt(self):
         class FakeSocket:
             def __init__(self):
