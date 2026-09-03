@@ -23,7 +23,7 @@ def schema(db):
       party_holder INTEGER NOT NULL, start_bucket INTEGER NOT NULL,
       created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS raid_presence_checkins(
-      fingerprint TEXT NOT NULL, rsn TEXT NOT NULL, member_key TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, rsn TEXT NOT NULL, member_id INTEGER NOT NULL,
       raid_epoch TEXT NOT NULL, state TEXT NOT NULL, observed_at INTEGER NOT NULL,
       max_scale INTEGER NOT NULL, final_party_size INTEGER,
       final_personal_points INTEGER, final_team_points INTEGER,
@@ -140,7 +140,7 @@ def process(db_path, data, identity_resolver, now=None):
           contribution_bp=coalesce(excluded.contribution_bp,contribution_bp),
           scoring_mode=excluded.scoring_mode,completion_at=coalesce(excluded.completion_at,completion_at),
           reward_observed_at=coalesce(excluded.reward_observed_at,reward_observed_at),payload_hash=excluded.payload_hash""",
-                   (fingerprint, rsn, str(member_key), data["raid_epoch"], data["state"], data["observed_at"],
+                   (fingerprint, rsn, member_key, data["raid_epoch"], data["state"], data["observed_at"],
                     data["max_scale"], data["final_party_size"], data["final_personal_points"],
                     data["final_team_points"], data["contribution_basis_points"], data["proposed_scoring_mode"],
                     data["completion_at"], data["reward_observed_at"], digest))
@@ -150,7 +150,7 @@ def process(db_path, data, identity_resolver, now=None):
 
 
 def _result(db, fingerprint, duplicate):
-    rows = db.execute("SELECT rsn,state,final_party_size,final_team_points,contribution_bp,scoring_mode,completion_at,member_key "
+    rows = db.execute("SELECT rsn,state,final_party_size,final_team_points,contribution_bp,scoring_mode,completion_at,member_id "
                       "FROM raid_presence_checkins WHERE fingerprint=?", (fingerprint,)).fetchall()
     completed = [row for row in rows if row[1] in {"completion", "reward_observed"}]
     sizes = {row[2] for row in completed}

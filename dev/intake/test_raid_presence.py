@@ -103,8 +103,8 @@ class RaidPresenceTest(unittest.TestCase):
             both["proposed_recipient_count"]))
         self.assertTrue(both["group_qualified"])
         with sqlite3.connect(self.db) as db:
-            rows = db.execute("SELECT rsn,member_key FROM raid_presence_checkins ORDER BY rsn").fetchall()
-        self.assertEqual([("one", "2"), ("two", "2")], rows)
+            rows = db.execute("SELECT rsn,member_id,typeof(member_id) FROM raid_presence_checkins ORDER BY rsn").fetchall()
+        self.assertEqual([("one", 2, "integer"), ("two", 2, "integer")], rows)
 
     def test_linked_account_contributions_stay_account_specific(self):
         self.send(self.payload("One", size=2, personal=500))
