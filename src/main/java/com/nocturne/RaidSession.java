@@ -88,7 +88,7 @@ final class RaidSession
 		}
 		lastActiveTick = tick;
 		List<String> unique = GroupSnapshot.uniqueNames(observedNames);
-		if (type == RaidType.COX)
+		if (type == RaidType.COX || type == RaidType.TOA)
 		{
 			lastReportedSize = reportedSize;
 			lastRosterObservationVerified = reportedSize > 0 && unique.size() == reportedSize
@@ -96,7 +96,7 @@ final class RaidSession
 		}
 		if (!unique.isEmpty())
 		{
-			if (type == RaidType.COX) currentNames.clear();
+			if (type == RaidType.COX || type == RaidType.TOA) currentNames.clear();
 			for (String name : unique)
 			{
 				if (currentNames.size() >= 100) { overflow = true; break; }
@@ -112,13 +112,30 @@ final class RaidSession
 		if (reportedSize > 0)
 		{
 			maxReportedSize = Math.max(maxReportedSize, reportedSize);
-			currentReportedSize = type == RaidType.COX ? reportedSize : maxReportedSize;
+			currentReportedSize = type == RaidType.COX || type == RaidType.TOA
+				? reportedSize : maxReportedSize;
 		}
 	}
 
 	void finish()
 	{
 		completed = true;
+	}
+
+	void finishTombs(boolean freshCompletionRead)
+	{
+		if (completed || type != RaidType.TOA) return;
+		completionNames.clear();
+		completionNames.addAll(currentNames);
+		completionReportedSize = lastReportedSize > 0 ? lastReportedSize : currentReportedSize;
+		completionRosterRetained = !freshCompletionRead || !lastRosterObservationVerified;
+		completedAt = Instant.now().getEpochSecond();
+		completed = true;
+	}
+
+	boolean hasVerifiedCurrentRoster()
+	{
+		return lastRosterObservationVerified;
 	}
 
 	void finishChambers(int teamPoints, int personalPoints)
@@ -192,7 +209,8 @@ final class RaidSession
 
 	GroupSnapshot snapshot()
 	{
-		GroupSnapshot base = completed && type == RaidType.COX ? completionSnapshot() : currentSnapshot();
+		GroupSnapshot base = completed && (type == RaidType.COX || type == RaidType.TOA)
+			? completionSnapshot() : currentSnapshot();
 		if (!completed || type != RaidType.COX) return base;
 		return chambersRewardSnapshot();
 	}

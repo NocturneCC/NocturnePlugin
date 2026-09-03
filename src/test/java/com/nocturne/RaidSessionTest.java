@@ -66,6 +66,41 @@ public class RaidSessionTest
 	}
 
 	@Test
+	public void tombsRetainsLastCompleteAuthoritativeRosterWhenSlotsDisappear()
+	{
+		RaidSession session = new RaidSession(RaidType.TOA, "De Lena", true, 0);
+		session.observe(List.of("Bifuor", "De Lena", "Smooth"), 3, 1);
+		session.observe(List.of(), 0, 2);
+		session.finishTombs(false);
+		GroupSnapshot snapshot = session.snapshot();
+		assertEquals(List.of("Bifuor", "De Lena", "Smooth"), snapshot.names);
+		assertEquals(3, snapshot.expectedSize);
+		assertEquals(GroupSnapshot.Status.MATCHED, snapshot.status);
+		assertEquals("RETAINED_PRE_COMPLETION", snapshot.rosterState);
+	}
+
+	@Test
+	public void tombsFreshCompleteSlotReadHasCompletionProvenance()
+	{
+		RaidSession session = new RaidSession(RaidType.TOA, "De Lena", true, 0);
+		session.observe(List.of("Bifuor", "De Lena", "Smooth"), 3, 1);
+		session.finishTombs(true);
+		assertEquals("COMPLETION", session.snapshot().rosterState);
+		assertEquals(GroupSnapshot.Status.MATCHED, session.snapshot().status);
+	}
+
+	@Test
+	public void tombsPointInTimeSlotsDoNotRetainDepartedNames()
+	{
+		RaidSession session = new RaidSession(RaidType.TOA, "De Lena", true, 0);
+		session.observe(List.of("Bifuor", "De Lena", "Smooth"), 3, 1);
+		session.observe(List.of("De Lena", "Smooth"), 2, 2);
+		session.finishTombs(true);
+		assertEquals(List.of("De Lena", "Smooth"), session.snapshot().names);
+		assertEquals(2, session.snapshot().expectedSize);
+	}
+
+	@Test
 	public void changedTeamAndOldSnapshotsStayDistinct()
 	{
 		RaidSession session = session(true);

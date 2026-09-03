@@ -83,7 +83,8 @@ final class GroupTracker
 		{
 			if (active != null && session != null)
 			{
-				if (session.type != RaidType.COX) session.finish();
+				if (session.type == RaidType.TOA) session.finishTombs(false);
+				else if (session.type != RaidType.COX) session.finish();
 			}
 			active = null;
 			if (session != null && session.type == RaidType.COX) instanceObserved.stop(session.runEpoch);
@@ -279,6 +280,13 @@ final class GroupTracker
 			{
 				return GroupSnapshot.unavailable("No retained roster for this raid reward.");
 			}
+			// LootReceived can precede the next GameTick after the ToA party slots
+			// disappear. Freeze the last verified slot snapshot here as retained,
+			// rather than presenting it as still-current or as completion-fresh.
+			if (raid == RaidType.TOA && activeRaid() != RaidType.TOA)
+			{
+				session.finishTombs(false);
+			}
 			return session.snapshot();
 		}
 		if (active != null && session != null) return session.snapshot();
@@ -329,8 +337,17 @@ final class GroupTracker
 		if (session != null && message.startsWith("your ") && message.contains("count is")
 			&& RaidType.fromSource(message) == session.type)
 		{
-			capture();
-			session.finish();
+			if (session.type == RaidType.TOA)
+			{
+				boolean slotsStillActive = activeRaid() == RaidType.TOA;
+				if (slotsStillActive) capture();
+				session.finishTombs(slotsStillActive && session.hasVerifiedCurrentRoster());
+			}
+			else
+			{
+				capture();
+				session.finish();
+			}
 			current = session.snapshot();
 		}
 		return false;
