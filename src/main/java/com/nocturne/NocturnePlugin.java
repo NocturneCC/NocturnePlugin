@@ -26,6 +26,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.NpcLootReceived;
+import net.runelite.api.events.PlayerSpawned;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.plugins.Plugin;
@@ -228,6 +229,13 @@ public class NocturnePlugin extends Plugin
 	{
 		String source = event.getNpc() == null ? null : event.getNpc().getName();
 		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), LootOrigin.NPC);
+	}
+
+	@Subscribe
+	public void onPlayerSpawned(PlayerSpawned event)
+	{
+		GroupTracker tracker = groups;
+		if (tracker != null && config.trackNpcLoot()) tracker.onPlayerObserved(event.getPlayer());
 	}
 
 	@Subscribe

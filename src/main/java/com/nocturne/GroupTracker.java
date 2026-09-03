@@ -41,6 +41,7 @@ final class GroupTracker
 	private boolean diagnosticsEnabled;
 	private boolean diagnosticsFrozen;
 	private String lastStructure;
+	private final InstanceObservedEvidence instanceObserved = new InstanceObservedEvidence();
 
 	GroupTracker(Client client)
 	{
@@ -59,6 +60,7 @@ final class GroupTracker
 		diagnostics = RaidDiagnostics.INACTIVE;
 		diagnosticsFrozen = false;
 		lastStructure = null;
+		instanceObserved.clear();
 	}
 
 	void setDiagnosticsEnabled(boolean enabled)
@@ -84,6 +86,7 @@ final class GroupTracker
 				if (session.type != RaidType.COX) session.finish();
 			}
 			active = null;
+			if (session != null && session.type == RaidType.COX) instanceObserved.stop(session.runEpoch);
 			outsideObserved = true;
 			if (session != null && session.expired(tick))
 			{
@@ -112,6 +115,7 @@ final class GroupTracker
 			outsideObserved = false;
 			scanTicks = 5;
 			diagnosticsFrozen = false;
+			if (raid == RaidType.COX) instanceObserved.begin(session.runEpoch, visibleRaidPlayers(), tick);
 		}
 		else if (raid == RaidType.COX && session != null)
 		{
@@ -140,6 +144,43 @@ final class GroupTracker
 	RaidDiagnostics diagnostics()
 	{
 		return diagnostics;
+	}
+
+	InstanceObservedEvidence.Snapshot instanceObserved()
+	{
+		return instanceObserved.snapshot();
+	}
+
+	void onPlayerObserved(Player player)
+	{
+		if (active != RaidType.COX || session == null || player == null || player.getWorldView() == null) return;
+		WorldView root = client.getTopLevelWorldView();
+		if (!containsWorldView(root, player.getWorldView(), 0)) return;
+		instanceObserved.observe(session.runEpoch, List.of(player.getName()), tick);
+	}
+
+	private List<String> visibleRaidPlayers()
+	{
+		List<String> names = new ArrayList<>();
+		collectPlayers(client.getTopLevelWorldView(), names, 0);
+		return names;
+	}
+
+	private static void collectPlayers(WorldView view, List<String> names, int depth)
+	{
+		if (view == null || depth > 8 || names.size() >= 100) return;
+		for (Player player : view.players())
+			if (player != null && player.getName() != null && names.size() < 100) names.add(player.getName());
+		for (WorldView nested : view.worldViews()) collectPlayers(nested, names, depth + 1);
+	}
+
+	private static boolean containsWorldView(WorldView root, WorldView target, int depth)
+	{
+		if (root == null || depth > 8) return false;
+		if (root == target) return true;
+		for (WorldView nested : root.worldViews())
+			if (containsWorldView(nested, target, depth + 1)) return true;
+		return false;
 	}
 
 	private RaidType activeRaid()
@@ -266,6 +307,7 @@ final class GroupTracker
 		if (session != null && session.type == RaidType.COX && isChambersCompletionMessage(message))
 		{
 			capture();
+			instanceObserved.complete(session.runEpoch, tick);
 			session.finishChambers(client.getVarbitValue(VarbitID.RAIDS_CLIENT_PARTYSCORE),
 				client.getVarpValue(VarPlayerID.RAIDS_PLAYERSCORE));
 			current = session.snapshot();
