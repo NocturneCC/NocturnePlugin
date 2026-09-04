@@ -14,6 +14,21 @@ import static org.junit.Assert.*;
 public class LootEventCoverageTest
 {
 	@Test
+	public void unavailablePricesAreNotDescribedAsBelowThreshold()
+	{
+		LootItem unavailable = new LootItem(1, 1, "Unknown", 0);
+		assertEquals(SubmissionStatus.UNPRICED,
+			NocturnePlugin.ineligibleStatus(List.of(unavailable)));
+		assertTrue(SubmissionStatus.UNPRICED.label.contains("price unavailable"));
+		assertFalse(SubmissionStatus.UNPRICED.label.contains("below 500,000"));
+
+		LootItem valuedBelowThreshold = new LootItem(2, 1, "Known", 499_999);
+		assertEquals(SubmissionStatus.INELIGIBLE,
+			NocturnePlugin.ineligibleStatus(List.of(unavailable, valuedBelowThreshold)));
+		assertFalse(NocturnePlugin.isSubmissionEligible(List.of(valuedBelowThreshold)));
+	}
+
+	@Test
 	public void barrowsEventIsGenericAndRendersInPanel()
 	{
 		assertEquals(NocturnePlugin.LootOrigin.GENERIC_EVENT,

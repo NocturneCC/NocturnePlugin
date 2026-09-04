@@ -279,6 +279,12 @@ public class NocturnePlugin extends Plugin
 		return isSubmissionEligible(items) && group.allowsSubmission();
 	}
 
+	static SubmissionStatus ineligibleStatus(List<LootItem> items)
+	{
+		return items.stream().anyMatch(item -> item.unitPriceGp > 0)
+			? SubmissionStatus.INELIGIBLE : SubmissionStatus.UNPRICED;
+	}
+
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
@@ -350,7 +356,7 @@ public class NocturnePlugin extends Plugin
 		boolean eligible = isSubmissionEligible(items, group);
 		if (!eligible)
 		{
-			record.submission = SubmissionStatus.INELIGIBLE;
+			record.submission = ineligibleStatus(items);
 		}
 		persist(record, false);
 		SubmissionService sender = submissions;
