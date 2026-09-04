@@ -131,6 +131,22 @@ public class RaidSessionTest
 	}
 
 	@Test
+	public void transientIncompletePartySlotsDoNotDestroyLastVerifiedRetainedRoster()
+	{
+		for (RaidType type : List.of(RaidType.TOA, RaidType.TOB))
+		{
+			RaidSession session = new RaidSession(type, "De Lena", true, 0);
+			session.observe(List.of("Bifuor", "De Lena", "Smooth"), 3, 1);
+			session.observe(List.of("De Lena"), 3, 2);
+			if (type == RaidType.TOA) session.finishTombs(false);
+			else session.finishTheatre(false);
+			assertEquals(List.of("Bifuor", "De Lena", "Smooth"), session.snapshot().names);
+			assertEquals(3, session.snapshot().expectedSize);
+			assertEquals("RETAINED_PRE_COMPLETION", session.snapshot().rosterState);
+		}
+	}
+
+	@Test
 	public void changedTeamAndOldSnapshotsStayDistinct()
 	{
 		RaidSession session = session(true);

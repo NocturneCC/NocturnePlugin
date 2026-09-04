@@ -23,6 +23,7 @@ final class RaidSession
 	private final Set<String> initialNames = new LinkedHashSet<>();
 	private final Set<String> currentNames = new LinkedHashSet<>();
 	private final Set<String> completionNames = new LinkedHashSet<>();
+	private final Set<String> lastVerifiedNames = new LinkedHashSet<>();
 	private final Set<String> observedNames = new LinkedHashSet<>();
 	private final Set<String> rewardSignatures = new HashSet<>();
 	private int maxReportedSize;
@@ -30,6 +31,7 @@ final class RaidSession
 	private int currentReportedSize;
 	private int completionReportedSize;
 	private int lastReportedSize;
+	private int lastVerifiedReportedSize;
 	private boolean completed;
 	private boolean lastRosterObservationVerified;
 	private boolean completionRosterRetained;
@@ -115,6 +117,12 @@ final class RaidSession
 			currentReportedSize = type == RaidType.COX || type == RaidType.TOA || type == RaidType.TOB
 				? reportedSize : maxReportedSize;
 		}
+		if ((type == RaidType.TOA || type == RaidType.TOB) && lastRosterObservationVerified)
+		{
+			lastVerifiedNames.clear();
+			lastVerifiedNames.addAll(currentNames);
+			lastVerifiedReportedSize = reportedSize;
+		}
 	}
 
 	void finish()
@@ -138,9 +146,18 @@ final class RaidSession
 	{
 		if (completed) return;
 		completionNames.clear();
-		completionNames.addAll(currentNames);
-		completionReportedSize = lastReportedSize > 0 ? lastReportedSize : currentReportedSize;
-		completionRosterRetained = !freshCompletionRead || !lastRosterObservationVerified;
+		boolean freshVerified = freshCompletionRead && lastRosterObservationVerified;
+		if (freshVerified || lastVerifiedNames.isEmpty())
+		{
+			completionNames.addAll(currentNames);
+			completionReportedSize = lastReportedSize > 0 ? lastReportedSize : currentReportedSize;
+		}
+		else
+		{
+			completionNames.addAll(lastVerifiedNames);
+			completionReportedSize = lastVerifiedReportedSize;
+		}
+		completionRosterRetained = !freshVerified;
 		completedAt = Instant.now().getEpochSecond();
 		completed = true;
 	}
@@ -186,6 +203,7 @@ final class RaidSession
 		initialNames.clear();
 		currentNames.clear();
 		completionNames.clear();
+		lastVerifiedNames.clear();
 		observedNames.clear();
 	}
 
