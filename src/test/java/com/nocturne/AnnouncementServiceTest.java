@@ -154,6 +154,12 @@ public class AnnouncementServiceTest
 			withInvalid(raw);
 		}
 		withInvalid("x".repeat(AnnouncementService.MAX_RESPONSE_BYTES + 1));
+		try
+		{
+			AnnouncementService.decodeUtf8(new byte[] {(byte) 0xc3, 0x28});
+			fail("invalid UTF-8 must be rejected");
+		}
+		catch (java.nio.charset.CharacterCodingException expected) { }
 	}
 
 	@Test public void idRevisionDedupeDisplaysNewAndRevisedAnnouncementsExactlyOnce() throws Exception

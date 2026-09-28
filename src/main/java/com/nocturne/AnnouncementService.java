@@ -9,6 +9,10 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -186,7 +190,8 @@ final class AnnouncementService implements AutoCloseable
 								response.body().source().request(MAX_RESPONSE_BYTES + 1L);
 								if (response.body().source().getBuffer().size() <= MAX_RESPONSE_BYTES)
 								{
-									announcements = parse(response.body().source().readUtf8(), clock.instant());
+									announcements = parse(decodeUtf8(
+										response.body().source().readByteArray()), clock.instant());
 									String candidate = response.header("ETag");
 									if (candidate != null && ETAG.matcher(candidate).matches()) responseEtag = candidate;
 								}
@@ -337,6 +342,14 @@ final class AnnouncementService implements AutoCloseable
 		{
 			throw new IllegalArgumentException("invalid JSON", error);
 		}
+	}
+
+	static String decodeUtf8(byte[] raw) throws CharacterCodingException
+	{
+		return StandardCharsets.UTF_8.newDecoder()
+			.onMalformedInput(CodingErrorAction.REPORT)
+			.onUnmappableCharacter(CodingErrorAction.REPORT)
+			.decode(ByteBuffer.wrap(raw)).toString();
 	}
 
 	private static JsonElement readStrict(JsonReader reader, int depth) throws IOException
