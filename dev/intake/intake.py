@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import UUID
 from derived_values import validate_item_valuation
 from raid_presence import process as process_raid_presence
+from announcements import PUBLIC_PATH as ANNOUNCEMENTS_PATH, public_wsgi as announcements_wsgi
 
 MAX_METADATA_BODY = 8192
 MAX_SCREENSHOT_BYTES = 240 * 1024
@@ -158,7 +159,7 @@ def screenshot_digest(data):
 
 
 def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
-               presence_identity_resolver=None):
+               presence_identity_resolver=None, announcement_database=None):
     state_dir = state_dir or os.environ["NOCTURNE_INTAKE_STATE"]
     if allowed_rsns is None:
         allowed_rsns = os.environ["NOCTURNE_TEST_RSNS"].split(",")
@@ -174,6 +175,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
     directory.mkdir(parents=True, exist_ok=True)
     database = directory / "test-drops.sqlite3"
     presence_database = directory / "raid-presence-v1.sqlite3"
+    if announcement_database is None:
+        announcement_database = os.environ.get("NOCTURNE_ANNOUNCEMENTS_DB")
     if presence_identity_resolver is None:
         if socket_path:
             def presence_identity_resolver(rsn):
@@ -226,6 +229,14 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
         def error(code):
             return reply(start_response, code, {"status": "not_accepted", "storage": "development"})
         path = environ.get("PATH_INFO")
+        if path == ANNOUNCEMENTS_PATH:
+            if not announcement_database:
+                return error(503)
+            try:
+                current = datetime.fromtimestamp(clock(), timezone.utc)
+                return announcements_wsgi(announcement_database, environ, start_response, current)
+            except (OSError, sqlite3.Error, ValueError, TypeError):
+                return error(503)
         if path not in {"/api/plugin/dev/drops", "/api/plugin/dev/raid-presence"}:
             return error(404)
         if environ.get("REQUEST_METHOD") != "POST":
