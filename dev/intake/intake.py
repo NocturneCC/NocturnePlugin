@@ -159,7 +159,7 @@ def screenshot_digest(data):
 
 
 def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
-               presence_identity_resolver=None, announcement_database=None):
+               presence_identity_resolver=None, announcement_snapshot=None):
     state_dir = state_dir or os.environ["NOCTURNE_INTAKE_STATE"]
     if allowed_rsns is None:
         allowed_rsns = os.environ["NOCTURNE_TEST_RSNS"].split(",")
@@ -175,8 +175,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
     directory.mkdir(parents=True, exist_ok=True)
     database = directory / "test-drops.sqlite3"
     presence_database = directory / "raid-presence-v1.sqlite3"
-    if announcement_database is None:
-        announcement_database = os.environ.get("NOCTURNE_ANNOUNCEMENTS_DB")
+    if announcement_snapshot is None:
+        announcement_snapshot = os.environ.get("NOCTURNE_ANNOUNCEMENTS_SNAPSHOT")
     if presence_identity_resolver is None:
         if socket_path:
             def presence_identity_resolver(rsn):
@@ -230,12 +230,12 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
             return reply(start_response, code, {"status": "not_accepted", "storage": "development"})
         path = environ.get("PATH_INFO")
         if path == ANNOUNCEMENTS_PATH:
-            if not announcement_database:
+            if not announcement_snapshot:
                 return error(503)
             try:
                 current = datetime.fromtimestamp(clock(), timezone.utc)
-                return announcements_wsgi(announcement_database, environ, start_response, current)
-            except (OSError, sqlite3.Error, ValueError, TypeError):
+                return announcements_wsgi(announcement_snapshot, environ, start_response, current)
+            except (OSError, ValueError, TypeError):
                 return error(503)
         if path not in {"/api/plugin/dev/drops", "/api/plugin/dev/raid-presence"}:
             return error(404)

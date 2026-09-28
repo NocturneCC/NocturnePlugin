@@ -20,7 +20,10 @@ class AnnouncementRouteSupportTest(unittest.TestCase):
         self.announcement = """# Public announcements
 location = /api/plugin/v1/announcements {
     limit_except GET { deny all; }
-    proxy_pass_request_body off;
+    if ($content_length !~ "^$|^0$") { return 413; }
+    if ($http_transfer_encoding != "") { return 413; }
+    client_max_body_size 1;
+    proxy_request_buffering on;
     proxy_pass_header ETag;
     proxy_pass_header Cache-Control;
     proxy_connect_timeout 2s;
@@ -46,7 +49,9 @@ location = /api/plugin/v1/announcements {
         candidate = candidate_site(self.active, self.drop, self.announcement)
         self.assertEqual(1, candidate.count("location = /api/plugin/v1/announcements"))
         self.assertIn("limit_except GET", candidate)
-        self.assertIn("proxy_pass_request_body off", candidate)
+        self.assertIn('if ($content_length !~ "^$|^0$")', candidate)
+        self.assertIn("client_max_body_size 1", candidate)
+        self.assertIn("proxy_request_buffering on", candidate)
         self.assertIn("proxy_pass_header ETag", candidate)
         self.assertIn("proxy_pass_header Cache-Control", candidate)
         self.assertIn("proxy_connect_timeout 2s", candidate)

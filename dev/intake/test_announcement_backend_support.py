@@ -33,6 +33,7 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         self.admin = root / "admin_app.py"
         self.module = root / "nocturne_announcements.py"
         self.database = root / "event_schedule.db"
+        self.snapshot = root / "announcement-public" / "announcements-v1.json"
         self.backups = root / "backups"
         self.backups.mkdir()
         self.admin.write_text(ADMIN)
@@ -56,7 +57,10 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         first, second, third = self.mocked()
         with first, second as applied, third as verified:
             result = support.install(self.admin, self.module, self.database, self.backups,
+                                     public_snapshot=self.snapshot,
                                      apply=apply, maintenance_confirmed=apply,
+                                     stopped_services=support.REQUIRED_STOPPED_SERVICES if apply else (),
+                                     service_active=lambda _service: False,
                                      run=lambda *args, **kwargs: None, fail=fail)
             return result, applied.call_args_list, verified.call_args_list
 
@@ -70,6 +74,7 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         self.assertEqual(before_admin, self.admin.read_bytes())
         self.assertEqual(before_database, self.database.read_bytes())
         self.assertFalse(self.module.exists())
+        self.assertFalse(self.snapshot.exists())
         self.assertEqual([], applied)
         self.assertEqual([], verified)
 
@@ -77,6 +82,8 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         result, applied, verified = self.install(True)
         self.assertEqual(("already_applied", False), (result["state"], result["dry_run"]))
         self.assertTrue(self.module.is_file())
+        self.assertTrue(self.snapshot.is_file())
+        self.assertEqual(0o644, self.snapshot.stat().st_mode & 0o777)
         self.assertIn(support.REGISTRATION, self.admin.read_text())
         self.assertEqual("already_applied", schema_state(self.database))
         with closing(sqlite3.connect(self.database)) as db:
@@ -91,11 +98,15 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         self.assertEqual("already_applied", second["state"])
         with self.mocked()[0], self.mocked()[1], self.mocked()[2]:
             rolled = support.rollback(result["backup"], self.admin, self.module, self.database,
+                                      self.snapshot,
                                       maintenance_confirmed=True,
+                                      stopped_services=support.REQUIRED_STOPPED_SERVICES,
+                                      service_active=lambda _service: False,
                                       run=lambda *args, **kwargs: None)
         self.assertFalse(rolled["already_restored"])
         self.assertEqual(ADMIN, self.admin.read_text())
         self.assertFalse(self.module.exists())
+        self.assertFalse(self.snapshot.exists())
         self.assertEqual("not_applied", schema_state(self.database))
         with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual("preserved", db.execute("SELECT title FROM events").fetchone()[0])
@@ -112,10 +123,14 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
                 with fixture.mocked()[0], fixture.mocked()[1], fixture.mocked()[2]:
                     with self.assertRaisesRegex(RuntimeError, "simulated failure"):
                         support.install(fixture.admin, fixture.module, fixture.database,
-                                        fixture.backups, apply=True, maintenance_confirmed=True,
+                                        fixture.backups, public_snapshot=fixture.snapshot,
+                                        apply=True, maintenance_confirmed=True,
+                                        stopped_services=support.REQUIRED_STOPPED_SERVICES,
+                                        service_active=lambda _service: False,
                                         run=lambda *args, **kwargs: None, fail=fail)
                 self.assertEqual(ADMIN, fixture.admin.read_text())
                 self.assertFalse(fixture.module.exists())
+                self.assertFalse(fixture.snapshot.exists())
                 self.assertEqual("not_applied", schema_state(fixture.database))
 
     def test_refuses_partial_state_changed_source_and_wrong_backup(self):
@@ -128,12 +143,24 @@ class AnnouncementBackendSupportTest(unittest.TestCase):
         (bad / "MANIFEST.json").write_text('{"purpose":"wrong","status":"verified"}')
         with self.assertRaisesRegex(ValueError, "wrong or unverified"):
             support.rollback(bad, self.admin, self.module, self.database,
-                             maintenance_confirmed=True)
+                             self.snapshot, maintenance_confirmed=True,
+                             stopped_services=support.REQUIRED_STOPPED_SERVICES,
+                             service_active=lambda _service: False)
 
     def test_apply_and_rollback_require_explicit_maintenance_confirmation(self):
         first, second, third = self.mocked()
         with first, second, third, self.assertRaisesRegex(ValueError, "maintenance-confirmed"):
             support.install(self.admin, self.module, self.database, self.backups, apply=True,
+                            run=lambda *args, **kwargs: None)
+
+    def test_active_event_writer_is_a_hard_interlock(self):
+        first, second, third = self.mocked()
+        with first, second, third, self.assertRaisesRegex(ValueError, "while active"):
+            support.install(self.admin, self.module, self.database, self.backups,
+                            public_snapshot=self.snapshot, apply=True,
+                            maintenance_confirmed=True,
+                            stopped_services=support.REQUIRED_STOPPED_SERVICES,
+                            service_active=lambda service: service == "osrs-drops-admin.service",
                             run=lambda *args, **kwargs: None)
 
 

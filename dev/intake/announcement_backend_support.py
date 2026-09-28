@@ -7,10 +7,12 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 from uuid import uuid4
 
-from announcements import SCHEMA_OBJECTS, install_schema, schema_state
+from announcements import (DEFAULT_PUBLIC_SNAPSHOT, SCHEMA_OBJECTS, install_schema,
+                           public_payload, schema_state, write_public_snapshot)
 from derived_review_support import (_apply_metadata, _capture_safe_metadata,
                                     _verify_metadata)
 
@@ -23,6 +25,21 @@ REGISTRATION = (BEGIN
     + "    EVENT_SCHEDULE_DB, require_auth, _event_scheduler_allowed, current_admin_name))\n"
     + END)
 PURPOSE = "nocturne_plugin_announcement_backend_v1"
+REQUIRED_STOPPED_SERVICES = frozenset({"osrs-drops-admin.service", "osrs-drops-api.service"})
+
+
+def _service_active(name):
+    return subprocess.run(["systemctl", "is-active", "--quiet", name], check=False,
+                          timeout=10).returncode == 0
+
+
+def _require_maintenance(confirmed, stopped_services, service_active):
+    if not confirmed or set(stopped_services) != REQUIRED_STOPPED_SERVICES:
+        raise ValueError("operation requires --maintenance-confirmed and exact confirmation that "
+                         "osrs-drops-admin.service and osrs-drops-api.service are stopped")
+    active = sorted(service for service in REQUIRED_STOPPED_SERVICES if service_active(service))
+    if active:
+        raise ValueError("refusing database maintenance while active: " + ", ".join(active))
 
 
 def _digest(path):
@@ -44,14 +61,16 @@ def candidate_admin(original):
     return original + "\n" + REGISTRATION
 
 
-def _state(admin, module, source_module, database):
+def _state(admin, module, source_module, database, snapshot):
     admin_installed = admin.read_text().count(REGISTRATION) == 1
     module_installed = module.is_file() and not module.is_symlink() and _digest(module) == _digest(source_module)
     schema = schema_state(database)
-    if not admin_installed and not module.exists() and schema == "not_applied":
+    snapshot_installed = snapshot.is_file() and not snapshot.is_symlink()
+    if not admin_installed and not module.exists() and schema == "not_applied" and not snapshot.exists():
         candidate_admin(admin.read_text())
         return "not_applied"
-    if admin_installed and module_installed and schema == "already_applied":
+    if admin_installed and module_installed and schema == "already_applied" and snapshot_installed:
+        public_payload(snapshot)
         return "already_applied"
     raise ValueError("announcement backend is partially applied or differs from committed source")
 
@@ -133,10 +152,13 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
             module_target=Path("/srv/projects/api/nocturne_announcements.py"),
             database=Path("/srv/projects/database/event_schedule.db"),
             backup_root=Path("/etc/nocturne-plugin-backups"), source_module=None,
-            *, apply=False, maintenance_confirmed=False, run=None, fail=None):
+            public_snapshot=Path(DEFAULT_PUBLIC_SNAPSHOT), *, apply=False,
+            maintenance_confirmed=False, stopped_services=(), service_active=None,
+            run=None, fail=None):
     from derived_review_support import _run
     run = run or _run
-    admin, module, database, backup_root = map(Path, (admin_app, module_target, database, backup_root))
+    admin, module, database, backup_root, snapshot = map(
+        Path, (admin_app, module_target, database, backup_root, public_snapshot))
     source = Path(source_module or Path(__file__).with_name("announcements.py"))
     for path in (admin, database, source, backup_root):
         if not path.exists() or path.is_symlink():
@@ -148,7 +170,13 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
         "database": _capture_safe_metadata(database, run),
         "backup_root": _capture_safe_metadata(backup_root, run, directory=True),
     }
-    state = _state(admin, module, source, database)
+    if snapshot.exists() and (snapshot.is_symlink() or not snapshot.is_file()):
+        raise ValueError("announcement snapshot target has an unsafe type")
+    if snapshot.parent.exists() and (snapshot.parent.is_symlink() or not snapshot.parent.is_dir()):
+        raise ValueError("announcement snapshot directory has an unsafe type")
+    if not snapshot.parent.parent.is_dir() or snapshot.parent.parent.is_symlink():
+        raise ValueError("announcement snapshot parent is unsafe")
+    state = _state(admin, module, source, database, snapshot)
     journal_mode = _database_check(database)
     candidate = admin.read_text() if state == "already_applied" else candidate_admin(admin.read_text())
     report = {
@@ -159,11 +187,13 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
         "module_sha256": _digest(source),
         "database_size": database.stat().st_size,
         "database_journal_mode": journal_mode,
+        "public_snapshot": str(snapshot),
+        "required_stopped_services": sorted(REQUIRED_STOPPED_SERVICES),
     }
     if state == "already_applied" or not apply:
         return report
-    if not maintenance_confirmed:
-        raise ValueError("apply requires --maintenance-confirmed after event-schedule writers are stopped")
+    _require_maintenance(maintenance_confirmed, stopped_services,
+                         service_active or _service_active)
 
     backup = backup_root / ("plugin-announcements-" + uuid4().hex[:8])
     staged = []
@@ -176,7 +206,8 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
         _backup_database(database, saved_database, metadata["database"], run)
         manifest = {
             "purpose": PURPOSE, "status": "verified",
-            "targets": {"admin": str(admin), "module": str(module), "database": str(database)},
+            "targets": {"admin": str(admin), "module": str(module), "database": str(database),
+                        "public_snapshot": str(snapshot)},
             "before": {"admin": _digest(saved_admin), "database": _digest(saved_database),
                        "module": None},
             "installed_module_sha256": _digest(source),
@@ -202,7 +233,16 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
             raise ValueError("active admin targets changed after preflight")
 
         mutation_started = True
+        created_snapshot_directory = False
+        if not snapshot.parent.exists():
+            snapshot.parent.mkdir(mode=0o755)
+            created_snapshot_directory = True
+            os.chown(snapshot.parent, metadata["admin"]["uid"], metadata["admin"]["gid"])
+            os.chmod(snapshot.parent, 0o755)
         install_schema(database)
+        write_public_snapshot(database, snapshot)
+        os.chown(snapshot, metadata["admin"]["uid"], metadata["admin"]["gid"])
+        os.chmod(snapshot, 0o644)
         if fail:
             fail("after_schema")
         os.replace(staged_module, module)
@@ -213,7 +253,7 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
         staged.remove(staged_admin)
         if fail:
             fail("after_admin")
-        if _state(admin, module, source, database) != "already_applied":
+        if _state(admin, module, source, database, snapshot) != "already_applied":
             raise ValueError("announcement backend final state verification failed")
         _verify_metadata(admin, metadata["admin"], run)
         _verify_metadata(module, metadata["admin"], run)
@@ -239,6 +279,12 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
                 _restore_database(saved_database, database, metadata["database"], run)
             except BaseException as caught:
                 restoration_errors.append(f"database: {caught}")
+            try:
+                snapshot.unlink(missing_ok=True)
+                if created_snapshot_directory:
+                    snapshot.parent.rmdir()
+            except BaseException as caught:
+                restoration_errors.append(f"snapshot: {caught}")
         detail = f"announcement installation failed: {error}"
         if restoration_errors:
             detail += "; restoration errors: " + " | ".join(restoration_errors)
@@ -248,8 +294,8 @@ def install(admin_app=Path("/srv/projects/api/admin_app.py"),
             path.unlink(missing_ok=True)
 
 
-def rollback(backup, admin_app=None, module_target=None, database=None, *,
-             maintenance_confirmed=False, run=None):
+def rollback(backup, admin_app=None, module_target=None, database=None, public_snapshot=None, *,
+             maintenance_confirmed=False, stopped_services=(), service_active=None, run=None):
     from derived_review_support import _run
     run = run or _run
     backup = Path(backup)
@@ -259,20 +305,21 @@ def rollback(backup, admin_app=None, module_target=None, database=None, *,
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("purpose") != PURPOSE or manifest.get("status") != "verified":
         raise ValueError("wrong or unverified announcement backup")
-    if not maintenance_confirmed:
-        raise ValueError("rollback requires --maintenance-confirmed after event-schedule writers are stopped")
+    _require_maintenance(maintenance_confirmed, stopped_services,
+                         service_active or _service_active)
     targets = manifest["targets"]
     admin = Path(admin_app or targets["admin"])
     module = Path(module_target or targets["module"])
     database = Path(database or targets["database"])
+    snapshot = Path(public_snapshot or targets["public_snapshot"])
     if (str(admin) != targets["admin"] or str(module) != targets["module"]
-            or str(database) != targets["database"]):
+            or str(database) != targets["database"] or str(snapshot) != targets["public_snapshot"]):
         raise ValueError("rollback targets differ from verified manifest")
     saved_admin, saved_database = backup / "admin_app.py.before", backup / "event_schedule.db.before"
     if _digest(saved_admin) != manifest["before"]["admin"] or _digest(saved_database) != manifest["before"]["database"]:
         raise ValueError("rollback backup checksum mismatch")
     source = Path(__file__).with_name("announcements.py")
-    state = _state(admin, module, source, database)
+    state = _state(admin, module, source, database, snapshot)
     if state == "not_applied":
         return {"state": "not_applied", "already_restored": True}
     if _digest(module) != manifest["installed_module_sha256"]:
@@ -281,8 +328,13 @@ def rollback(backup, admin_app=None, module_target=None, database=None, *,
     restored_admin = _stage(admin, saved_admin.read_bytes(), metadata["admin"], run)
     os.replace(restored_admin, admin)
     module.unlink()
+    snapshot.unlink()
     _restore_database(saved_database, database, metadata["database"], run)
-    if _state(admin, module, source, database) != "not_applied":
+    try:
+        snapshot.parent.rmdir()
+    except OSError:
+        pass
+    if _state(admin, module, source, database, snapshot) != "not_applied":
         raise RuntimeError("announcement rollback verification failed")
     return {"state": "not_applied", "already_restored": False}
 
@@ -292,18 +344,22 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rollback-backup")
     parser.add_argument("--maintenance-confirmed", action="store_true")
+    parser.add_argument("--stopped-service", action="append", default=[])
     parser.add_argument("--admin-app", default="/srv/projects/api/admin_app.py")
     parser.add_argument("--module-target", default="/srv/projects/api/nocturne_announcements.py")
     parser.add_argument("--database", default="/srv/projects/database/event_schedule.db")
+    parser.add_argument("--public-snapshot", default=DEFAULT_PUBLIC_SNAPSHOT)
     parser.add_argument("--backup-dir", default="/etc/nocturne-plugin-backups")
     args = parser.parse_args()
     if args.apply and args.rollback_backup:
         raise SystemExit("choose --apply or --rollback-backup")
     result = (rollback(args.rollback_backup, args.admin_app, args.module_target, args.database,
-                       maintenance_confirmed=args.maintenance_confirmed)
+                       args.public_snapshot, maintenance_confirmed=args.maintenance_confirmed,
+                       stopped_services=args.stopped_service)
               if args.rollback_backup else install(args.admin_app, args.module_target, args.database,
-                  args.backup_dir, apply=args.apply,
-                  maintenance_confirmed=args.maintenance_confirmed))
+                  args.backup_dir, public_snapshot=args.public_snapshot, apply=args.apply,
+                  maintenance_confirmed=args.maintenance_confirmed,
+                  stopped_services=args.stopped_service))
     print(json.dumps(result, sort_keys=True))
     if not (args.apply or args.rollback_backup):
         print("Dry run only; no active file or database was changed.")

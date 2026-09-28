@@ -15,7 +15,9 @@ into the existing review queue as pending proposals; it never approves them or
 updates rank totals.
 
 GET/HEAD `/api/plugin/v1/announcements` is a separate unauthenticated, read-only
-feed. It accepts no body or client identity fields, returns at most three active
+feed from an atomically replaced, public-data-only snapshot. The intake has no
+access to the event-schedule database or its SQLite sidecars. It accepts no body
+or client identity fields, returns at most three active
 plain-text announcements, supports ETag/304 caching, and never writes a database.
 Draft, future, expired, and withdrawn announcements are excluded. See
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md) for schema, administration, deployment and

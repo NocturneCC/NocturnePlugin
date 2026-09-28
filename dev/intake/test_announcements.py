@@ -14,12 +14,14 @@ from announcements import (
     MAX_MESSAGE_CHARS,
     MAX_RESPONSE_BYTES,
     AnnouncementStore,
+    RevisionConflict,
     create_admin_blueprint,
     install_schema,
     public_payload,
     public_wsgi,
     schema_state,
     validate_fields,
+    write_public_snapshot,
 )
 from intake import create_app
 
@@ -34,8 +36,11 @@ class AnnouncementsTest(unittest.TestCase):
         self.database = Path(self.temp.name) / "event_schedule.db"
         sqlite3.connect(self.database).close()
         install_schema(self.database)
+        self.snapshot = Path(self.temp.name) / "public" / "announcements-v1.json"
+        self.snapshot.parent.mkdir()
         self.now = datetime(2026, 9, 28, 20, 0, tzinfo=UTC)
-        self.store = AnnouncementStore(self.database, lambda: self.now)
+        self.store = AnnouncementStore(self.database, lambda: self.now, self.snapshot)
+        write_public_snapshot(self.database, self.snapshot, self.now)
 
     def fields(self, message="Clan event tonight", *, start=-60, end=3600, link=None):
         return {
@@ -51,7 +56,7 @@ class AnnouncementsTest(unittest.TestCase):
         fields = self.fields()
         fields.update(changes)
         draft = self.store.create_draft(fields, "admin")
-        return self.store.transition(draft["announcement_id"], "publish", "admin")
+        return self.store.transition(draft["announcement_id"], "publish", "admin", draft["revision"])
 
     def test_schema_is_versioned_and_idempotent(self):
         self.assertEqual("already_applied", schema_state(self.database))
@@ -69,8 +74,8 @@ class AnnouncementsTest(unittest.TestCase):
         self.publish(message="expired", starts_at=(self.now - timedelta(hours=2)).isoformat(),
                      expires_at=(self.now - timedelta(hours=1)).isoformat())
         withdrawn = self.publish(message="withdrawn")
-        self.store.transition(withdrawn["announcement_id"], "withdraw", "admin")
-        payload = json.loads(public_payload(self.database, self.now)[0])
+        self.store.transition(withdrawn["announcement_id"], "withdraw", "admin", withdrawn["revision"])
+        payload = json.loads(public_payload(self.snapshot, self.now)[0])
         self.assertEqual([active["announcement_id"]],
                          [item["announcement_id"] for item in payload["announcements"]])
         self.assertFalse(any(item["message"] in {"draft", "future", "expired", "withdrawn"}
@@ -79,7 +84,7 @@ class AnnouncementsTest(unittest.TestCase):
     def test_maximum_count_and_response_size_are_bounded(self):
         for number in range(MAX_ANNOUNCEMENTS + 2):
             self.publish(message=(str(number) + "x" * (MAX_MESSAGE_CHARS - 1)))
-        raw, _ = public_payload(self.database, self.now)
+        raw, _, _ = public_payload(self.snapshot, self.now)
         self.assertEqual(MAX_ANNOUNCEMENTS, len(json.loads(raw)["announcements"]))
         self.assertLessEqual(len(raw), MAX_RESPONSE_BYTES)
 
@@ -109,9 +114,9 @@ class AnnouncementsTest(unittest.TestCase):
 
     def test_etag_304_head_and_deterministic_unchanged_response(self):
         self.publish()
-        first, etag = public_payload(self.database, self.now)
-        second, second_etag = public_payload(self.database, self.now)
-        self.assertEqual((first, etag), (second, second_etag))
+        first, etag, max_age = public_payload(self.snapshot, self.now)
+        second, second_etag, second_max_age = public_payload(self.snapshot, self.now)
+        self.assertEqual((first, etag, max_age), (second, second_etag, second_max_age))
         status, headers, body = self.wsgi("GET", HTTP_IF_NONE_MATCH=etag)
         self.assertEqual((304, b""), (status, body))
         self.assertEqual(etag, headers["ETag"])
@@ -120,16 +125,16 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertEqual(str(len(first)), headers["Content-Length"])
 
     def test_public_route_rejects_mutation_and_request_bodies(self):
-        before = hashlib.sha256(self.database.read_bytes()).digest()
+        before = hashlib.sha256(self.snapshot.read_bytes()).digest()
         self.assertEqual(405, self.wsgi("POST")[0])
         self.assertEqual(400, self.wsgi("GET", CONTENT_LENGTH="1")[0])
         self.assertEqual(200, self.wsgi("GET")[0])
-        self.assertEqual(before, hashlib.sha256(self.database.read_bytes()).digest())
+        self.assertEqual(before, hashlib.sha256(self.snapshot.read_bytes()).digest())
 
     def test_isolated_intake_exposes_only_get_without_client_identity(self):
         state = Path(self.temp.name) / "intake"
         app = create_app(state, ["Test Account"], clock=lambda: self.now.timestamp(),
-                         announcement_database=self.database)
+                         announcement_snapshot=self.snapshot)
         self.publish()
         captured = []
         environ = {"PATH_INFO": "/api/plugin/v1/announcements", "REQUEST_METHOD": "GET",
@@ -141,11 +146,11 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertNotIn("Test Account", body.decode())
 
     def test_schema_version_mismatch_fails_closed(self):
-        with closing(sqlite3.connect(self.database)) as db:
-            db.execute("UPDATE plugin_announcement_meta SET schema_version=2")
-            db.commit()
+        value = json.loads(self.snapshot.read_text())
+        value["schema_version"] = 2
+        self.snapshot.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, "unsupported"):
-            public_payload(self.database, self.now)
+            public_payload(self.snapshot, self.now)
 
     def test_change_and_audit_are_one_transaction_and_audit_is_append_only(self):
         draft = self.store.create_draft(self.fields(), "admin")
@@ -153,7 +158,7 @@ class AnnouncementsTest(unittest.TestCase):
             db.execute("""CREATE TRIGGER reject_next_audit BEFORE INSERT ON plugin_announcement_audit
                         BEGIN SELECT RAISE(ABORT,'simulated audit failure'); END""")
         with self.assertRaises(sqlite3.IntegrityError):
-            self.store.edit_draft(draft["announcement_id"], self.fields("changed"), "admin")
+            self.store.edit_draft(draft["announcement_id"], self.fields("changed"), "admin", 1)
         with closing(sqlite3.connect(self.database)) as db:
             row = db.execute("SELECT revision,message FROM plugin_announcements WHERE announcement_id=?",
                              (draft["announcement_id"],)).fetchone()
@@ -166,8 +171,8 @@ class AnnouncementsTest(unittest.TestCase):
 
     def test_revisions_are_monotonic_and_revised_draft_is_audited(self):
         draft = self.store.create_draft(self.fields(), "admin")
-        edited = self.store.edit_draft(draft["announcement_id"], self.fields("changed"), "admin")
-        published = self.store.transition(draft["announcement_id"], "publish", "admin")
+        edited = self.store.edit_draft(draft["announcement_id"], self.fields("changed"), "admin", 1)
+        published = self.store.transition(draft["announcement_id"], "publish", "admin", 2)
         self.assertEqual((1, 2, 3), (draft["revision"], edited["revision"], published["revision"]))
         with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual([1, 2, 3], [row[0] for row in db.execute(
@@ -175,7 +180,7 @@ class AnnouncementsTest(unittest.TestCase):
 
     def test_public_payload_has_no_identity_telemetry_or_receipt_fields(self):
         self.publish()
-        text = public_payload(self.database, self.now)[0].decode()
+        text = public_payload(self.snapshot, self.now)[0].decode()
         for forbidden in ("rsn", "account", "profile", "chat", "raid", "telemetry",
                           "read_receipt", "actor", "created_by", "updated_by", "audit"):
             self.assertNotIn(forbidden, text.lower())
@@ -199,7 +204,7 @@ class AnnouncementsTest(unittest.TestCase):
         app.register_blueprint(create_admin_blueprint(
             self.database, require_auth,
             lambda: request.headers.get("X-Test-Role") == "eventadmin",
-            lambda: "test-admin"))
+            lambda: "test-admin", self.snapshot))
         client = app.test_client()
         path = "/admin/api/nocturne/plugin-announcements"
         self.assertEqual(401, client.get(path).status_code)
@@ -211,11 +216,44 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertEqual(201, created.status_code)
         self.assertEqual(1, len(client.get(path, headers=headers).get_json()["audit"]))
 
+    def test_duplicate_json_keys_and_stale_concurrent_edits_fail_closed(self):
+        try:
+            from flask import Flask, request
+        except ImportError:
+            self.skipTest("Flask is exercised with the active admin interpreter")
+        app = Flask(__name__)
+        app.register_blueprint(create_admin_blueprint(
+            self.database, lambda function: function, lambda: True, lambda: "admin", self.snapshot))
+        client = app.test_client()
+        path = "/admin/api/nocturne/plugin-announcements"
+        duplicate = b'{"announcement":{},"announcement":{}}'
+        self.assertEqual(400, client.post(path, data=duplicate,
+                                         content_type="application/json").status_code)
+        draft = self.store.create_draft(self.fields(), "admin")
+        edited = self.store.edit_draft(draft["announcement_id"], self.fields("first"), "admin", 1)
+        self.assertEqual(2, edited["revision"])
+        with self.assertRaises(RevisionConflict):
+            self.store.edit_draft(draft["announcement_id"], self.fields("stale"), "admin", 1)
+
+    def test_atomic_public_snapshot_survives_database_replace_and_exposes_no_sqlite_files(self):
+        old_inode = self.snapshot.stat().st_ino
+        self.publish(message="replacement")
+        self.assertNotEqual(old_inode, self.snapshot.stat().st_ino)
+        self.assertEqual({"announcements-v1.json"}, {path.name for path in self.snapshot.parent.iterdir()})
+        payload = json.loads(public_payload(self.snapshot, self.now)[0])
+        self.assertEqual("replacement", payload["announcements"][0]["message"])
+
+    def test_cache_lifetime_never_crosses_activation_or_expiry(self):
+        self.publish(starts_at=(self.now - timedelta(seconds=60)).isoformat(),
+                     expires_at=(self.now + timedelta(seconds=12)).isoformat())
+        _raw, _etag, max_age = public_payload(self.snapshot, self.now)
+        self.assertEqual(12, max_age)
+
     def wsgi(self, method, **extra):
         environ = {"REQUEST_METHOD": method, "wsgi.input": io.BytesIO(b"")}
         environ.update(extra)
         captured = []
-        output = public_wsgi(self.database, environ,
+        output = public_wsgi(self.snapshot, environ,
                              lambda status, headers: captured.append((status, dict(headers))), self.now)
         return int(captured[0][0].split()[0]), captured[0][1], b"".join(output)
 
