@@ -23,6 +23,7 @@ from announcements import (
     schema_state,
     validate_fields,
     write_public_snapshot,
+    write_public_snapshot_from_connection,
 )
 from intake import create_app
 
@@ -81,6 +82,25 @@ class AnnouncementsTest(unittest.TestCase):
                          [item["announcement_id"] for item in payload["announcements"]])
         self.assertFalse(any(item["message"] in {"draft", "future", "expired", "withdrawn"}
                              for item in payload["announcements"]))
+
+    def test_precommit_withdraw_snapshot_is_fail_closed_if_database_rolls_back(self):
+        active = self.publish(message="must not leak after withdrawal starts")
+        old_revision = json.loads(self.snapshot.read_text())["revision"]
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE plugin_announcements SET state='withdrawn' WHERE announcement_id=?",
+                       (active["announcement_id"],))
+            write_public_snapshot_from_connection(db, self.snapshot, self.now)
+            db.rollback()
+        value = json.loads(public_payload(self.snapshot, self.now)[0])
+        self.assertEqual(old_revision, value["revision"])
+        self.assertEqual([], value["announcements"])
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual("published", db.execute(
+                "SELECT state FROM plugin_announcements WHERE announcement_id=?",
+                (active["announcement_id"],)).fetchone()[0])
+        write_public_snapshot(self.database, self.snapshot, self.now)
+        self.assertEqual(1, len(json.loads(public_payload(self.snapshot, self.now)[0])["announcements"]))
 
     def test_maximum_count_and_response_size_are_bounded(self):
         for number in range(MAX_ANNOUNCEMENTS + 2):

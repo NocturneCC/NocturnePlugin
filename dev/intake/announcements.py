@@ -297,6 +297,12 @@ class AnnouncementStore:
                 db.execute("UPDATE plugin_announcements SET revision=?,state=?,expires_at=?,updated_at=?,updated_by=? WHERE announcement_id=?",
                            (revision, state, expiry, now, actor, announcement_id))
             after = _row(db.execute(_SELECT + " WHERE announcement_id=?", (announcement_id,)).fetchone())
+            # Withdrawals and expirations publish a fail-closed omission while
+            # the old global revision is still current. If this process dies
+            # before commit or final publication, the public side can omit an
+            # announcement but can never continue disclosing a withdrawn one.
+            if self.public_snapshot is not None and action in {"withdraw", "expire"}:
+                write_public_snapshot_from_connection(db, self.public_snapshot, _utc(now))
             db.execute("UPDATE plugin_announcement_meta SET global_revision=?,generated_at=? WHERE singleton=1",
                        (global_revision, now))
             db.execute("""INSERT INTO plugin_announcement_audit
@@ -357,18 +363,15 @@ def _public_item(row):
              "starts_at", "expires_at", "link")}
 
 
-def snapshot_payload(database, now=None):
-    """Build the public-only publication snapshot from the trusted writable side."""
+def _snapshot_payload(db, now):
     now = now or datetime.now(timezone.utc)
     current = _timestamp(now)
-    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
-        db.execute("PRAGMA query_only=ON")
-        AnnouncementStore._require_schema(db)
-        global_revision, generated = db.execute(
-            "SELECT global_revision,generated_at FROM plugin_announcement_meta WHERE singleton=1").fetchone()
-        rows = db.execute(_SELECT + " WHERE state='published' AND expires_at>? "
-                          "ORDER BY starts_at,announcement_id LIMIT ?",
-                          (current, MAX_SNAPSHOT_ANNOUNCEMENTS + 1)).fetchall()
+    AnnouncementStore._require_schema(db)
+    global_revision, generated = db.execute(
+        "SELECT global_revision,generated_at FROM plugin_announcement_meta WHERE singleton=1").fetchone()
+    rows = db.execute(_SELECT + " WHERE state='published' AND expires_at>? "
+                      "ORDER BY starts_at,announcement_id LIMIT ?",
+                      (current, MAX_SNAPSHOT_ANNOUNCEMENTS + 1)).fetchall()
     if type(global_revision) is not int or not 0 <= global_revision <= 2 ** 63 - 1:
         raise ValueError("invalid global revision")
     _utc(generated)
@@ -383,13 +386,18 @@ def snapshot_payload(database, now=None):
     return raw
 
 
-def write_public_snapshot(database, snapshot=DEFAULT_PUBLIC_SNAPSHOT, now=None):
-    """Atomically publish only bounded, validated, non-draft announcement fields."""
+def snapshot_payload(database, now=None):
+    """Build the public-only publication snapshot from the trusted writable side."""
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        return _snapshot_payload(db, now or datetime.now(timezone.utc))
+
+
+def _write_public_snapshot(raw, snapshot):
     target = Path(snapshot)
     parent = target.parent
     if not parent.is_dir() or parent.is_symlink() or target.is_symlink():
         raise ValueError("unsafe announcement snapshot path")
-    raw = snapshot_payload(database, now)
     descriptor, name = tempfile.mkstemp(prefix=".announcements-v1-", dir=parent)
     staged = Path(name)
     try:
@@ -406,6 +414,16 @@ def write_public_snapshot(database, snapshot=DEFAULT_PUBLIC_SNAPSHOT, now=None):
             os.close(directory)
     finally:
         staged.unlink(missing_ok=True)
+
+
+def write_public_snapshot(database, snapshot=DEFAULT_PUBLIC_SNAPSHOT, now=None):
+    """Atomically publish only bounded, validated, non-draft announcement fields."""
+    _write_public_snapshot(snapshot_payload(database, now), snapshot)
+
+
+def write_public_snapshot_from_connection(db, snapshot, now):
+    """Publish a fail-closed view of the caller's current SQLite transaction."""
+    _write_public_snapshot(_snapshot_payload(db, now), snapshot)
 
 
 def public_payload(snapshot, now=None):
