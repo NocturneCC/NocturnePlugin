@@ -31,6 +31,7 @@ import net.runelite.client.events.NpcLootReceived;
 import net.runelite.api.events.PlayerSpawned;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
+import net.runelite.client.game.ChatIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.loottracker.LootReceived;
@@ -80,11 +81,16 @@ public class NocturnePlugin extends Plugin
 	private ChatMessageManager chatMessageManager;
 
 	@Inject
+	private ChatIconManager chatIconManager;
+
+	@Inject
 	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
 	private volatile RaidPresenceService raidPresence;
 	private volatile AnnouncementService announcementService;
+	private volatile EmojiSyncService emojiSyncService;
+	private volatile EmojiRenderer emojiRenderer;
 	private volatile RaidVerificationStatus raidVerification = RaidVerificationStatus.INACTIVE;
 	private DerivedValueCatalogue derivedValues;
 	private LootHistoryStore historyStore;
@@ -112,6 +118,24 @@ public class NocturnePlugin extends Plugin
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
 		raidPresence = new RaidPresenceService(http, gson);
+		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager);
+		emojiRenderer = createdEmojiRenderer;
+		try
+		{
+			EmojiSyncService emojis = new EmojiSyncService(http, gson,
+				RuneLite.RUNELITE_DIR.toPath().resolve("nocturne").resolve("emoji-cache-v1"),
+				assets -> clientThread.invoke(() ->
+				{
+					if (lifecycle == token && emojiRenderer == createdEmojiRenderer)
+						createdEmojiRenderer.update(assets);
+				}));
+			emojiSyncService = emojis;
+			emojis.start();
+		}
+		catch (RuntimeException error)
+		{
+			log.debug("Unable to initialize public clan emojis", error);
+		}
 		AnnouncementService createdAnnouncements = null;
 		try
 		{
@@ -178,6 +202,12 @@ public class NocturnePlugin extends Plugin
 		AnnouncementService announcements = announcementService;
 		announcementService = null;
 		if (announcements != null) announcements.close();
+		EmojiSyncService emojis = emojiSyncService;
+		emojiSyncService = null;
+		if (emojis != null) emojis.close();
+		EmojiRenderer renderer = emojiRenderer;
+		emojiRenderer = null;
+		if (renderer != null) clientThread.invoke(renderer::clear);
 		raidVerification = RaidVerificationStatus.INACTIVE;
 		groups = null;
 		activeRsn = null;
@@ -335,6 +365,8 @@ public class NocturnePlugin extends Plugin
 				if (presence != null) presence.submit(tracker.presenceReport("completion"), this::updateRaidVerification);
 			}
 		}
+		EmojiRenderer renderer = emojiRenderer;
+		if (renderer != null) renderer.onChatMessage(event);
 	}
 
 	private void recordLoot(String source, Collection<ItemStack> stacks, LootOrigin origin)

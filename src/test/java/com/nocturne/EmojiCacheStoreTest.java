@@ -1,0 +1,64 @@
+package com.nocturne;
+
+import com.google.gson.Gson;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.List;
+import java.util.Map;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class EmojiCacheStoreTest
+{
+	@Test public void cacheIsAtomicOwnerOnlyBoundedAndRecoversFromCorruption() throws Exception
+	{
+		Path root = Files.createTempDirectory("emoji-cache-test");
+		try
+		{
+			Gson gson = new Gson();
+			byte[] image = EmojiTestFixtures.png(0xff113355);
+			EmojiTestFixtures.FixtureEntry fixture = new EmojiTestFixtures.FixtureEntry("wave", image);
+			EmojiManifest manifest = EmojiManifest.parse(
+				EmojiTestFixtures.manifest(gson, List.of(fixture)), gson);
+			EmojiCacheStore store = new EmojiCacheStore(root, gson);
+			store.save(manifest, Map.of(fixture.digest(), image), "\"" + "a".repeat(64) + "\"");
+			EmojiCacheStore.Loaded loaded = store.load();
+			assertNotNull(loaded);
+			assertEquals(1, loaded.assets.size());
+			assertEquals(1, loaded.rawAssets.size());
+			if (Files.getFileStore(root).supportsFileAttributeView("posix"))
+			{
+				assertEquals(java.util.Set.of(PosixFilePermission.OWNER_READ,
+					PosixFilePermission.OWNER_WRITE),
+					Files.getPosixFilePermissions(root.resolve("current")));
+			}
+			Files.writeString(root.resolve("current"), "../../unsafe");
+			assertNull(store.load());
+		}
+		finally { delete(root); }
+	}
+
+	@Test public void digestDimensionAlphaAndByteLengthAreRevalidated() throws Exception
+	{
+		Gson gson = new Gson();
+		byte[] image = EmojiTestFixtures.png(0xff113355);
+		EmojiTestFixtures.FixtureEntry fixture = new EmojiTestFixtures.FixtureEntry("wave", image);
+		EmojiManifest.Entry entry = EmojiManifest.parse(
+			EmojiTestFixtures.manifest(gson, List.of(fixture)), gson).entries.get(0);
+		assertEquals(20, EmojiCacheStore.validateAsset(image, entry).getWidth());
+		byte[] corrupted = image.clone();
+		corrupted[corrupted.length / 2] ^= 1;
+		try { EmojiCacheStore.validateAsset(corrupted, entry); fail(); }
+		catch (java.io.IOException expected) { }
+	}
+
+	private static void delete(Path path) throws Exception
+	{
+		if (!Files.exists(path)) return;
+		if (Files.isDirectory(path))
+			try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(path))
+			{ for (Path child : stream) delete(child); }
+		Files.deleteIfExists(path);
+	}
+}
