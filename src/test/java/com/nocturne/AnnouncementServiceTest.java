@@ -4,6 +4,8 @@ import com.google.gson.Gson;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -23,6 +25,11 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.Buffer;
+import okio.BufferedSource;
+import okio.Okio;
+import okio.Source;
+import okio.Timeout;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -209,6 +216,73 @@ public class AnnouncementServiceTest
 		assertEquals(1, calls.get());
 		harness.service.close();
 		assertTrue(captured.get().isCanceled());
+		release.complete(null);
+		Thread.sleep(50);
+		assertTrue(harness.messages.isEmpty());
+		assertTrue(harness.sidebars.isEmpty());
+		harness.closeBase();
+	}
+
+	@Test public void shutdownDuringDnsCannotPublishCallbacks() throws Exception
+	{
+		CompletableFuture<Void> entered = new CompletableFuture<>();
+		CompletableFuture<Void> release = new CompletableFuture<>();
+		OkHttpClient base = new OkHttpClient.Builder().dns(hostname ->
+		{
+			entered.complete(null);
+			try { release.get(3, TimeUnit.SECONDS); }
+			catch (Exception error) { throw new UnknownHostException("cancelled"); }
+			return List.of(InetAddress.getLoopbackAddress());
+		}).build();
+		ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+		List<String> messages = new CopyOnWriteArrayList<>();
+		List<List<Announcement>> sidebars = new CopyOnWriteArrayList<>();
+		Path state = Files.createTempDirectory("nocturne-announcement-dns").resolve("state.json");
+		AnnouncementService service = new AnnouncementService(base, new Gson(), state,
+			messages::add, sidebars::add, worker, true, Clock.fixed(NOW, ZoneOffset.UTC),
+			() -> 0, 0, 1000, 0);
+		service.pollNowForTest();
+		entered.get(3, TimeUnit.SECONDS);
+		service.close();
+		release.complete(null);
+		Thread.sleep(50);
+		assertTrue(messages.isEmpty());
+		assertTrue(sidebars.isEmpty());
+		base.dispatcher().executorService().shutdownNow();
+		base.connectionPool().evictAll();
+	}
+
+	@Test public void shutdownDuringStreamingBodyCannotPublishCallbacks() throws Exception
+	{
+		CompletableFuture<Void> entered = new CompletableFuture<>();
+		CompletableFuture<Void> release = new CompletableFuture<>();
+		Harness harness = harness(chain -> new Response.Builder().request(chain.request())
+			.protocol(Protocol.HTTP_1_1).code(200).message("test").body(new ResponseBody()
+			{
+				private final BufferedSource source = Okio.buffer(new Source()
+				{
+					private boolean sent;
+					@Override public long read(Buffer sink, long count) throws IOException
+					{
+						if (sent) return -1;
+						entered.complete(null);
+						try { release.get(3, TimeUnit.SECONDS); }
+						catch (Exception error) { throw new IOException("cancelled", error); }
+						byte[] raw = valid(1, "body").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+						sink.write(raw);
+						sent = true;
+						return raw.length;
+					}
+					@Override public Timeout timeout() { return Timeout.NONE; }
+					@Override public void close() { }
+				});
+				@Override public MediaType contentType() { return MediaType.parse("application/json"); }
+				@Override public long contentLength() { return -1; }
+				@Override public BufferedSource source() { return source; }
+			}).build());
+		harness.service.pollNowForTest();
+		entered.get(3, TimeUnit.SECONDS);
+		harness.service.close();
 		release.complete(null);
 		Thread.sleep(50);
 		assertTrue(harness.messages.isEmpty());
