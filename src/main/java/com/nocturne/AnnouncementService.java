@@ -4,13 +4,15 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import java.io.IOException;
+import java.io.StringReader;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -34,6 +36,8 @@ import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
 
 /** Isolated, fail-open public announcement polling. */
 final class AnnouncementService implements AutoCloseable
@@ -74,6 +78,7 @@ final class AnnouncementService implements AutoCloseable
 	private boolean loaded;
 	private boolean started;
 	private boolean closed;
+	private List<Announcement> current = List.of();
 
 	AnnouncementService(OkHttpClient base, Gson gson, Path statePath,
 		Consumer<String> chat, Consumer<List<Announcement>> sidebar)
@@ -135,6 +140,16 @@ final class AnnouncementService implements AutoCloseable
 		synchronized (this)
 		{
 			if (closed || inFlight != null) return;
+			List<Announcement> active = new ArrayList<>();
+			Instant now = clock.instant();
+			for (Announcement announcement : current)
+				if (now.isBefore(announcement.expiresAt)) active.add(announcement);
+			if (active.size() != current.size())
+			{
+				current = List.copyOf(active);
+				try { sidebar.accept(current); }
+				catch (RuntimeException ignored) { }
+			}
 			if (!loaded)
 			{
 				seen.putAll(stateStore.load());
@@ -199,6 +214,7 @@ final class AnnouncementService implements AutoCloseable
 			if (closed) return;
 			if (display != null)
 			{
+				current = display;
 				if (responseEtag != null) etag = responseEtag;
 				for (Announcement announcement : display)
 				{
@@ -214,16 +230,13 @@ final class AnnouncementService implements AutoCloseable
 				try { stateStore.save(seen); }
 				catch (IOException | RuntimeException ignored) { }
 			}
-		}
-		try
-		{
-			if (display != null) sidebar.accept(display);
-			for (String message : newMessages) chat.accept(message);
-		}
-		catch (RuntimeException ignored) { }
-		finally
-		{
-			scheduleNext();
+			try
+			{
+				if (display != null) sidebar.accept(display);
+				for (String message : newMessages) chat.accept(message);
+			}
+			catch (RuntimeException ignored) { }
+			finally { scheduleNext(); }
 		}
 	}
 
@@ -240,7 +253,8 @@ final class AnnouncementService implements AutoCloseable
 	private synchronized void scheduleNext()
 	{
 		if (closed) return;
-		long delay = nextDelay(pollIntervalMillis, jitterMillis, jitterSource.getAsLong());
+		long delay = nextDelay(pollIntervalMillis, jitterMillis, jitterSource.getAsLong(),
+			clock.instant(), current);
 		try { scheduled = worker.schedule(this::poll, delay, TimeUnit.MILLISECONDS); }
 		catch (RuntimeException ignored) { }
 	}
@@ -253,14 +267,26 @@ final class AnnouncementService implements AutoCloseable
 		return interval + offset;
 	}
 
+	static long nextDelay(long interval, long jitter, long random, Instant now,
+		List<Announcement> announcements)
+	{
+		long delay = nextDelay(interval, jitter, random);
+		for (Announcement announcement : announcements)
+		{
+			long expiry = Duration.between(now, announcement.expiresAt).toMillis();
+			if (expiry >= 0) delay = Math.min(delay, Math.max(1, expiry + 1));
+		}
+		return delay;
+	}
+
 	static List<Announcement> parse(String raw, Instant now)
 	{
-		JsonObject root = new JsonParser().parse(raw).getAsJsonObject();
+		JsonObject root = parseStrictJson(raw).getAsJsonObject();
 		if (!exact(root, "schema_version", "revision", "generated_at", "announcements")
 			|| integer(root, "schema_version", SCHEMA_VERSION, SCHEMA_VERSION) != SCHEMA_VERSION)
 			throw new IllegalArgumentException("invalid response");
 		integer(root, "revision", 0, Long.MAX_VALUE);
-		Instant.parse(root.get("generated_at").getAsString());
+		Instant.parse(string(root, "generated_at", false));
 		JsonArray values = root.getAsJsonArray("announcements");
 		if (values.size() > MAX_ANNOUNCEMENTS) throw new IllegalArgumentException("too many announcements");
 		List<Announcement> result = new ArrayList<>();
@@ -270,15 +296,15 @@ final class AnnouncementService implements AutoCloseable
 			JsonObject value = element.getAsJsonObject();
 			if (!exact(value, "announcement_id", "revision", "title", "message", "severity",
 				"starts_at", "expires_at", "link")) throw new IllegalArgumentException("invalid fields");
-			String id = value.get("announcement_id").getAsString();
+			String id = string(value, "announcement_id", false);
 			int revision = (int) integer(value, "revision", 1, Integer.MAX_VALUE);
-			String title = value.get("title").isJsonNull() ? null
-				: plain(value.get("title").getAsString(), MAX_TITLE_CHARS, 1, false);
-			String message = plain(value.get("message").getAsString(), MAX_MESSAGE_CHARS,
+			String titleValue = string(value, "title", true);
+			String title = titleValue == null ? null : plain(titleValue, MAX_TITLE_CHARS, 1, false);
+			String message = plain(string(value, "message", false), MAX_MESSAGE_CHARS,
 				MAX_MESSAGE_LINES, true);
-			String severity = value.get("severity").getAsString();
-			Instant starts = Instant.parse(value.get("starts_at").getAsString());
-			Instant expires = Instant.parse(value.get("expires_at").getAsString());
+			String severity = string(value, "severity", false);
+			Instant starts = Instant.parse(string(value, "starts_at", false));
+			Instant expires = Instant.parse(string(value, "expires_at", false));
 			if (!ID.matcher(id).matches() || !ids.add(id) || revision < 1 || !SEVERITIES.contains(severity)
 				|| !starts.isBefore(expires) || now.isBefore(starts) || !now.isBefore(expires))
 				throw new IllegalArgumentException("invalid announcement");
@@ -288,13 +314,67 @@ final class AnnouncementService implements AutoCloseable
 			{
 				JsonObject link = value.getAsJsonObject("link");
 				if (!exact(link, "label", "url")) throw new IllegalArgumentException("invalid link fields");
-				linkLabel = plain(link.get("label").getAsString(), 48, 1, true);
-				linkUrl = allowedLink(link.get("url").getAsString());
+				linkLabel = plain(string(link, "label", false), 48, 1, true);
+				linkUrl = allowedLink(string(link, "url", false));
 			}
 			result.add(new Announcement(id, revision, title, message, severity,
 				starts, expires, linkLabel, linkUrl));
 		}
 		return Collections.unmodifiableList(result);
+	}
+
+	static JsonElement parseStrictJson(String raw)
+	{
+		try
+		{
+			JsonReader reader = new JsonReader(new StringReader(raw));
+			reader.setLenient(false);
+			JsonElement value = readStrict(reader, 0);
+			if (reader.peek() != JsonToken.END_DOCUMENT) throw new IllegalArgumentException("trailing JSON");
+			return value;
+		}
+		catch (IOException | IllegalStateException error)
+		{
+			throw new IllegalArgumentException("invalid JSON", error);
+		}
+	}
+
+	private static JsonElement readStrict(JsonReader reader, int depth) throws IOException
+	{
+		if (depth > 16) throw new IllegalArgumentException("JSON nesting exceeds limit");
+		switch (reader.peek())
+		{
+			case BEGIN_OBJECT:
+				reader.beginObject();
+				JsonObject object = new JsonObject();
+				Set<String> names = new HashSet<>();
+				while (reader.hasNext())
+				{
+					String name = reader.nextName();
+					if (names.size() >= 256 || !names.add(name))
+						throw new IllegalArgumentException("duplicate or excessive JSON fields");
+					object.add(name, readStrict(reader, depth + 1));
+				}
+				reader.endObject();
+				return object;
+			case BEGIN_ARRAY:
+				reader.beginArray();
+				JsonArray array = new JsonArray();
+				while (reader.hasNext())
+				{
+					if (array.size() >= 256) throw new IllegalArgumentException("JSON array exceeds limit");
+					array.add(readStrict(reader, depth + 1));
+				}
+				reader.endArray();
+				return array;
+			case STRING: return new com.google.gson.JsonPrimitive(reader.nextString());
+			case NUMBER: return new com.google.gson.JsonPrimitive(new BigDecimal(reader.nextString()));
+			case BOOLEAN: return new com.google.gson.JsonPrimitive(reader.nextBoolean());
+			case NULL:
+				reader.nextNull();
+				return com.google.gson.JsonNull.INSTANCE;
+			default: throw new IllegalArgumentException("invalid JSON token");
+		}
 	}
 
 	private static String plain(String value, int maximum, int lines, boolean required)
@@ -311,7 +391,8 @@ final class AnnouncementService implements AutoCloseable
 			int point = value.codePointAt(index);
 			int type = Character.getType(point);
 			if (point != '\n' && (type == Character.CONTROL || type == Character.FORMAT || type == Character.SURROGATE
-				|| type == Character.PRIVATE_USE || type == Character.UNASSIGNED)
+				|| type == Character.PRIVATE_USE || type == Character.UNASSIGNED
+				|| type == Character.LINE_SEPARATOR || type == Character.PARAGRAPH_SEPARATOR)
 				) throw new IllegalArgumentException("unsafe text");
 			index += Character.charCount(point);
 		}
@@ -341,6 +422,16 @@ final class AnnouncementService implements AutoCloseable
 		if (object == null || object.entrySet().size() != names.length) return false;
 		for (String name : names) if (!object.has(name)) return false;
 		return true;
+	}
+
+	private static String string(JsonObject object, String name, boolean nullable)
+	{
+		JsonElement element = object.get(name);
+		if (nullable && element != null && element.isJsonNull()) return null;
+		if (element == null || !element.isJsonPrimitive()
+			|| !element.getAsJsonPrimitive().isString())
+			throw new IllegalArgumentException("invalid string");
+		return element.getAsString();
 	}
 
 	private static long integer(JsonObject object, String name, long minimum, long maximum)

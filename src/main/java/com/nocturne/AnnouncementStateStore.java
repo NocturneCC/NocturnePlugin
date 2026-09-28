@@ -4,10 +4,10 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFileAttributeView;
@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.math.BigInteger;
 
 /** Bounded ID/revision-only local state. Announcement text is never persisted. */
 final class AnnouncementStateStore
@@ -46,7 +47,9 @@ final class AnnouncementStateStore
 		if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) return result;
 		try
 		{
-			JsonObject root = new JsonParser().parse(Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
+			if (Files.size(path) > 16 * 1024) return result;
+			JsonObject root = AnnouncementService.parseStrictJson(
+				Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
 			if (!exact(root, "schema_version", "seen")
 				|| root.get("schema_version").getAsInt() != SCHEMA_VERSION) return result;
 			JsonArray entries = root.getAsJsonArray("seen");
@@ -56,7 +59,13 @@ final class AnnouncementStateStore
 				JsonObject entry = element.getAsJsonObject();
 				if (!exact(entry, "announcement_id", "revision")) return new LinkedHashMap<>();
 				String id = entry.get("announcement_id").getAsString();
-				int revision = entry.get("revision").getAsInt();
+				JsonElement revisionValue = entry.get("revision");
+				if (revisionValue == null || !revisionValue.isJsonPrimitive()
+					|| !revisionValue.getAsJsonPrimitive().isNumber()
+					|| !revisionValue.toString().matches("[1-9][0-9]*")) return new LinkedHashMap<>();
+				BigInteger parsed = new BigInteger(revisionValue.getAsString());
+				if (parsed.compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) return new LinkedHashMap<>();
+				int revision = parsed.intValue();
 				if (!ID.matcher(id).matches() || revision < 1 || result.put(id, revision) != null)
 					return new LinkedHashMap<>();
 			}
@@ -103,7 +112,18 @@ final class AnnouncementStateStore
 		{
 			Files.writeString(temporary, gson.toJson(root), StandardCharsets.UTF_8);
 			if (supportsPosix(parent)) Files.setPosixFilePermissions(temporary, FILE_PERMISSIONS);
+			try (FileChannel channel = FileChannel.open(temporary, java.nio.file.StandardOpenOption.WRITE))
+			{
+				channel.force(true);
+			}
 			Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			if (supportsPosix(parent))
+			{
+				try (FileChannel directory = FileChannel.open(parent, java.nio.file.StandardOpenOption.READ))
+				{
+					directory.force(true);
+				}
+			}
 		}
 		finally
 		{

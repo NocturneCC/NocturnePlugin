@@ -135,6 +135,16 @@ public class AnnouncementServiceTest
 		invalid.add(valid(1, "[click](https://evil.example/)"));
 		invalid.add(valid(1, "safe").replace("\"schema_version\":1", "\"schema_version\":2"));
 		invalid.add(valid(1, "safe").replace("\"severity\":\"notice\"", "\"severity\":\"other\""));
+		invalid.add(valid(1, "safe").replace("\"schema_version\":1,",
+			"\"schema_version\":1,\"schema_version\":1,"));
+		invalid.add(valid(1, "safe").replace("\"revision\":1,", "\"revision\":1.5,"));
+		invalid.add(valid(1, "safe").replace("\"revision\":1,",
+			"\"revision\":9223372036854775808,"));
+		invalid.add(valid(1, "safe").replace("\"message\":\"safe\"", "\"message\":\"safe\\u202e\""));
+		invalid.add(valid(1, "safe").replace("\"message\":\"safe\"", "\"message\":\"safe\\u2028line\""));
+		invalid.add(valid(1, "safe").replace("\"message\":\"safe\"", "\"message\":\"safe\\ud800\""));
+		invalid.add(valid(1, "safe").replace("\"message\":\"safe\"", "\"message\":123"));
+		invalid.add(valid(1, "safe").replace("\"severity\":\"notice\"", "\"severity\":true"));
 		invalid.add(valid(1, "safe").replace("\"link\":null",
 			"\"link\":{\"label\":\"Bad\",\"url\":\"https://evil.example/\"}"));
 		invalid.add(valid(1, "safe").replace("\"expires_at\":\"2026-09-28T21:00:00Z\"",
@@ -194,7 +204,27 @@ public class AnnouncementServiceTest
 		harness.service.close();
 		assertTrue(captured.get().isCanceled());
 		release.complete(null);
+		Thread.sleep(50);
+		assertTrue(harness.messages.isEmpty());
+		assertTrue(harness.sidebars.isEmpty());
 		harness.closeBase();
+	}
+
+	@Test public void repeatedStartStopAndRejectedSchedulingFailOpen() throws Exception
+	{
+		ScheduledExecutorService rejected = Executors.newSingleThreadScheduledExecutor();
+		rejected.shutdownNow();
+		OkHttpClient base = new OkHttpClient();
+		Path state = Files.createTempDirectory("nocturne-announcement-rejected").resolve("state.json");
+		AnnouncementService service = new AnnouncementService(base, new Gson(), state,
+			message -> fail("unexpected chat"), values -> fail("unexpected sidebar"), rejected,
+			false, Clock.fixed(NOW, ZoneOffset.UTC), () -> 0, 0, 1000, 0);
+		service.start();
+		service.start();
+		service.close();
+		service.close();
+		base.dispatcher().executorService().shutdownNow();
+		base.connectionPool().evictAll();
 	}
 
 	@Test public void parserAcceptsOnlyBoundedActivePlaintextAndAllowlistedLinks()
@@ -205,6 +235,9 @@ public class AnnouncementServiceTest
 		assertEquals(1, parsed.size());
 		assertEquals("https://nocturne.events/event-board.html", parsed.get(0).linkUrl);
 		assertEquals("[Nocturne Announcement]", Announcement.PREFIX);
+		assertEquals(10_001, AnnouncementService.nextDelay(TimeUnit.MINUTES.toMillis(15), 0, 0,
+			NOW, List.of(new Announcement("notice", 1, null, "Message", "notice", NOW.minusSeconds(1),
+				NOW.plusSeconds(10), null, null))));
 	}
 
 	private static void withInvalid(String raw) throws Exception
