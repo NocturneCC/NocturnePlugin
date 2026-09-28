@@ -14,6 +14,9 @@ from uuid import UUID
 from derived_values import validate_item_valuation
 from raid_presence import process as process_raid_presence
 from announcements import PUBLIC_PATH as ANNOUNCEMENTS_PATH, public_wsgi as announcements_wsgi
+from emoji_public import MANIFEST_PATH as EMOJI_MANIFEST_PATH
+from emoji_public import ASSET_PATH as EMOJI_ASSET_PATH
+from emoji_public import public_wsgi as emoji_wsgi
 
 MAX_METADATA_BODY = 8192
 MAX_SCREENSHOT_BYTES = 240 * 1024
@@ -159,7 +162,8 @@ def screenshot_digest(data):
 
 
 def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
-               presence_identity_resolver=None, announcement_snapshot=None):
+               presence_identity_resolver=None, announcement_snapshot=None,
+               emoji_public_root=None):
     state_dir = state_dir or os.environ["NOCTURNE_INTAKE_STATE"]
     if allowed_rsns is None:
         allowed_rsns = os.environ["NOCTURNE_TEST_RSNS"].split(",")
@@ -177,6 +181,8 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
     presence_database = directory / "raid-presence-v1.sqlite3"
     if announcement_snapshot is None:
         announcement_snapshot = os.environ.get("NOCTURNE_ANNOUNCEMENTS_SNAPSHOT")
+    if emoji_public_root is None:
+        emoji_public_root = os.environ.get("NOCTURNE_EMOJI_PUBLIC_ROOT")
     if presence_identity_resolver is None:
         if socket_path:
             def presence_identity_resolver(rsn):
@@ -229,6 +235,10 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
         def error(code):
             return reply(start_response, code, {"status": "not_accepted", "storage": "development"})
         path = environ.get("PATH_INFO")
+        if path == EMOJI_MANIFEST_PATH or EMOJI_ASSET_PATH.fullmatch(path or ""):
+            if not emoji_public_root:
+                return error(503)
+            return emoji_wsgi(emoji_public_root, environ, start_response)
         if path == ANNOUNCEMENTS_PATH:
             if not announcement_snapshot:
                 return error(503)
