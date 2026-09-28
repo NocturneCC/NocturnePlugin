@@ -13,6 +13,16 @@ import static org.junit.Assert.*;
 
 public class LootEventCoverageTest
 {
+	@Test public void currentLongPricesAreConvertedWithoutWrappingOrCaptureExceptions()
+	{
+		assertEquals(0, NocturnePlugin.compatibleItemPrice(0));
+		assertEquals(0, NocturnePlugin.compatibleItemPrice(-1));
+		assertEquals(123_456, NocturnePlugin.compatibleItemPrice(123_456));
+		assertEquals(Integer.MAX_VALUE, NocturnePlugin.compatibleItemPrice(Integer.MAX_VALUE));
+		assertEquals(0, NocturnePlugin.compatibleItemPrice((long) Integer.MAX_VALUE + 1));
+		assertFalse(NocturnePlugin.isSubmissionEligible(List.of(
+			new LootItem(1, 1, "Unavailable oversized price", 0))));
+	}
 	@Test
 	public void unavailablePricesAreNotDescribedAsBelowThreshold()
 	{

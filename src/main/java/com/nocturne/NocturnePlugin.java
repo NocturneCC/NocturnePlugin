@@ -315,6 +315,13 @@ public class NocturnePlugin extends Plugin
 			? SubmissionStatus.INELIGIBLE : SubmissionStatus.UNPRICED;
 	}
 
+	static int compatibleItemPrice(long price)
+	{
+		// The submission/history protocol is intentionally int-bounded. Treat values
+		// outside that protocol as unavailable instead of wrapping or aborting capture.
+		return price > 0 && price <= Integer.MAX_VALUE ? (int) price : 0;
+	}
+
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
@@ -351,9 +358,9 @@ public class NocturnePlugin extends Plugin
 			{
 				String name = itemManager.getItemComposition(item.getId()).getName();
 				boolean tradeable = itemManager.getItemComposition(item.getId()).isTradeable();
-				int unitPriceGp = Math.toIntExact(itemManager.getItemPrice(item.getId()));
+				int unitPriceGp = compatibleItemPrice(itemManager.getItemPrice(item.getId()));
 				items.add(derivedValues.value(item.getId(), item.getQuantity(), name, unitPriceGp, tradeable,
-					outputId -> Math.toIntExact(itemManager.getItemPrice(outputId)),
+					outputId -> compatibleItemPrice(itemManager.getItemPrice(outputId)),
 					outputId -> itemManager.getItemComposition(outputId).getName()));
 			}
 		}
