@@ -13,6 +13,7 @@ from announcements import (
     MAX_ANNOUNCEMENTS,
     MAX_MESSAGE_CHARS,
     MAX_RESPONSE_BYTES,
+    MAX_SNAPSHOT_ANNOUNCEMENTS,
     AnnouncementStore,
     RevisionConflict,
     create_admin_blueprint,
@@ -87,6 +88,19 @@ class AnnouncementsTest(unittest.TestCase):
         raw, _, _ = public_payload(self.snapshot, self.now)
         self.assertEqual(MAX_ANNOUNCEMENTS, len(json.loads(raw)["announcements"]))
         self.assertLessEqual(len(raw), MAX_RESPONSE_BYTES)
+
+    def test_snapshot_capacity_fails_before_state_or_audit_commit(self):
+        for number in range(MAX_SNAPSHOT_ANNOUNCEMENTS):
+            self.publish(message=f"scheduled {number}")
+        draft = self.store.create_draft(self.fields("one too many"), "admin")
+        with self.assertRaisesRegex(ValueError, "too many scheduled"):
+            self.store.transition(draft["announcement_id"], "publish", "admin", 1)
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual("draft", db.execute(
+                "SELECT state FROM plugin_announcements WHERE announcement_id=?",
+                (draft["announcement_id"],)).fetchone()[0])
+            self.assertEqual(MAX_SNAPSHOT_ANNOUNCEMENTS * 2 + 1, db.execute(
+                "SELECT COUNT(*) FROM plugin_announcement_audit").fetchone()[0])
 
     def test_plain_text_and_unknown_fields_are_rejected(self):
         self.assertIn("one\ntwo\nthree\nfour",

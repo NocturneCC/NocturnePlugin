@@ -21,7 +21,7 @@ MAX_MESSAGE_LINES = 4
 MAX_TITLE_CHARS = 80
 MAX_RESPONSE_BYTES = 16 * 1024
 MAX_ID_CHARS = 64
-MAX_SNAPSHOT_ANNOUNCEMENTS = 128
+MAX_SNAPSHOT_ANNOUNCEMENTS = 64
 MAX_SNAPSHOT_BYTES = 128 * 1024
 DEFAULT_PUBLIC_SNAPSHOT = "/srv/projects/nocturne-plugin-announcements-public/announcements-v1.json"
 SEVERITIES = frozenset({"info", "notice", "warning", "urgent"})
@@ -286,6 +286,12 @@ class AnnouncementStore:
                 expected = "draft" if action == "publish" else "published"
                 if before["state"] != expected:
                     raise ValueError(f"cannot {action} announcement in current state")
+                if action == "publish":
+                    scheduled = db.execute(
+                        "SELECT COUNT(*) FROM plugin_announcements "
+                        "WHERE state='published' AND expires_at>?", (now,)).fetchone()[0]
+                    if type(scheduled) is not int or scheduled >= MAX_SNAPSHOT_ANNOUNCEMENTS:
+                        raise ValueError("too many scheduled announcements")
                 state = {"publish": "published", "withdraw": "withdrawn", "expire": "expired"}[action]
                 expiry = now if action == "expire" else before["expires_at"]
                 db.execute("UPDATE plugin_announcements SET revision=?,state=?,expires_at=?,updated_at=?,updated_by=? WHERE announcement_id=?",
