@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -256,8 +257,9 @@ final class AnnouncementService implements AutoCloseable
 	{
 		JsonObject root = new JsonParser().parse(raw).getAsJsonObject();
 		if (!exact(root, "schema_version", "revision", "generated_at", "announcements")
-			|| root.get("schema_version").getAsInt() != SCHEMA_VERSION
-			|| root.get("revision").getAsLong() < 0) throw new IllegalArgumentException("invalid response");
+			|| integer(root, "schema_version", SCHEMA_VERSION, SCHEMA_VERSION) != SCHEMA_VERSION)
+			throw new IllegalArgumentException("invalid response");
+		integer(root, "revision", 0, Long.MAX_VALUE);
 		Instant.parse(root.get("generated_at").getAsString());
 		JsonArray values = root.getAsJsonArray("announcements");
 		if (values.size() > MAX_ANNOUNCEMENTS) throw new IllegalArgumentException("too many announcements");
@@ -269,7 +271,7 @@ final class AnnouncementService implements AutoCloseable
 			if (!exact(value, "announcement_id", "revision", "title", "message", "severity",
 				"starts_at", "expires_at", "link")) throw new IllegalArgumentException("invalid fields");
 			String id = value.get("announcement_id").getAsString();
-			int revision = value.get("revision").getAsInt();
+			int revision = (int) integer(value, "revision", 1, Integer.MAX_VALUE);
 			String title = value.get("title").isJsonNull() ? null
 				: plain(value.get("title").getAsString(), MAX_TITLE_CHARS, 1, false);
 			String message = plain(value.get("message").getAsString(), MAX_MESSAGE_CHARS,
@@ -308,9 +310,9 @@ final class AnnouncementService implements AutoCloseable
 		{
 			int point = value.codePointAt(index);
 			int type = Character.getType(point);
-			if (type == Character.CONTROL || type == Character.FORMAT || type == Character.SURROGATE
+			if (point != '\n' && (type == Character.CONTROL || type == Character.FORMAT || type == Character.SURROGATE
 				|| type == Character.PRIVATE_USE || type == Character.UNASSIGNED)
-				throw new IllegalArgumentException("unsafe text");
+				) throw new IllegalArgumentException("unsafe text");
 			index += Character.charCount(point);
 		}
 		return value;
@@ -339,6 +341,20 @@ final class AnnouncementService implements AutoCloseable
 		if (object == null || object.entrySet().size() != names.length) return false;
 		for (String name : names) if (!object.has(name)) return false;
 		return true;
+	}
+
+	private static long integer(JsonObject object, String name, long minimum, long maximum)
+	{
+		JsonElement element = object.get(name);
+		if (element == null || !element.isJsonPrimitive()
+			|| !element.getAsJsonPrimitive().isNumber()
+			|| !element.toString().matches("-?(0|[1-9][0-9]*)"))
+			throw new IllegalArgumentException("invalid integer");
+		BigInteger value = new BigInteger(element.getAsString());
+		if (value.compareTo(BigInteger.valueOf(minimum)) < 0
+			|| value.compareTo(BigInteger.valueOf(maximum)) > 0)
+			throw new IllegalArgumentException("invalid integer");
+		return value.longValue();
 	}
 
 	@Override public synchronized void close()

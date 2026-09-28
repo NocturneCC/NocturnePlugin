@@ -23,6 +23,25 @@ reveals them for local testing. Names are not presented as verified clan members
   files or the whole `loot-history` directory.
 - Separate kills with identical drops are retained as separate events.
 
+### Clan announcements
+
+While Nocturne is enabled, it automatically requests the public clan-announcement
+feed from `https://nocturne.events/api/plugin/v1/announcements` after startup and
+approximately every 15 minutes. This connection exposes your IP address to
+`nocturne.events`. The request contains no RSN, account/profile identifier, chat,
+raid data, telemetry, read receipt or persistent client identifier. There is no
+announcement toggle; disabling Nocturne stops announcement requests.
+
+New and revised announcements are shown with the exact
+`[Nocturne Announcement]` prefix and in a bounded sidebar section. Content is
+strictly bounded plain text. Optional links are limited to an explicit
+`nocturne.events` allowlist and open only after a user clicks their button.
+The client uses ETag caching, a five-second timeout, no redirects and no automatic
+connection retry. Endpoint failure never disables or delays local history, loot,
+screenshot or raid behavior. Local deduplication stores at most 64 announcement
+IDs and revisions in `.runelite/nocturne/announcement-state-v1.json`; it stores no
+announcement text, player identity, telemetry or read receipt.
+
 History files contain the card's RSN, source, time, item IDs, names, quantities,
 captured unit-price/derived-value metadata, group snapshot and intake outcome.
 They never contain screenshots or screenshot bytes. Records are local and
@@ -178,6 +197,12 @@ Manual test checklist:
    remain stored; switching back must restore it.
 8. Disable and re-enable Nocturne. There should be exactly one sidebar icon and
    the current RSN and its existing history restored.
+9. Confirm a test announcement appears once in chat with the exact
+   `[Nocturne Announcement]` prefix and in the sidebar. Confirm a revised
+   announcement appears once more, an unchanged announcement does not repeat,
+   and any link opens only after clicking its button.
+10. With the announcement endpoint unavailable, confirm Nocturne still starts
+    and loot/history/raid behavior continues normally.
 
 Group capture test:
 
@@ -208,7 +233,7 @@ Screenshot attachment test:
 
 - Deploy and verify the prepared Midgard development intake; broaden drop coverage.
 - Backend member/alt RSN lookup and event-only guest enrollment, without Discord login.
-- Custom chat emojis and clearly labeled Nocturne announcements.
+- Custom chat emojis.
 
 An RSN lookup establishes eligibility, not proof that the sender owns that
 character or obtained a drop. Client-supplied reports can be forged; timestamps,

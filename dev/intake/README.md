@@ -2,7 +2,9 @@
 
 Prepared for Midgard; not deployed by committing this directory. This is server
 code, excluded from the RuneLite JAR. It uses Python's standard library as a WSGI
-application and gunicorn as the HTTP server. No Flask/live API modifications.
+application and gunicorn as the HTTP server. Guarded announcement administration
+support installs a standalone Flask blueprint into the existing authenticated
+admin boundary only after an explicit, backed-up maintenance-window apply.
 
 POST `/api/plugin/dev/drops` accepts only the reporting RSN, item IDs/quantities,
 source, timestamp, schema version and event UUID. Extra fields (including group
@@ -11,6 +13,13 @@ There is no member lookup, points processing, public read endpoint or Discord lo
 Claims remain unverified. The optional local writer can route eligible reports
 into the existing review queue as pending proposals; it never approves them or
 updates rank totals.
+
+GET/HEAD `/api/plugin/v1/announcements` is a separate unauthenticated, read-only
+feed. It accepts no body or client identity fields, returns at most three active
+plain-text announcements, supports ETag/304 caching, and never writes a database.
+Draft, future, expired, and withdrawn announcements are excluded. See
+[ANNOUNCEMENTS.md](ANNOUNCEMENTS.md) for schema, administration, deployment and
+rollback boundaries.
 
 Limits: 8 KiB requests, 64 unique item stacks, recent timestamps, 20 new reports
 per RSN/minute, 10,000 rows, approximately 16 MiB SQLite file, seven-day cleanup

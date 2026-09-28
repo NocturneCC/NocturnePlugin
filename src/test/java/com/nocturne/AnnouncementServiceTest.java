@@ -199,7 +199,7 @@ public class AnnouncementServiceTest
 
 	@Test public void parserAcceptsOnlyBoundedActivePlaintextAndAllowlistedLinks()
 	{
-		List<Announcement> parsed = AnnouncementService.parse(valid(1, "Safe message").replace(
+		List<Announcement> parsed = AnnouncementService.parse(valid(1, "one\ntwo\nthree\nfour").replace(
 			"\"link\":null", "\"link\":{\"label\":\"Event board\","
 				+ "\"url\":\"https://nocturne.events/event-board.html\"}"), NOW);
 		assertEquals(1, parsed.size());

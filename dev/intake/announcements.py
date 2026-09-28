@@ -62,7 +62,8 @@ def _plain(value, name, maximum, *, required=True, lines=1):
         return None
     if (required and not value) or len(value) > maximum or len(value.splitlines()) > lines:
         raise ValueError(f"invalid {name}")
-    if any(unicodedata.category(character).startswith("C") for character in value):
+    if any(character != "\n" and unicodedata.category(character).startswith("C")
+           for character in value):
         raise ValueError(f"unsafe {name}")
     if "<" in value or ">" in value or _MARKUP.search(value):
         raise ValueError(f"markup is not allowed in {name}")

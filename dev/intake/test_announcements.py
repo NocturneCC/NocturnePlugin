@@ -84,6 +84,8 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertLessEqual(len(raw), MAX_RESPONSE_BYTES)
 
     def test_plain_text_and_unknown_fields_are_rejected(self):
+        self.assertIn("one\ntwo\nthree\nfour",
+                      validate_fields(self.fields("one\ntwo\nthree\nfour"))["message"])
         bad = ["x" * (MAX_MESSAGE_CHARS + 1), "<b>markup</b>", "<img=12>",
                "[click](https://nocturne.events/)",
                "control\u0001text", "one\ntwo\nthree\nfour\nfive"]
