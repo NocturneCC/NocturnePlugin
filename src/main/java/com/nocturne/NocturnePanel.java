@@ -25,6 +25,9 @@ import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.List;
+import java.util.function.Consumer;
+import net.runelite.client.util.LinkBrowser;
 
 final class NocturnePanel extends PluginPanel
 {
@@ -36,6 +39,7 @@ final class NocturnePanel extends PluginPanel
 
 	private final ItemManager itemManager;
 	private final HistoryActions historyActions;
+	private final Consumer<String> linkOpener;
 	private boolean diagnostics;
 	private GroupSnapshot liveGroup = GroupSnapshot.unavailable("Enter a raid to preview its roster.");
 	private final JTextArea connection = note("Local capture · submissions off", BACKGROUND);
@@ -45,6 +49,7 @@ final class NocturnePanel extends PluginPanel
 	private final JLabel count = label("0 loot events", MUTED);
 	private final JButton loadOlder = new JButton("Load 50 older events");
 	private final JPanel feed = new JPanel();
+	private final JPanel announcementFeed = new JPanel();
 	private final JTextArea groupPreview = note("Enter a raid to preview its roster.", BACKGROUND);
 	private final JTextArea raidDiagnostics = note("Raid diagnostics inactive.", BACKGROUND);
 	private final JTextArea raidVerification = note("Raid verification: waiting for Chambers.", BACKGROUND);
@@ -54,13 +59,20 @@ final class NocturnePanel extends PluginPanel
 
 	NocturnePanel(ItemManager itemManager)
 	{
-		this(itemManager, HistoryActions.NONE);
+		this(itemManager, HistoryActions.NONE, LinkBrowser::open);
 	}
 
 	NocturnePanel(ItemManager itemManager, HistoryActions historyActions)
 	{
+		this(itemManager, historyActions, LinkBrowser::open);
+	}
+
+	NocturnePanel(ItemManager itemManager, HistoryActions historyActions,
+		Consumer<String> linkOpener)
+	{
 		this.itemManager = itemManager;
 		this.historyActions = historyActions;
+		this.linkOpener = linkOpener;
 		setBackground(BACKGROUND);
 		setLayout(new BorderLayout(0, 12));
 		setBorder(BorderFactory.createEmptyBorder(12, 9, 12, 9));
@@ -80,6 +92,12 @@ final class NocturnePanel extends PluginPanel
 		header.add(groupPreview);
 		header.add(raidVerification);
 		header.add(raidDiagnostics);
+		header.add(spacer());
+		header.add(label("CLAN ANNOUNCEMENTS", PURPLE));
+		announcementFeed.setLayout(new BoxLayout(announcementFeed, BoxLayout.Y_AXIS));
+		announcementFeed.setBackground(BACKGROUND);
+		announcementFeed.add(note("Announcements load in the background.", BACKGROUND));
+		header.add(announcementFeed);
 		header.add(spacer());
 		header.add(label("RECENT LOOT", PURPLE));
 		header.add(count);
@@ -118,6 +136,48 @@ final class NocturnePanel extends PluginPanel
 		add(footer, BorderLayout.SOUTH);
 		installViewportInputTracking();
 		renderHistory();
+	}
+
+	void setAnnouncements(List<Announcement> announcements)
+	{
+		requireEdt();
+		ViewportAnchor anchor = captureViewportAnchor();
+		announcementFeed.removeAll();
+		if (announcements == null || announcements.isEmpty())
+		{
+			announcementFeed.add(note("No active clan announcements.", BACKGROUND));
+		}
+		else
+		{
+			for (Announcement announcement : announcements.subList(0, Math.min(3, announcements.size())))
+			{
+				JPanel card = column(CARD);
+				card.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(0, 0, 5, 0, BACKGROUND),
+					BorderFactory.createEmptyBorder(7, 7, 7, 7)));
+				String heading = announcement.title == null ? announcement.severity.toUpperCase(java.util.Locale.ROOT)
+					: announcement.title;
+				card.add(label(heading, PURPLE));
+				card.add(note(announcement.message, CARD));
+				if (announcement.linkUrl != null)
+				{
+					JButton open = new JButton(announcement.linkLabel);
+					open.setFocusable(false);
+					open.addActionListener(event -> linkOpener.accept(announcement.linkUrl));
+					card.add(open);
+				}
+				announcementFeed.add(card);
+			}
+		}
+		announcementFeed.revalidate();
+		announcementFeed.repaint();
+		revalidate();
+		restoreAfterLayout(anchor, beginIndependentRestore());
+	}
+
+	int announcementCount()
+	{
+		return announcementFeed.getComponentCount();
 	}
 
 	void setPlayer(String rsn)

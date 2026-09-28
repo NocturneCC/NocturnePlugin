@@ -21,6 +21,8 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -75,10 +77,14 @@ public class NocturnePlugin extends Plugin
 	private DrawManager drawManager;
 
 	@Inject
+	private ChatMessageManager chatMessageManager;
+
+	@Inject
 	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
 	private volatile RaidPresenceService raidPresence;
+	private volatile AnnouncementService announcementService;
 	private volatile RaidVerificationStatus raidVerification = RaidVerificationStatus.INACTIVE;
 	private DerivedValueCatalogue derivedValues;
 	private LootHistoryStore historyStore;
@@ -106,6 +112,26 @@ public class NocturnePlugin extends Plugin
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
 		raidPresence = new RaidPresenceService(http, gson);
+		AnnouncementService createdAnnouncements = null;
+		try
+		{
+			createdAnnouncements = new AnnouncementService(http, gson,
+				RuneLite.RUNELITE_DIR.toPath().resolve("nocturne").resolve("announcement-state-v1.json"),
+				message -> clientThread.invoke(() ->
+				{
+					if (lifecycle == token)
+					{
+						chatMessageManager.queue(QueuedMessage.builder()
+							.type(ChatMessageType.CONSOLE).value(message).build());
+					}
+				}), current -> withPanel(view -> view.setAnnouncements(current)));
+		}
+		catch (RuntimeException error)
+		{
+			log.debug("Unable to initialize public clan announcements", error);
+		}
+		AnnouncementService announcements = createdAnnouncements;
+		announcementService = announcements;
 		SwingUtilities.invokeLater(() ->
 		{
 			if (lifecycle != token)
@@ -127,6 +153,7 @@ public class NocturnePlugin extends Plugin
 				.panel(panel)
 				.build();
 			clientToolbar.addNavigation(navigation);
+			if (announcements != null) announcements.start();
 			clientThread.invoke(() ->
 			{
 				if (lifecycle == token)
@@ -148,6 +175,9 @@ public class NocturnePlugin extends Plugin
 		RaidPresenceService presence = raidPresence;
 		raidPresence = null;
 		if (presence != null) presence.close();
+		AnnouncementService announcements = announcementService;
+		announcementService = null;
+		if (announcements != null) announcements.close();
 		raidVerification = RaidVerificationStatus.INACTIVE;
 		groups = null;
 		activeRsn = null;
@@ -321,9 +351,10 @@ public class NocturnePlugin extends Plugin
 			{
 				String name = itemManager.getItemComposition(item.getId()).getName();
 				boolean tradeable = itemManager.getItemComposition(item.getId()).isTradeable();
-				int unitPriceGp = itemManager.getItemPrice(item.getId());
+				int unitPriceGp = Math.toIntExact(itemManager.getItemPrice(item.getId()));
 				items.add(derivedValues.value(item.getId(), item.getQuantity(), name, unitPriceGp, tradeable,
-					itemManager::getItemPrice, outputId -> itemManager.getItemComposition(outputId).getName()));
+					outputId -> Math.toIntExact(itemManager.getItemPrice(outputId)),
+					outputId -> itemManager.getItemComposition(outputId).getName()));
 			}
 		}
 		if (items.isEmpty())

@@ -10,6 +10,7 @@ import java.awt.event.MouseWheelEvent;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.JComponent;
+import javax.swing.JButton;
 import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
 import org.junit.BeforeClass;
@@ -19,6 +20,42 @@ import static org.junit.Assert.*;
 public class NocturnePanelScrollTest
 {
 	@BeforeClass public static void headless() { System.setProperty("java.awt.headless", "true"); }
+
+	@Test
+	public void announcementLinkOpensOnlyAfterExplicitButtonClick() throws Exception
+	{
+		List<String> opened = new ArrayList<>();
+		final NocturnePanel[] result = new NocturnePanel[1];
+		onEdt(() ->
+		{
+			result[0] = new NocturnePanel(null, NocturnePanel.HistoryActions.NONE, opened::add);
+			result[0].setAnnouncements(List.of(new Announcement("notice", 1, "Clan notice",
+				"Event tonight", "notice", java.time.Instant.parse("2026-09-28T19:00:00Z"),
+				java.time.Instant.parse("2026-09-28T21:00:00Z"), "Event board",
+				"https://nocturne.events/event-board.html")));
+		});
+		assertTrue(opened.isEmpty());
+		List<JButton> buttons = new ArrayList<>();
+		collectButtons(result[0], buttons);
+		JButton link = buttons.stream().filter(button -> "Event board".equals(button.getText()))
+			.findFirst().orElseThrow(AssertionError::new);
+		onEdt(link::doClick);
+		assertEquals(List.of("https://nocturne.events/event-board.html"), opened);
+	}
+
+	@Test
+	public void announcementRefreshPreservesRecentLootAnchor() throws Exception
+	{
+		Harness h = harness(18);
+		Anchor before = positionAt(h, "old-8", 7);
+		Announcement announcement = new Announcement("notice", 1, "Clan notice", "Event tonight",
+			"notice", java.time.Instant.parse("2026-09-28T19:00:00Z"),
+			java.time.Instant.parse("2026-09-28T21:00:00Z"), null, null);
+		onEdt(() -> { h.panel.setAnnouncements(List.of(announcement)); h.layout(); });
+		flushEdt();
+		assertAnchor(h, before);
+		assertEquals(1, h.panel.announcementCount());
+	}
 
 	@Test
 	public void livePrependAtTopStaysAtZeroAndNewestIsFirst() throws Exception
@@ -331,6 +368,13 @@ public class NocturnePanelScrollTest
 			&& ((JComponent) component).getClientProperty("lootRecordId") != null) result.add(component);
 		if (component instanceof Container)
 			for (Component child : ((Container) component).getComponents()) collectCards(child, result);
+	}
+
+	private static void collectButtons(Component component, List<JButton> result)
+	{
+		if (component instanceof JButton) result.add((JButton) component);
+		if (component instanceof Container)
+			for (Component child : ((Container) component).getComponents()) collectButtons(child, result);
 	}
 
 	private static String id(Component card)
