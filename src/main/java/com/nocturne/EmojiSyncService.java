@@ -200,7 +200,13 @@ final class EmojiSyncService implements AutoCloseable
 		if (!url.equals(ORIGIN + "/api/plugin/v1/emojis/assets/" + entry.digest + ".png"))
 			throw new IOException("unsafe emoji asset path");
 		Call call = http.newCall(new Request.Builder().url(url).get().build());
-		assetCalls.add(call);
+		synchronized (this)
+		{
+			// Serialize registration with close(): either shutdown sees and cancels
+			// this call, or this call observes shutdown and never starts.
+			if (closed) throw new IOException("emoji synchronization stopped");
+			assetCalls.add(call);
+		}
 		try (Response response = call.execute())
 		{
 			MediaType type = response.body() == null ? null : response.body().contentType();

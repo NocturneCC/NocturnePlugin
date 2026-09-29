@@ -82,6 +82,40 @@ public class EmojiCacheStoreTest
 		finally { delete(root); }
 	}
 
+	@Test public void hardLinksAndStaleTemporaryEntriesFailClosedOrAreRemoved() throws Exception
+	{
+		Path root = Files.createTempDirectory("emoji-cache-hardlink");
+		try
+		{
+			Gson gson = new Gson();
+			byte[] image = EmojiTestFixtures.png(0xff113355);
+			EmojiTestFixtures.FixtureEntry fixture = new EmojiTestFixtures.FixtureEntry("wave", image);
+			EmojiManifest manifest = EmojiManifest.parse(
+				EmojiTestFixtures.manifest(gson, List.of(fixture)), gson);
+			EmojiCacheStore store = new EmojiCacheStore(root, gson);
+			store.save(manifest, Map.of(fixture.digest(), image), "\"" + "a".repeat(64) + "\"");
+
+			Path pointer = root.resolve("current");
+			Path linked = root.resolve("linked-current");
+			Files.createLink(linked, pointer);
+			assertNull(store.load());
+			Files.delete(linked);
+
+			Path staleDirectory = root.resolve(".generation-stale");
+			Files.createDirectory(staleDirectory);
+			Files.writeString(staleDirectory.resolve("partial"), "partial");
+			Path stalePointer = root.resolve(".current-stale");
+			Files.writeString(stalePointer, "partial");
+			EmojiTestFixtures.FixtureEntry next = new EmojiTestFixtures.FixtureEntry("next", image);
+			EmojiManifest nextManifest = EmojiManifest.parse(
+				EmojiTestFixtures.manifest(gson, List.of(next)), gson);
+			store.save(nextManifest, Map.of(next.digest(), image), "\"" + "b".repeat(64) + "\"");
+			assertFalse(Files.exists(staleDirectory));
+			assertFalse(Files.exists(stalePointer));
+		}
+		finally { delete(root); }
+	}
+
 	private static void delete(Path path) throws Exception
 	{
 		if (!Files.exists(path)) return;

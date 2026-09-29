@@ -8,6 +8,7 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
@@ -45,13 +46,13 @@ final class EmojiCacheStore
 		try
 		{
 			Path pointer = root.resolve("current");
-			if (!Files.isRegularFile(pointer) || Files.isSymbolicLink(pointer)
+			if (!safeRegularFile(pointer)
 				|| Files.size(pointer) > 128) return null;
 			String revision = Files.readString(pointer, StandardCharsets.US_ASCII).trim();
 			if (!EmojiManifest.DIGEST.matcher(revision).matches()) return null;
 			Path generation = safeGeneration(revision);
 			Path manifestPath = generation.resolve("manifest.json");
-			if (!Files.isRegularFile(manifestPath) || Files.isSymbolicLink(manifestPath)
+			if (!safeRegularFile(manifestPath)
 				|| Files.size(manifestPath) > EmojiManifest.MAX_MANIFEST_BYTES) return null;
 			EmojiManifest manifest = EmojiManifest.parse(Files.readAllBytes(manifestPath), gson);
 			if (!revision.equals(manifest.revision)) return null;
@@ -67,7 +68,7 @@ final class EmojiCacheStore
 			}
 			String etag = null;
 			Path etagPath = generation.resolve("etag.txt");
-			if (Files.isRegularFile(etagPath) && !Files.isSymbolicLink(etagPath)
+			if (safeRegularFile(etagPath)
 				&& Files.size(etagPath) <= 80)
 			{
 				String value = Files.readString(etagPath, StandardCharsets.US_ASCII).trim();
@@ -86,6 +87,7 @@ final class EmojiCacheStore
 		if (rawAssets.size() > manifest.entries.size() || !etag.matches("\"[0-9a-f]{64}\""))
 			throw new IOException("incomplete emoji generation");
 		prepareDirectory(root);
+		cleanupTemporaryEntries();
 		Path generations = root.resolve("generations");
 		prepareDirectory(generations);
 		Path target = safeGeneration(manifest.revision);
@@ -138,13 +140,25 @@ final class EmojiCacheStore
 	{
 		try
 		{
-			if (!Files.isDirectory(generation) || Files.isSymbolicLink(generation)) return false;
+			if (!safeDirectory(generation)) return false;
 			Path manifestPath = generation.resolve("manifest.json");
-			if (!Files.isRegularFile(manifestPath) || Files.isSymbolicLink(manifestPath)) return false;
+			if (!safeRegularFile(manifestPath)) return false;
 			EmojiManifest actual = EmojiManifest.parse(Files.readAllBytes(manifestPath), gson);
 			if (!actual.revision.equals(expected.revision)) return false;
+			Path assets = generation.resolve("assets");
+			if (!safeDirectory(assets)) return false;
+			Set<String> expectedNames = new HashSet<>();
 			for (EmojiManifest.Entry entry : actual.entries)
+			{
+				expectedNames.add(entry.digest + ".png");
 				readAsset(generation.resolve("assets").resolve(entry.digest + ".png"), entry);
+			}
+			try (DirectoryStream<Path> values = Files.newDirectoryStream(assets))
+			{
+				for (Path value : values)
+					if (!expectedNames.remove(value.getFileName().toString())) return false;
+			}
+			if (!expectedNames.isEmpty()) return false;
 			return true;
 		}
 		catch (IOException | RuntimeException error)
@@ -155,7 +169,7 @@ final class EmojiCacheStore
 
 	private byte[] readAsset(Path path, EmojiManifest.Entry entry) throws IOException
 	{
-		if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)
+		if (!safeRegularFile(path)
 			|| Files.size(path) != entry.byteLength) throw new IOException("invalid cached asset");
 		byte[] raw = Files.readAllBytes(path);
 		validateAsset(raw, entry);
@@ -222,7 +236,20 @@ final class EmojiCacheStore
 		}
 	}
 
-	private static void deleteTree(Path path) throws IOException
+	private void cleanupTemporaryEntries() throws IOException
+	{
+		try (DirectoryStream<Path> values = Files.newDirectoryStream(root))
+		{
+			for (Path value : values)
+			{
+				String name = value.getFileName().toString();
+				if (name.startsWith(".generation-") || name.startsWith(".current-"))
+					deleteTree(value);
+			}
+		}
+	}
+
+	private void deleteTree(Path path) throws IOException
 	{
 		if (!Files.exists(path) || Files.isSymbolicLink(path))
 		{
@@ -231,6 +258,7 @@ final class EmojiCacheStore
 		}
 		if (Files.isDirectory(path))
 		{
+			if (!sameFileStore(path)) throw new IOException("unsafe cache mount");
 			try (DirectoryStream<Path> stream = Files.newDirectoryStream(path))
 			{
 				for (Path child : stream) deleteTree(child);
@@ -259,6 +287,29 @@ final class EmojiCacheStore
 		return Files.getFileStore(path).supportsFileAttributeView(PosixFileAttributeView.class);
 	}
 
+	private boolean safeDirectory(Path path) throws IOException
+	{
+		return Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class,
+			LinkOption.NOFOLLOW_LINKS).isDirectory() && sameFileStore(path);
+	}
+
+	private boolean safeRegularFile(Path path) throws IOException
+	{
+		if (!Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class,
+			LinkOption.NOFOLLOW_LINKS).isRegularFile()) return false;
+		if (Files.getFileStore(path).supportsFileAttributeView("unix"))
+		{
+			Object links = Files.getAttribute(path, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
+			if (!(links instanceof Number) || ((Number) links).longValue() != 1) return false;
+		}
+		return sameFileStore(path);
+	}
+
+	private boolean sameFileStore(Path path) throws IOException
+	{
+		return Files.getFileStore(root).equals(Files.getFileStore(path));
+	}
+
 	private static void setDirectoryPermissions(Path path) throws IOException
 	{
 		if (posix(path)) Files.setPosixFilePermissions(path, DIRECTORY_PERMISSIONS);
@@ -276,6 +327,9 @@ final class EmojiCacheStore
 
 	private static void forceDirectory(Path path) throws IOException
 	{
+		// Windows and other non-POSIX providers cannot open directories as
+		// FileChannels. File contents are still forced and replacement remains atomic.
+		if (!posix(path)) return;
 		try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) { channel.force(true); }
 	}
 
