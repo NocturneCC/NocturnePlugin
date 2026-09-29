@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,15 +12,17 @@ from uuid import uuid4
 
 from derived_review_support import (_apply_metadata, _capture_safe_metadata,
                                     _verify_metadata)
+from immutable_runtime_release import (EMOJI_UNITS, digest,
+                                       verify_staged_deployment)
 
 
 PURPOSE = "nocturne_plugin_emoji_systemd_units_v1"
-UNITS = ("nocturne-plugin-dev.service", "nocturne-plugin-emoji-sync.service",
-         "nocturne-plugin-emoji-sync.timer")
+UNITS = EMOJI_UNITS
+INTAKE_UNIT = "nocturne-plugin-dev.service"
 NEW_METADATA = {"uid": 0, "gid": 0, "mode": 0o644,
                 "acl": "user::rw-\ngroup::r--\nother::r--\n"}
-STOP_CONFIRMATION = ("nocturne-plugin-dev.service, nocturne-plugin-emoji-sync.service, "
-                     "and nocturne-plugin-emoji-sync.timer must be stopped for apply or rollback")
+STOP_CONFIRMATION = ("nocturne-plugin-emoji-sync.service and "
+                     "nocturne-plugin-emoji-sync.timer must be stopped for apply or rollback")
 
 
 def _digest(data):
@@ -41,16 +44,28 @@ def _validate_units(paths):
     subprocess.run(["systemd-analyze", "verify", *map(str, paths)], check=True, timeout=30)
 
 
-def install(target_dir=Path("/etc/systemd/system"), source_dir=None,
-            backup_root=Path("/etc/nocturne-plugin-backups"), *, apply=False,
+def install(target_dir=Path("/etc/systemd/system"), runtime_root=Path("/srv/nocturne-plugin"),
+            commit=None, backup_root=Path("/etc/nocturne-plugin-backups"), *, apply=False,
             confirmed_services_stopped=False, validate=_validate_units):
     target_dir = Path(target_dir)
-    source_dir = Path(source_dir or Path(__file__).resolve().parent)
+    runtime_root = Path(runtime_root)
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("exact staged release commit is required")
+    verify_staged_deployment(runtime_root, commit)
+    source_dir = runtime_root / "staged-units" / commit
     backup_root = Path(backup_root)
     if not target_dir.is_dir() or target_dir.is_symlink() \
             or not backup_root.is_dir() or backup_root.is_symlink():
         raise ValueError("unsafe unit target or backup directory")
     sources = _sources(source_dir)
+    current = runtime_root / "current"
+    active_intake = target_dir / INTAKE_UNIT
+    staged_intake = source_dir / INTAKE_UNIT
+    if (not current.is_symlink() or current.resolve().name != commit
+            or not active_intake.is_file() or active_intake.is_symlink()
+            or active_intake.stat().st_nlink != 1
+            or digest(active_intake) != digest(staged_intake)):
+        raise ValueError("active intake is not the matching generated immutable unit")
     validate([source_dir / name for name in UNITS])
     entries = []
     for name in UNITS:
@@ -87,7 +102,9 @@ def install(target_dir=Path("/etc/systemd/system"), source_dir=None,
                 raise ValueError("unit backup verification failed")
             saved_name = saved.name
         manifest_entries.append(dict(entry, metadata=metadata, backup=saved_name))
-    manifest = {"purpose": PURPOSE, "status": "verified", "entries": manifest_entries,
+    manifest = {"purpose": PURPOSE, "status": "verified", "commit": commit,
+                "staged_manifest_sha256": digest(source_dir / "STAGED-UNITS-MANIFEST.json"),
+                "entries": manifest_entries,
                 "stop_confirmation": STOP_CONFIRMATION}
     manifest_path = backup / "MANIFEST.json"
     manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
@@ -150,7 +167,9 @@ def _restore(entries, backup):
             target.unlink(missing_ok=True)
 
 
-def rollback(backup, *, confirmed_services_stopped=False, validate=_validate_units):
+def rollback(backup, *, runtime_root=Path("/srv/nocturne-plugin"), commit=None,
+             target_dir=Path("/etc/systemd/system"), confirmed_services_stopped=False,
+             validate=_validate_units):
     if not confirmed_services_stopped:
         raise ValueError(STOP_CONFIRMATION)
     backup = Path(backup)
@@ -159,6 +178,20 @@ def rollback(backup, *, confirmed_services_stopped=False, validate=_validate_uni
     manifest = json.loads((backup / "MANIFEST.json").read_text())
     if manifest.get("purpose") != PURPOSE or manifest.get("status") != "verified":
         raise ValueError("wrong or unverified unit backup")
+    commit = commit or manifest.get("commit")
+    if commit != manifest.get("commit"):
+        raise ValueError("unit rollback commit mismatch")
+    verify_staged_deployment(runtime_root, commit)
+    staged_units = Path(runtime_root) / "staged-units" / commit
+    if digest(staged_units / "STAGED-UNITS-MANIFEST.json") != manifest.get("staged_manifest_sha256"):
+        raise ValueError("unit rollback staged manifest changed")
+    active_intake = Path(target_dir) / INTAKE_UNIT
+    current = Path(runtime_root) / "current"
+    if (not current.is_symlink() or current.resolve().name != commit
+            or not active_intake.is_file() or active_intake.is_symlink()
+            or active_intake.stat().st_nlink != 1
+            or digest(active_intake) != digest(staged_units / INTAKE_UNIT)):
+        raise ValueError("active intake is not the matching generated immutable unit")
     entries = manifest.get("entries")
     if not isinstance(entries, list) or {entry.get("name") for entry in entries} != set(UNITS):
         raise ValueError("invalid unit backup manifest")
@@ -206,12 +239,16 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rollback-backup")
     parser.add_argument("--confirm-services-stopped", action="store_true")
+    parser.add_argument("--commit", required=True)
+    parser.add_argument("--runtime-root", default="/srv/nocturne-plugin")
     args = parser.parse_args()
     if args.apply and args.rollback_backup:
         raise SystemExit("choose --apply or --rollback-backup")
-    result = (rollback(args.rollback_backup,
+    result = (rollback(args.rollback_backup, runtime_root=args.runtime_root,
+                       commit=args.commit,
                        confirmed_services_stopped=args.confirm_services_stopped)
-              if args.rollback_backup else install(apply=args.apply,
+              if args.rollback_backup else install(runtime_root=args.runtime_root,
+                  commit=args.commit, apply=args.apply,
                   confirmed_services_stopped=args.confirm_services_stopped))
     print(json.dumps(result, sort_keys=True))
     if not (args.apply or args.rollback_backup):

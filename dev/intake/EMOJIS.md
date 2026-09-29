@@ -129,19 +129,21 @@ automatic third-party traffic.
    are copied by systemd into the service's private credentials directory; no
    token or guild configuration is passed in an environment variable or process
    argument.
-4. Stop `nocturne-plugin-dev.service`, `nocturne-plugin-emoji-sync.service`, and
-   `nocturne-plugin-emoji-sync.timer`; record their state.
-5. Run `emoji_service_support.py` without `--apply`, inspect hashes and unit
-   validation, then apply with `--confirm-services-stopped` during an approved
-   window. It never runs `daemon-reload` or starts a unit.
-6. Run `emoji_route_support.py` without `--apply`, inspect the candidate and
-   backup plan, then apply during an approved Nginx window. It runs `nginx -t`
-   but never reloads Nginx.
+4. Prepare and verify the immutable release plus its commit-scoped four-unit and
+   Nginx staging directories.
+5. Stop intake, writer, emoji synchronizer and timer, and prevent a concurrent
+   Nginx reload. Activate the exact commit with explicit stopped-services
+   confirmation. Activation changes `current`, all four matching units and the
+   matching route transactionally, but never reloads or starts anything.
+6. `emoji_service_support.py` remains only as a narrow repair helper. It can
+   install the emoji service/timer from verified commit staging, never the
+   intake unit, and first proves the active intake is the matching immutable
+   unit. `emoji_route_support.py` likewise consumes only verified commit-scoped
+   staging. Neither helper installs directly from the mutable source tree.
 7. Separately approve daemon reload, timer activation, intake restart, Nginx
    reload and health checks. Verify the first generation before tester rollout.
 
-Both installers preserve existing metadata/ACLs, create verified backups,
-restore automatically on validation failure, refuse drift, support idempotent
-reruns and offer exact independent rollback. Unit apply/rollback requires the
-explicit stopped-process confirmation so an old process cannot race restored
-configuration or public generations.
+Activation and the narrow repair helpers preserve metadata/ACLs, create
+verified backups, restore automatically on failure, refuse drift and mixed
+commits, and offer exact rollback. Unit apply/rollback requires explicit stopped
+process confirmation.
