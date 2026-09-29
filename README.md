@@ -42,6 +42,33 @@ screenshot or raid behavior. Local deduplication stores at most 64 announcement
 IDs and revisions in `.runelite/nocturne/announcement-state-v1.json`; it stores no
 announcement text, player identity, telemetry or read receipt.
 
+### Synchronized Clan Chat emojis
+
+While Nocturne is enabled, it automatically requests a sanitized public emoji
+manifest from `https://nocturne.events/api/plugin/v1/emojis` after startup and
+approximately every five minutes, then downloads missing digest-addressed PNGs
+from the same site. These connections expose your IP address to
+`nocturne.events`. Requests contain no RSN, account/profile identifier, chat
+message, raid data, usage event, telemetry, read receipt, Discord credential or
+persistent client identifier. There is no emoji toggle; disabling Nocturne
+stops synchronization requests.
+
+Only received normal Clan Chat messages (`CLAN_CHAT`) are considered. Literal
+tokens such as `:emoji_name:` remain unchanged on the wire and for clients
+without Nocturne. Nocturne locally replaces at most five supported tokens with
+RuneLite chat icons. It never reads private messages for this feature, changes
+chatbox input, rewrites outgoing chat, types, pastes, resends, logs or persists
+chat text. Unknown, deleted, malformed and sixth-or-later tokens remain literal.
+
+The bounded cache under `.runelite/nocturne/emoji-cache-v1` contains only the
+public manifest and normalized PNGs. It uses atomic generation selection,
+SHA-256 verification and owner-only permissions where supported. Server or
+cache failure leaves other Nocturne features unaffected. RuneLite does not
+provide ownership-aware chat-icon removal, so deleted icon slots can remain
+reserved until client restart; their triggers are disabled immediately after a
+verified manifest update. Existing rendered lines are not restored on disable,
+because doing so could overwrite a newer modification from another plugin.
+
 History files contain the card's RSN, source, time, item IDs, names, quantities,
 captured unit-price/derived-value metadata, group snapshot and intake outcome.
 They never contain screenshots or screenshot bytes. Records are local and
@@ -203,6 +230,16 @@ Manual test checklist:
    and any link opens only after clicking its button.
 10. With the announcement endpoint unavailable, confirm Nocturne still starts
     and loot/history/raid behavior continues normally.
+11. In normal Clan Chat, type a currently mirrored `:emoji_name:` token. Confirm
+    both another member's message and your own local echo render locally, while
+    public, private, friends, guest-clan and GIM messages remain literal.
+12. Test one through six tokens, ordinary surrounding text, rank icons, colors,
+    timestamps, wrapping, filters and RuneLite's built-in Emoji plugin. The
+    first five supported tokens should render and the sixth remain literal.
+13. Disable and re-enable Nocturne. Confirm no new replacements occur while it
+    is disabled and synchronization resumes once after re-enable. With the emoji
+    endpoint unavailable, loot, history, screenshots, presence and announcements
+    must continue unchanged.
 
 Group capture test:
 

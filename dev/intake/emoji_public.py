@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import re
 
@@ -69,6 +70,9 @@ def load_manifest(root):
         raise ValueError("invalid emoji generation identity")
     if not isinstance(value["generated_at"], str) or len(value["generated_at"]) > 40:
         raise ValueError("invalid generated timestamp")
+    generated = datetime.fromisoformat(value["generated_at"].replace("Z", "+00:00"))
+    if generated.tzinfo is None or generated.utcoffset() is None:
+        raise ValueError("generated timestamp lacks timezone")
     entries = value["emojis"]
     if not isinstance(entries, list) or len(entries) > MAX_EMOJIS:
         raise ValueError("invalid emoji count")

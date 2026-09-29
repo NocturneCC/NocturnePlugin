@@ -291,6 +291,8 @@ def read_current(root):
 def sync_lock(root):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o755)
+    if not root.is_dir() or root.is_symlink():
+        raise SyncFailure("unsafe_output_directory")
     lock_path = root / ".sync.lock"
     with lock_path.open("a+b") as lock:
         try:
@@ -378,6 +380,8 @@ class EmojiSynchronizer:
     def _publish(self, revision, manifest, assets):
         generations = self.output / "generations"
         generations.mkdir(parents=True, exist_ok=True, mode=0o755)
+        if not generations.is_dir() or generations.is_symlink():
+            raise SyncFailure("unsafe_generation_directory")
         temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=self.output))
         try:
             os.chmod(temporary, 0o700)
@@ -394,6 +398,8 @@ class EmojiSynchronizer:
             (temporary / "manifest.json").chmod(0o644)
             temporary.chmod(0o755)
             target = generations / revision
+            if target.exists() and (not target.is_dir() or target.is_symlink()):
+                raise SyncFailure("unsafe_generation_target")
             if target.exists():
                 shutil.rmtree(temporary)
             else:
@@ -454,8 +460,11 @@ def main(argv=None):
     if not args.guild_id or not args.output or not args.token_file:
         parser.error("guild ID, output, and token credential file are required")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    configured_denylist = [value for value in
+                           os.environ.get("NOCTURNE_EMOJI_DENYLIST", "").split(",") if value.strip()]
     try:
-        result = EmojiSynchronizer(args.output, DiscordTransport(), denylist=args.deny).synchronize(
+        result = EmojiSynchronizer(args.output, DiscordTransport(),
+                                   denylist=args.deny + configured_denylist).synchronize(
             args.guild_id, _read_credential(args.token_file))
         log.info("emoji synchronization %s: count=%d revision=%s",
                  result["status"], result["emoji_count"], result["revision"][:12])

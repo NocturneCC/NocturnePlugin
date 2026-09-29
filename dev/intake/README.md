@@ -23,6 +23,14 @@ Draft, future, expired, and withdrawn announcements are excluded. See
 [ANNOUNCEMENTS.md](ANNOUNCEMENTS.md) for schema, administration, deployment and
 rollback boundaries.
 
+GET/HEAD `/api/plugin/v1/emojis` and the strictly digest-shaped
+`/api/plugin/v1/emojis/assets/<sha256>.png` path expose only an atomically
+selected public emoji generation. The intake receives a read-only bind of that
+public mirror and no Discord credential, bot state, database or arbitrary file
+access. Manifest responses use ETag/304 caching; assets are SHA-256 addressed
+PNG files with immutable cache headers. Requests accept no body or client
+identity. See [EMOJIS.md](EMOJIS.md).
+
 Limits: 8 KiB requests, 64 unique item stacks, recent timestamps, 20 new reports
 per RSN/minute, 10,000 rows, approximately 16 MiB SQLite file, seven-day cleanup
 on new inserts, two workers and nginx request limits. Identical event UUID+payload

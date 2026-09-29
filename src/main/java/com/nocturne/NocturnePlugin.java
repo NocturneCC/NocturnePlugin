@@ -43,7 +43,7 @@ import net.runelite.client.ui.NavigationButton;
 @Slf4j
 @PluginDescriptor(
 	name = "Nocturne",
-	description = "Automatically checks nocturne.events for announcements and sends your RSN/self-only CoX presence; this exposes your IP, and disabling Nocturne stops these requests",
+	description = "Automatically checks nocturne.events for announcements and Clan Chat emojis and sends your RSN/self-only CoX presence; requests expose your IP, and disabling Nocturne stops them",
 	tags = {"nocturne", "clan", "loot"}
 )
 public class NocturnePlugin extends Plugin

@@ -1,0 +1,13 @@
+[Unit]
+Description=Synchronize Nocturne public Discord emojis every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+AccuracySec=5s
+Persistent=true
+Unit=nocturne-plugin-emoji-sync.service
+
+[Install]
+WantedBy=timers.target
