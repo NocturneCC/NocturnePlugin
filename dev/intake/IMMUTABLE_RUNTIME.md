@@ -70,6 +70,61 @@ sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --check FULL_SHA
 sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --prepare FULL_SHA
 ```
 
+The read-only check prints a structured status and a diagnostic for every
+missing or unsafe prerequisite. `prepared` exits 0, `not_prepared` exits 3,
+`recoverable_incomplete` exits 4, and `unsafe_blocking` exits 1. Each diagnostic
+names its phase and exact path, expected and observed states, and whether the
+operator should prepare, recover, or stop. An unprepared release, wheelhouse,
+venv, or staging directory is therefore not a silent shell-predicate failure.
+
+The two wheels must be acquired into a new operator-owned disposable directory;
+never run `pip download` as root and never download directly into the immutable
+runtime. From the clean, exact commit checkout, the guarded download commands
+are:
+
+```bash
+DOWNLOAD_DIR=$(mktemp -d /tmp/nocturne-runtime-wheels.XXXXXXXX)
+/usr/bin/python3.14 -m pip --isolated download --disable-pip-version-check \
+  --index-url https://pypi.org/simple --no-cache-dir --no-deps \
+  --only-binary=:all: --require-hashes \
+  --dest "$DOWNLOAD_DIR/gunicorn" -r dev/intake/runtime-requirements.lock
+/usr/bin/python3.14 -m pip --isolated download --disable-pip-version-check \
+  --index-url https://pypi.org/simple --no-cache-dir --no-deps \
+  --platform manylinux_2_27_x86_64 --implementation cp --python-version 3.14 --abi cp314 \
+  --only-binary=:all: --require-hashes \
+  --dest "$DOWNLOAD_DIR/pillow" -r dev/intake/emoji-sync-requirements.txt
+printf '%s  %s\n' \
+  bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3 \
+  "$DOWNLOAD_DIR/gunicorn/gunicorn-26.2.0-py3-none-any.whl" | sha256sum --check --strict -
+printf '%s  %s\n' \
+  251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b \
+  "$DOWNLOAD_DIR/pillow/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" | \
+  sha256sum --check --strict -
+```
+
+Both checks must print `OK`; their full expected digests are part of the commands
+and exactly match the committed locks. Only after those checks may an approved
+root maintenance step run the following fail-if-present preposition commands:
+
+```bash
+sudo /bin/mkdir --mode=0755 -- \
+  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0
+sudo /usr/bin/install --owner=root --group=root --mode=0444 -- \
+  "$DOWNLOAD_DIR/gunicorn/gunicorn-26.2.0-py3-none-any.whl" \
+  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0/gunicorn-26.2.0-py3-none-any.whl
+sudo /bin/mkdir --mode=0755 -- \
+  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0
+sudo /usr/bin/install --owner=root --group=root --mode=0444 -- \
+  "$DOWNLOAD_DIR/pillow/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" \
+  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+```
+
+Each `mkdir` must fail rather than reuse a pre-existing version directory; an
+operator must stop and inspect any collision. Rerun `--check` before
+`--prepare`; the
+runtime validators independently reject extra, linked, writable, wrongly owned,
+wrongly named, or digest-mismatched wheel inputs.
+
 The venv is created at
 `/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0` with a root-owned mode
 0600 `PREPARATION_INCOMPLETE` marker. The marker remains after interruption or

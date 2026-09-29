@@ -99,7 +99,7 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
     def test_operator_script_is_guarded_and_does_not_activate_or_control_services(self):
         text=(Path(__file__).parent/"prepare_immutable_runtime.sh").read_text()
         self.assertTrue(text.startswith("#!/bin/bash\nset -euo pipefail\n"))
-        self.assertIn('test "$(id -u)" -ne 0',text)
+        self.assertIn('effective_uid=$(id -u 2>&1)',text)
         for forbidden in ("--activate", "systemctl", "daemon-reload", "sqlite3"):
             self.assertNotIn(forbidden,text)
         self.assertLess(text.index("--host-preflight"),text.index(' --prepare\n'))
