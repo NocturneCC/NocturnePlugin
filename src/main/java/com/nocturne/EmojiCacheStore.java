@@ -16,6 +16,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import javax.imageio.ImageIO;
@@ -100,12 +101,14 @@ final class EmojiCacheStore
 			{
 				Path assets = temporary.resolve("assets");
 				prepareDirectory(assets);
+				Set<String> written = new HashSet<>();
 				for (EmojiManifest.Entry entry : manifest.entries)
 				{
 					byte[] raw = rawAssets.get(entry.digest);
 					if (raw == null) throw new IOException("missing emoji asset");
 					validateAsset(raw, entry);
-					writeNew(assets.resolve(entry.digest + ".png"), raw);
+					if (written.add(entry.digest))
+						writeNew(assets.resolve(entry.digest + ".png"), raw);
 				}
 				writeNew(temporary.resolve("manifest.json"), manifest.raw);
 				writeNew(temporary.resolve("etag.txt"), etag.getBytes(StandardCharsets.US_ASCII));

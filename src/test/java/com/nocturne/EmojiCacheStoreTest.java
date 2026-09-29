@@ -53,6 +53,35 @@ public class EmojiCacheStoreTest
 		catch (java.io.IOException expected) { }
 	}
 
+	@Test public void distinctTriggersMayShareOneDigestAddressedAsset() throws Exception
+	{
+		Path root = Files.createTempDirectory("emoji-cache-shared-digest");
+		try
+		{
+			Gson gson = new Gson();
+			byte[] image = EmojiTestFixtures.png(0xff113355);
+			EmojiTestFixtures.FixtureEntry first = new EmojiTestFixtures.FixtureEntry("first", image);
+			EmojiTestFixtures.FixtureEntry second = new EmojiTestFixtures.FixtureEntry("second", image);
+			EmojiManifest manifest = EmojiManifest.parse(
+				EmojiTestFixtures.manifest(gson, List.of(first, second)), gson);
+			EmojiCacheStore store = new EmojiCacheStore(root, gson);
+			store.save(manifest, Map.of(first.digest(), image), "\"" + "a".repeat(64) + "\"");
+			EmojiCacheStore.Loaded loaded = store.load();
+			assertNotNull(loaded);
+			assertEquals(2, loaded.assets.size());
+			assertEquals(loaded.assets.get("first").digest, loaded.assets.get("second").digest);
+			assertEquals(1, loaded.rawAssets.size());
+			try (java.nio.file.DirectoryStream<Path> assets = Files.newDirectoryStream(
+				root.resolve("generations").resolve(manifest.revision).resolve("assets")))
+			{
+				int count = 0;
+				for (Path ignored : assets) count++;
+				assertEquals(1, count);
+			}
+		}
+		finally { delete(root); }
+	}
+
 	private static void delete(Path path) throws Exception
 	{
 		if (!Files.exists(path)) return;
