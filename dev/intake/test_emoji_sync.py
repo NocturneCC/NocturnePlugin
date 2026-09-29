@@ -315,6 +315,23 @@ class EmojiSynchronizerTest(unittest.TestCase):
         for value in (manifest_path, asset):
             self.assertTrue(value.stat().st_mode & stat.S_IROTH,
                             f"distinct UID cannot read {value}")
+        for value in (self.root, self.root / "generations", generation,
+                      generation / "assets", manifest_path, asset):
+            self.assertFalse({"system.posix_acl_access", "system.posix_acl_default"}
+                             .intersection(os.listxattr(value, follow_symlinks=False)))
+
+    def test_unexpected_public_acl_fails_closed_when_supported(self):
+        if not __import__("shutil").which("setfacl"):
+            self.skipTest("setfacl unavailable")
+        self.root.chmod(0o700)
+        result = __import__("subprocess").run(
+            ["setfacl", "-m", "u:65534:---", str(self.root)],
+            capture_output=True, text=True)
+        if result.returncode:
+            self.skipTest("fixture filesystem has no POSIX ACL support")
+        self.configure([item(1, "one")])
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            self.sync.synchronize("123", "fixture-token")
 
     def test_transport_hosts_headers_redirects_and_bounds_are_fixed(self):
         class Response:

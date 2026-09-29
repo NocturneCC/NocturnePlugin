@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import errno
 from datetime import datetime
 from pathlib import Path
 import re
@@ -21,6 +22,14 @@ MAX_ASSET_BYTES = 8 * 1024
 MAX_TOTAL_BYTES = MAX_EMOJIS * MAX_ASSET_BYTES
 
 
+def _acl_free(path):
+    try:
+        names = os.listxattr(path, follow_symlinks=False)
+    except OSError as error:
+        return error.errno in {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}
+    return not {"system.posix_acl_access", "system.posix_acl_default"}.intersection(names)
+
+
 def _public_node(path, root_stat, *, directory):
     try:
         value = Path(path).lstat()
@@ -32,6 +41,7 @@ def _public_node(path, root_stat, *, directory):
             and value.st_uid == root_stat.st_uid and value.st_gid == root_stat.st_gid
             and stat.S_IMODE(value.st_mode) == mode
             and (directory or value.st_nlink == 1)
+            and _acl_free(path)
             and (not directory or not os.path.ismount(path)))
 
 

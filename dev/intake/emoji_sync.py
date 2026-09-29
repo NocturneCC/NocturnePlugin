@@ -10,6 +10,7 @@ import argparse
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 from io import BytesIO
 import fcntl
 import hashlib
@@ -302,7 +303,16 @@ def _public_node(path, root_stat, *, directory, mode):
             and value.st_uid == root_stat.st_uid and value.st_gid == root_stat.st_gid
             and stat.S_IMODE(value.st_mode) == mode
             and (directory or value.st_nlink == 1)
+            and _acl_free(path)
             and (not directory or not os.path.ismount(path)))
+
+
+def _acl_free(path):
+    try:
+        names = os.listxattr(path, follow_symlinks=False)
+    except OSError as error:
+        return error.errno in {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}
+    return not {"system.posix_acl_access", "system.posix_acl_default"}.intersection(names)
 
 
 def _verified_generation(path, manifest, assets, root_stat):
@@ -384,6 +394,7 @@ def sync_lock(root):
     root.mkdir(parents=True, exist_ok=True, mode=0o755)
     root_stat = root.lstat()
     if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.geteuid()
+            or not _acl_free(root)
             or root_stat.st_mode & 0o022):
         raise SyncFailure("unsafe_output_directory")
     os.chmod(root, 0o755)

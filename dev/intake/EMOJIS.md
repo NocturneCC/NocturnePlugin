@@ -106,6 +106,14 @@ third-party emote services; this design does not use those services, but it does
 not remove the clan operator's responsibility to prove rights for every mirrored
 asset before public distribution.
 
+The eventual Plugin Hub marker must also include an installation `warning=`
+field stating that Nocturne automatically requests announcements and emoji
+assets from a third-party `nocturne.events` server, that loot/RSN and self-only
+CoX presence are sent where applicable, and that these requests expose the
+user's IP address. The source metadata and README already disclose this behavior,
+but those do not replace the marker-level installation warning required for
+automatic third-party traffic.
+
 ## Future deployment and rollback boundary
 
 1. On Midgard's CPython 3.14, glibc x86-64 runtime, build a dedicated environment
