@@ -106,6 +106,24 @@ class EmojiServiceSupportTest(unittest.TestCase):
         self.assertIn("251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b",
                       requirements)
 
+    def test_failed_rollback_restores_applied_units(self):
+        first, second, third = self.mocks()
+        with first, second, third:
+            applied = install(self.targets, self.source, self.backups, apply=True,
+                              confirmed_services_stopped=True, validate=lambda paths: None)
+            expected = {name: (self.targets / name).read_bytes() for name in UNITS}
+            with self.assertRaisesRegex(RuntimeError, "rollback unit validation"):
+                rollback(applied["backup"], confirmed_services_stopped=True,
+                         validate=lambda paths: (_ for _ in ()).throw(
+                             RuntimeError("rollback unit validation")))
+        self.assertEqual(expected, {name: (self.targets / name).read_bytes() for name in UNITS})
+
+    def test_hardlinked_unit_target_is_rejected(self):
+        linked = self.root / "linked-unit"
+        __import__("os").link(self.targets / "nocturne-plugin-dev.service", linked)
+        with self.assertRaisesRegex(ValueError, "unsafe unit target"):
+            install(self.targets, self.source, self.backups, validate=lambda paths: None)
+
 
 if __name__ == "__main__":
     unittest.main()

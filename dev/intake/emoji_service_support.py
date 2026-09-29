@@ -31,7 +31,7 @@ def _sources(source_dir):
     result = {}
     for name in UNITS:
         path = source_dir / name
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
             raise ValueError(f"missing or unsafe unit source: {path}")
         result[name] = path.read_bytes()
     return result
@@ -55,7 +55,8 @@ def install(target_dir=Path("/etc/systemd/system"), source_dir=None,
     entries = []
     for name in UNITS:
         target = target_dir / name
-        if target.exists() and (not target.is_file() or target.is_symlink()):
+        if target.exists() and (not target.is_file() or target.is_symlink()
+                                or target.stat().st_nlink != 1):
             raise ValueError(f"unsafe unit target: {target}")
         before = target.read_bytes() if target.exists() else None
         entries.append({"name": name, "target": str(target), "existed": before is not None,
@@ -163,18 +164,39 @@ def rollback(backup, *, confirmed_services_stopped=False, validate=_validate_uni
         raise ValueError("invalid unit backup manifest")
     for entry in entries:
         target = Path(entry["target"])
-        if not target.is_file() or target.is_symlink() \
+        if not target.is_file() or target.is_symlink() or target.stat().st_nlink != 1 \
                 or _digest(target.read_bytes()) != entry["after_sha256"]:
             raise ValueError("unit target changed since apply")
         if entry["existed"]:
             saved = backup / entry["backup"]
-            if not saved.is_file() or saved.is_symlink() \
+            if not saved.is_file() or saved.is_symlink() or saved.stat().st_nlink != 1 \
                     or _digest(saved.read_bytes()) != entry["before_sha256"]:
                 raise ValueError("unit rollback backup checksum mismatch")
-    _restore(entries, backup)
-    remaining = [Path(entry["target"]) for entry in entries if entry["existed"]]
-    if remaining:
-        validate(remaining)
+    applied = {entry["name"]: Path(entry["target"]).read_bytes() for entry in entries}
+    try:
+        _restore(entries, backup)
+        remaining = [Path(entry["target"]) for entry in entries if entry["existed"]]
+        if remaining:
+            validate(remaining)
+    except BaseException:
+        for entry in entries:
+            target = Path(entry["target"])
+            descriptor, staged_name = tempfile.mkstemp(prefix=".nocturne.emoji-reapply.",
+                                                        dir=target.parent)
+            staged = Path(staged_name)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(applied[entry["name"]])
+                    output.flush()
+                    os.fsync(output.fileno())
+                _apply_metadata(staged, entry["metadata"])
+                os.replace(staged, target)
+                _verify_metadata(target, entry["metadata"])
+                if _digest(target.read_bytes()) != entry["after_sha256"]:
+                    raise RuntimeError("unit applied-state restoration failed")
+            finally:
+                staged.unlink(missing_ok=True)
+        raise
     return {"state": "not_applied", "restored": len(remaining),
             "removed": len(entries) - len(remaining)}
 

@@ -50,6 +50,10 @@ def install(target=Path("/etc/nginx/sites-enabled/nocturne"), source_dir=None,
             raise ValueError(f"missing or unsafe route source/target: {path}")
     if not target.is_file() or not backup_root.is_dir():
         raise ValueError("emoji route target paths have unexpected types")
+    for path in (target, source_dir / "nginx-announcements-location.conf",
+                 source_dir / "nginx-emojis-location.conf"):
+        if path.stat().st_nlink != 1:
+            raise ValueError(f"hard-linked route source/target is unsafe: {path}")
     metadata = _capture_safe_metadata(target)
     original = target.read_bytes()
     installed = _indented((source_dir / "nginx-emojis-location.conf").read_text())
@@ -124,7 +128,8 @@ def rollback(backup, target=None,
     if str(target) != manifest["target"] or not target.is_file() or target.is_symlink():
         raise ValueError("rollback target differs from verified manifest")
     saved = backup / "nocturne.before"
-    if _digest(saved.read_bytes()) != manifest["before_sha256"]:
+    if (not saved.is_file() or saved.is_symlink() or saved.stat().st_nlink != 1
+            or _digest(saved.read_bytes()) != manifest["before_sha256"]):
         raise ValueError("emoji route backup checksum mismatch")
     current = _digest(target.read_bytes())
     if current == manifest["before_sha256"]:
@@ -135,6 +140,8 @@ def rollback(backup, target=None,
     descriptor, staged_name = tempfile.mkstemp(prefix=".nocturne.emojis.rollback.",
                                                 dir=target.parent)
     staged = Path(staged_name)
+    applied = target.read_bytes()
+    replaced = False
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(saved.read_bytes())
@@ -142,10 +149,26 @@ def rollback(backup, target=None,
             os.fsync(output.fileno())
         _apply_metadata(staged, metadata)
         os.replace(staged, target)
+        replaced = True
         _verify_metadata(target, metadata)
         if _digest(target.read_bytes()) != manifest["before_sha256"]:
             raise RuntimeError("emoji route rollback verification failed")
         validate()
+    except BaseException:
+        if replaced:
+            restore = target.parent / (".nocturne.emojis.reapply." + uuid4().hex)
+            try:
+                restore.write_bytes(applied)
+                with restore.open("rb") as value:
+                    os.fsync(value.fileno())
+                _apply_metadata(restore, metadata)
+                os.replace(restore, target)
+                _verify_metadata(target, metadata)
+                if _digest(target.read_bytes()) != manifest["after_sha256"]:
+                    raise RuntimeError("emoji route applied-state restoration failed")
+            finally:
+                restore.unlink(missing_ok=True)
+        raise
     finally:
         staged.unlink(missing_ok=True)
     return {"state": "not_applied", "already_restored": False}

@@ -85,6 +85,23 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
                         validate=lambda: (_ for _ in ()).throw(RuntimeError("syntax")))
         self.assertEqual(self.active, self.target.read_text())
 
+    def test_failed_rollback_restores_applied_route(self):
+        first, second, third = self.mocks()
+        with first, second, third:
+            applied = install(self.target, self.source, self.backups, apply=True,
+                              validate=lambda: None)
+            applied_text = self.target.read_text()
+            with self.assertRaisesRegex(RuntimeError, "rollback syntax"):
+                rollback(applied["backup"], self.target,
+                         validate=lambda: (_ for _ in ()).throw(RuntimeError("rollback syntax")))
+        self.assertEqual(applied_text, self.target.read_text())
+
+    def test_hardlinked_target_is_rejected(self):
+        linked = self.root / "linked-site"
+        __import__("os").link(self.target, linked)
+        with self.assertRaisesRegex(ValueError, "hard-linked"):
+            install(self.target, self.source, self.backups)
+
 
 if __name__ == "__main__":
     unittest.main()
