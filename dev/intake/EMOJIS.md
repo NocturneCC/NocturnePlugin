@@ -78,7 +78,9 @@ unexpected modes, extended ACLs and hard-linked files. A mount is accepted
 only after resolving systemd's exact `private/<StateDirectory-name>`
 DynamicUser indirection, whose link, backing parent and target are all
 independently verified; this permits systemd's ID-mapped `StateDirectory=`
-mount without weakening mount rejection for direct caller-provided roots. Source
+mount, including its mounted `/var/lib/private` parent, only when the original
+alias is an exact member of systemd's bounded `STATE_DIRECTORY` list. This does
+not weaken mount rejection for direct caller-provided roots. Source
 credential files may remain root-owned mode 0600; systemd copies them into its
 private per-unit credential directory. Runtime code uses the documented
 `${CREDENTIALS_DIRECTORY}` path

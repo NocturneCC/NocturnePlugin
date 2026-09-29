@@ -407,7 +407,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
         container = self.root / "mounted-state-container"
         container.mkdir(mode=0o700)
         backing = container / "private"
-        backing.mkdir(mode=0o700)
+        backing.mkdir(mode=0o755)
         private_backing = backing / "nocturne-plugin-emojis"
         public_backing = backing / "nocturne-plugin-emoji-public"
         private_backing.mkdir(mode=0o755)
@@ -416,13 +416,71 @@ class EmojiSynchronizerTest(unittest.TestCase):
         public_alias = container / "nocturne-plugin-emoji-public"
         private_alias.symlink_to("private/nocturne-plugin-emojis")
         public_alias.symlink_to("private/nocturne-plugin-emoji-public")
-        mounts = {private_backing, public_backing}
-        with patch("emoji_sync.os.path.ismount",
-                   side_effect=lambda path: Path(path) in mounts):
+        mounts = {backing, private_backing, public_backing}
+        state_directories = f"{private_alias}:{public_alias}"
+        with patch.dict(os.environ, {"STATE_DIRECTORY": state_directories}), \
+                patch("emoji_sync.os.path.ismount",
+                      side_effect=lambda path: Path(path) in mounts):
             self.assertEqual(private_backing, initialize_private_root(private_alias))
             self.assertEqual(public_backing, initialize_public_root(public_alias))
         self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
         self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
+
+    def test_mounted_systemd_state_parent_requires_exact_environment_evidence(self):
+        container = self.root / "evidence-state-container"
+        container.mkdir(mode=0o700)
+        backing = container / "private"
+        backing.mkdir(mode=0o755)
+        target = backing / "nocturne-plugin-emojis"
+        target.mkdir(mode=0o755)
+        alias = container / "nocturne-plugin-emojis"
+        alias.symlink_to("private/nocturne-plugin-emojis")
+        mounts = {backing, target}
+        for evidence in (None, "", str(container / "other"),
+                         f"{alias}::{container / 'other'}"):
+            environment = {} if evidence is None else {"STATE_DIRECTORY": evidence}
+            with self.subTest(evidence=evidence), \
+                    patch.dict(os.environ, environment, clear=True), \
+                    patch("emoji_sync.os.path.ismount",
+                          side_effect=lambda path: Path(path) in mounts), \
+                    self.assertRaisesRegex(SyncFailure, "unsafe_private_directory"):
+                initialize_private_root(alias)
+
+    def test_mounted_systemd_state_parent_metadata_remains_fail_closed(self):
+        for case in ("mode", "ownership", "acl"):
+            with self.subTest(case=case):
+                container = self.root / ("mounted-parent-" + case)
+                container.mkdir(mode=0o700)
+                backing = container / "private"
+                backing.mkdir(mode=0o755)
+                target = backing / "nocturne-plugin-emojis"
+                target.mkdir(mode=0o755)
+                alias = container / "nocturne-plugin-emojis"
+                alias.symlink_to("private/nocturne-plugin-emojis")
+                mounts = {backing, target}
+                if case == "mode":
+                    backing.chmod(0o750)
+                    context = patch("emoji_sync.os.geteuid", wraps=os.geteuid)
+                elif case == "ownership":
+                    real_lstat = Path.lstat
+                    observed = backing.lstat()
+                    foreign = __import__("types").SimpleNamespace(
+                        st_mode=observed.st_mode, st_uid=os.geteuid() + 1000,
+                        st_gid=observed.st_gid, st_dev=observed.st_dev,
+                        st_ino=observed.st_ino, st_nlink=observed.st_nlink)
+                    context = patch.object(
+                        Path, "lstat", autospec=True,
+                        side_effect=lambda path: foreign if path == backing
+                        else real_lstat(path))
+                else:
+                    context = patch("emoji_sync._acl_free",
+                                    side_effect=lambda path: Path(path) != backing)
+                with patch.dict(os.environ, {"STATE_DIRECTORY": str(alias)}), \
+                        patch("emoji_sync.os.path.ismount",
+                              side_effect=lambda path: Path(path) in mounts), \
+                        context, self.assertRaisesRegex(
+                            SyncFailure, "unsafe_private_directory"):
+                    initialize_private_root(alias)
 
     def test_systemd_state_link_shape_remains_fail_closed(self):
         container = self.root / "unsafe-state-container"
@@ -548,6 +606,13 @@ class EmojiSynchronizerTest(unittest.TestCase):
                    side_effect=lambda path: Path(path) == mounted), \
                 self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
             initialize_public_root(mounted)
+
+        mounted_parent = self.root / "mounted-parent"
+        mounted_parent.mkdir(mode=0o700)
+        with patch("emoji_sync.os.path.ismount",
+                   side_effect=lambda path: Path(path) == mounted_parent), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_output_parent"):
+            initialize_public_root(mounted_parent / "public")
 
         private_link = self.root / "private-link"
         private_link.symlink_to(victim, target_is_directory=True)

@@ -377,17 +377,45 @@ def _safe_directory_metadata(path, metadata):
             and not os.path.ismount(path))
 
 
+def _state_directory_member(root):
+    """Require one exact member of systemd's bounded STATE_DIRECTORY list."""
+    raw = os.environ.get("STATE_DIRECTORY")
+    if not raw or len(raw) > 4096:
+        return False
+    values = raw.split(":")
+    if not 1 <= len(values) <= 16 or any(not value for value in values):
+        return False
+    paths = [Path(value) for value in values]
+    if (len(set(paths)) != len(paths)
+            or any(not path.is_absolute() or str(path) != value
+                   or ".." in path.parts
+                   or path.parent != root.parent
+                   or not re.fullmatch(r"[a-z0-9-]{1,64}", path.name)
+                   for path, value in zip(paths, values))):
+        return False
+    return paths.count(root) == 1
+
+
+def _safe_mounted_state_parent(path, metadata):
+    """Validate systemd's mounted DynamicUser private StateDirectory parent."""
+    return (stat.S_ISDIR(metadata.st_mode)
+            and metadata.st_uid in {0, os.geteuid()}
+            and metadata.st_gid in {0, os.getegid()}
+            and stat.S_IMODE(metadata.st_mode) == 0o755
+            and _acl_free(path) and os.path.ismount(path))
+
+
 def _resolve_state_directory(root, category):
     """Resolve only systemd's exact DynamicUser StateDirectory link shape."""
     root = Path(root)
     try:
         metadata = root.lstat()
     except FileNotFoundError:
-        return root, None, False
+        return root, None, False, None
     except OSError as error:
         raise SyncFailure("output_initialization_failed") from error
     if not stat.S_ISLNK(metadata.st_mode):
-        return root, metadata, False
+        return root, metadata, False, None
     try:
         parent = root.parent
         parent_metadata = parent.lstat()
@@ -399,16 +427,21 @@ def _resolve_state_directory(root, category):
         resolved_metadata = resolved.lstat()
     except OSError as error:
         raise SyncFailure(category) from error
+    private_parent_safe = (_safe_directory_metadata(private_parent, private_metadata)
+                           or (_state_directory_member(root)
+                               and _safe_mounted_state_parent(
+                                   private_parent, private_metadata)))
     if (not re.fullmatch(r"[a-z0-9-]{1,64}", root.name)
             or metadata.st_nlink != 1 or metadata.st_uid not in {0, os.geteuid()}
             or metadata.st_gid not in {0, os.getegid()} or target != expected
             or not _safe_directory_metadata(parent, parent_metadata)
-            or not _safe_directory_metadata(private_parent, private_metadata)
+            or not private_parent_safe
             or not stat.S_ISDIR(resolved_metadata.st_mode)
             or resolved_metadata.st_uid != os.geteuid()
             or resolved_metadata.st_gid != os.getegid()):
         raise SyncFailure(category)
-    return resolved, resolved_metadata, True
+    return (resolved, resolved_metadata, True,
+            (private_metadata.st_dev, private_metadata.st_ino))
 
 
 def _initialize_root(root, *, final_mode, accepted_modes, category):
@@ -416,8 +449,11 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
     root = Path(root)
     if not root.is_absolute() or root.name in {"", ".", ".."}:
         raise SyncFailure(category)
-    root, root_stat, verified_systemd_state_directory = \
+    requested_root = root
+    root, root_stat, verified_systemd_state_directory, state_parent_identity = \
         _resolve_state_directory(root, category)
+    verified_systemd_mount = (verified_systemd_state_directory
+                              and _state_directory_member(requested_root))
     existed = root_stat is not None
     try:
         unresolved_parent = root.parent
@@ -426,10 +462,16 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
         parent_stat = parent.lstat()
     except (OSError, RuntimeError) as error:
         raise SyncFailure("unsafe_output_parent") from error
+    parent_safe = _safe_directory_metadata(parent, parent_stat)
+    if (verified_systemd_state_directory
+            and state_parent_identity == (parent_stat.st_dev, parent_stat.st_ino)
+            and _state_directory_member(requested_root)
+            and _safe_mounted_state_parent(parent, parent_stat)):
+        parent_safe = True
     if (unresolved_parent != parent or unresolved_parent.is_symlink()
             or (unresolved_stat.st_dev, unresolved_stat.st_ino)
             != (parent_stat.st_dev, parent_stat.st_ino)
-            or parent.is_symlink() or not _safe_directory_metadata(parent, parent_stat)):
+            or parent.is_symlink() or not parent_safe):
         raise SyncFailure("unsafe_output_parent")
     if not existed:
         try:
@@ -457,7 +499,7 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
                 or opened.st_uid != os.geteuid() or opened.st_gid != os.getegid()
                 or stat.S_IMODE(opened.st_mode) not in accepted_modes
                 or not _acl_free(root)
-                or (os.path.ismount(root) and not verified_systemd_state_directory)):
+                or (os.path.ismount(root) and not verified_systemd_mount)):
             raise SyncFailure(category)
         os.fchmod(descriptor, final_mode)
         verified = os.fstat(descriptor)
@@ -467,7 +509,7 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
                 or verified.st_uid != os.geteuid() or verified.st_gid != os.getegid()
                 or stat.S_IMODE(verified.st_mode) != final_mode
                 or root.is_symlink() or not _acl_free(root)
-                or (os.path.ismount(root) and not verified_systemd_state_directory)):
+                or (os.path.ismount(root) and not verified_systemd_mount)):
             raise SyncFailure(category)
     finally:
         os.close(descriptor)
