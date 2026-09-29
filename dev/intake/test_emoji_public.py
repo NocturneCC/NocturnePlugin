@@ -140,6 +140,16 @@ class EmojiPublicTest(unittest.TestCase):
         entry = json.loads(manifest["body"])["emojis"][0]
         self.assertEqual("200 OK", request(app, entry["asset_path"])["status"])
 
+    def test_missing_emoji_mirror_does_not_disable_intake(self):
+        missing = self.root / "not-yet-synchronized"
+        state = self.root / "intake-without-emojis"
+        app = create_app(state, ["Tester"], handoff=lambda _value: None,
+                         presence_identity_resolver=lambda _value: None,
+                         emoji_public_root=missing)
+        self.assertEqual("503 Service Unavailable", request(app)["status"])
+        self.assertEqual("405 Method Not Allowed",
+                         request(app, "/api/plugin/dev/drops", method="GET")["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,8 +17,8 @@ from PIL import Image
 from emoji_sync import (CANVAS_SIZE, DISCORD_USER_AGENT, DiscordTransport,
                         EmojiSynchronizer, MAX_GENERATIONS, NoRedirect,
                         SyncFailure, _read_config, _read_credential,
-                        eligible_metadata, normalize_image, parse_denylist,
-                        read_current)
+                        eligible_metadata, initialize_public_root,
+                        main, normalize_image, parse_denylist, read_current)
 
 
 def png(size=(12, 8), color=(120, 40, 200, 180)):
@@ -341,6 +341,129 @@ class EmojiSynchronizerTest(unittest.TestCase):
                       generation / "assets", manifest_path, asset):
             self.assertFalse({"system.posix_acl_access", "system.posix_acl_default"}
                              .intersection(os.listxattr(value, follow_symlinks=False)))
+
+    def test_first_run_initializes_missing_public_state_leaf(self):
+        state = self.root / "state"
+        state.mkdir(mode=0o700)
+        public = state / "public"
+        self.configure([item(1, "one")])
+        result = EmojiSynchronizer(public, self.transport).synchronize(
+            "123", "fixture-token")
+        self.assertEqual("published", result["status"])
+        metadata = public.lstat()
+        self.assertEqual((os.geteuid(), os.getegid(), 0o755),
+                         (metadata.st_uid, metadata.st_gid,
+                          stat.S_IMODE(metadata.st_mode)))
+        self.assertIsNotNone(read_current(public))
+
+    def test_output_initialization_is_idempotent_and_precedes_credentials(self):
+        public = self.root / "public"
+        self.assertEqual(public, initialize_public_root(public))
+        before = public.lstat().st_ino
+        self.assertEqual(public, initialize_public_root(public))
+        self.assertEqual(before, public.lstat().st_ino)
+        with patch("emoji_sync.DiscordTransport") as transport:
+            self.assertEqual(0, main(["--initialize-output", "--output", str(public)]))
+        transport.assert_not_called()
+
+        bad_config = self.root / "bad-config.json"
+        bad_config.write_text("{}")
+        bad_config.chmod(0o600)
+        token = self.root / "token"
+        token.write_text("fixture-token")
+        token.chmod(0o600)
+        second_public = self.root / "second-public"
+        with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
+            self.assertEqual(78, main(["--output", str(second_public),
+                                      "--config-file", str(bad_config),
+                                      "--token-file", str(token)]))
+        self.assertIn("category=invalid_config_file", "\n".join(captured.output))
+        self.assertTrue(second_public.is_dir())
+        self.assertEqual(0o755, stat.S_IMODE(second_public.stat().st_mode))
+
+        good_config = self.root / "good-config.json"
+        good_config.write_text('{"guild_id":"123","denylist":[]}')
+        good_config.chmod(0o600)
+        unsafe_token = self.root / "unsafe-token"
+        unsafe_token.write_text("fixture-token")
+        unsafe_token.chmod(0o644)
+        with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
+            self.assertEqual(78, main(["--output", str(second_public),
+                                      "--config-file", str(good_config),
+                                      "--token-file", str(unsafe_token)]))
+        self.assertIn("category=invalid_credential_file", "\n".join(captured.output))
+        self.assertNotIn("fixture-token", "\n".join(captured.output))
+
+    def test_output_initialization_rejects_unsafe_existing_nodes(self):
+        victim = self.root / "victim"
+        victim.mkdir(mode=0o700)
+        linked = self.root / "linked"
+        linked.symlink_to(victim, target_is_directory=True)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(linked)
+        with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
+            self.assertEqual(75, main(["--initialize-output", "--output", str(linked)]))
+        self.assertIn("category=unsafe_output_directory", "\n".join(captured.output))
+
+        wrong_mode = self.root / "wrong-mode"
+        wrong_mode.mkdir(mode=0o750)
+        wrong_mode.chmod(0o750)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(wrong_mode)
+
+        unsafe_parent = self.root / "unsafe-parent"
+        unsafe_parent.mkdir(mode=0o777)
+        unsafe_parent.chmod(0o777)
+        nested = unsafe_parent / "public"
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_parent"):
+            initialize_public_root(nested)
+
+        foreign = self.root / "foreign"
+        foreign.mkdir(mode=0o700)
+        with patch("emoji_sync.os.geteuid", return_value=os.geteuid() + 1), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(foreign)
+
+        mounted = self.root / "mounted"
+        mounted.mkdir(mode=0o700)
+        with patch("emoji_sync.os.path.ismount",
+                   side_effect=lambda path: Path(path) == mounted), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(mounted)
+
+    def test_publication_io_failure_is_not_mislabeled_as_configuration(self):
+        config = self.root / "config.json"
+        config.write_text('{"guild_id":"123","denylist":[]}')
+        config.chmod(0o600)
+        token = self.root / "token"
+        token.write_text("fixture-token")
+        token.chmod(0o600)
+        public = self.root / "publication-error"
+        self.transport.values = []
+        with patch("emoji_sync.DiscordTransport", return_value=self.transport), \
+                patch.object(EmojiSynchronizer, "_publish",
+                             side_effect=OSError("fixture publication failure")), \
+                self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
+            result = main(["--output", str(public), "--config-file", str(config),
+                           "--token-file", str(token)])
+        self.assertEqual(75, result)
+        rendered = "\n".join(captured.output)
+        self.assertIn("category=local_publication_error", rendered)
+        self.assertNotIn("fixture publication failure", rendered)
+        self.assertNotIn("fixture-token", rendered)
+
+    def test_output_initialization_rejects_acl_when_supported(self):
+        if not __import__("shutil").which("setfacl"):
+            self.skipTest("setfacl unavailable")
+        public = self.root / "public-acl"
+        public.mkdir(mode=0o700)
+        result = __import__("subprocess").run(
+            ["setfacl", "-m", "u:65534:---", str(public)],
+            capture_output=True, text=True)
+        if result.returncode:
+            self.skipTest("fixture filesystem has no POSIX ACL support")
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(public)
 
     def test_unexpected_public_acl_fails_closed_when_supported(self):
         if not __import__("shutil").which("setfacl"):

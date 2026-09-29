@@ -124,8 +124,11 @@ class EmojiServiceSupportTest(unittest.TestCase):
         self.assertNotIn("NOCTURNE_EMOJI_DENYLIST", unit)
         self.assertIn("LoadCredential=emoji-sync-config:", unit)
         self.assertIn("LoadCredential=discord-token:", unit)
-        self.assertIn("--config-file=%d/emoji-sync-config", unit)
-        self.assertIn("--token-file=%d/discord-token", unit)
+        self.assertIn("--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config", unit)
+        self.assertIn("--token-file=${CREDENTIALS_DIRECTORY}/discord-token", unit)
+        self.assertIn("--initialize-output", unit)
+        self.assertIn("StateDirectory=nocturne-plugin-emojis/public", unit)
+        self.assertNotIn("%d/", unit)
         self.assertIn("/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0-5c09fb94deb5/bin/python", unit)
         for required in ("DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes",
                          "PrivateDevices=yes", "NoNewPrivileges=yes", "MemoryMax=128M"):

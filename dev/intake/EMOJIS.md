@@ -68,6 +68,16 @@ needed by the client and are not published.
 The intake's read-only bind is `/run/nocturne-plugin-emojis`. It cannot see the
 credential, Discord bot state, databases or unrelated paths.
 
+The emoji unit declares the exact nested
+`StateDirectory=nocturne-plugin-emojis/public`, so systemd creates the public
+leaf with the DynamicUser identity before credentials or network are used. The
+synchronizer independently validates that leaf and rejects links, mounts,
+foreign ownership, unexpected modes, and extended ACLs. Source credential
+files may remain root-owned mode 0600; systemd copies them into its private
+per-unit credential directory. Runtime code uses the documented
+`${CREDENTIALS_DIRECTORY}` path and does not infer source-file safety from the
+mode of systemd's private copy.
+
 ## RuneLite behavior
 
 The client polls the manifest about every five minutes with bounded jitter, a
@@ -145,8 +155,11 @@ automatic third-party traffic.
    `emoji_route_support.py` has the same activation-record interlock and likewise
    consumes only verified commit-scoped staging. Neither helper installs
    directly from the mutable source tree.
-7. Separately approve daemon reload, timer activation, intake restart, Nginx
-   reload and health checks. Verify the first generation before tester rollout.
+7. Separately approve daemon reload, writer and intake startup, Nginx reload,
+   and health checks. Wait boundedly for the writer socket and intake health,
+   then start the emoji one-shot and timer. Emoji failure leaves intake
+   available and the optional emoji endpoint fails open. Verify the first
+   generation before tester rollout.
 
 Activation and the narrow repair helpers preserve metadata/ACLs, create
 verified backups, restore automatically on failure, refuse drift and mixed

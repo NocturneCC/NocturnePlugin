@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 from uuid import uuid4
 
 from derived_review_support import (_apply_metadata, _capture_safe_metadata,
@@ -101,40 +102,119 @@ def command(args, **kwargs):
     return subprocess.run(args, check=True, timeout=60, **kwargs)
 
 
+def _systemd_unit_state(name, run=command):
+    result = run(["systemctl", "show", name, "--no-pager",
+                  "--property=Id", "--property=LoadState",
+                  "--property=ActiveState", "--property=SubState",
+                  "--property=MainPID"], stdout=subprocess.PIPE, text=True)
+    fields = {}
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            raise ValueError("systemd service-state output is malformed")
+        key, value = line.split("=", 1)
+        if key in fields:
+            raise ValueError("systemd service-state output has duplicate fields")
+        fields[key] = value
+    base_fields = {"Id", "LoadState", "ActiveState", "SubState"}
+    observed_fields = set(fields)
+    if name.endswith(".service"):
+        if observed_fields != base_fields | {"MainPID"}:
+            raise ValueError("systemd service-state output is incomplete")
+    elif name.endswith(".timer"):
+        if (not base_fields <= observed_fields
+                or not observed_fields <= base_fields | {"MainPID"}):
+            raise ValueError("systemd service-state output is incomplete")
+    else:
+        raise ValueError(f"unsupported systemd unit type: {name}")
+    if fields["Id"] != name:
+        raise ValueError(f"required unit identity is invalid: {name}")
+    return fields
+
+
+def _safely_inactive(name, fields):
+    allowed_load = {"loaded"} if name in CORE_UNITS else {"loaded", "not-found"}
+    return (fields["LoadState"] in allowed_load
+            and fields["ActiveState"] == "inactive" and fields["SubState"] == "dead"
+            and ("MainPID" not in fields or fields["MainPID"] == "0"))
+
+
 def verify_inactive_services(run=command):
     evidence = {}
     for name in SERVICE_UNITS:
-        result = run(["systemctl", "show", name, "--no-pager",
-                      "--property=Id", "--property=LoadState",
-                      "--property=ActiveState", "--property=SubState",
-                      "--property=MainPID"], stdout=subprocess.PIPE, text=True)
-        fields = {}
-        for line in result.stdout.splitlines():
-            if "=" not in line:
-                raise ValueError("systemd service-state output is malformed")
-            key, value = line.split("=", 1)
-            if key in fields:
-                raise ValueError("systemd service-state output has duplicate fields")
-            fields[key] = value
-        base_fields = {"Id", "LoadState", "ActiveState", "SubState"}
-        observed_fields = set(fields)
-        if name.endswith(".service"):
-            required_fields = base_fields | {"MainPID"}
-            if observed_fields != required_fields:
-                raise ValueError("systemd service-state output is incomplete")
-        elif name.endswith(".timer"):
-            if (not base_fields <= observed_fields
-                    or not observed_fields <= base_fields | {"MainPID"}):
-                raise ValueError("systemd service-state output is incomplete")
-        else:
-            raise ValueError(f"unsupported systemd unit type: {name}")
-        allowed_load = {"loaded"} if name in CORE_UNITS else {"loaded", "not-found"}
-        if (fields["Id"] != name or fields["LoadState"] not in allowed_load
-                or fields["ActiveState"] != "inactive" or fields["SubState"] != "dead"
-                or ("MainPID" in fields and fields["MainPID"] != "0")):
+        fields = _systemd_unit_state(name, run)
+        if not _safely_inactive(name, fields):
             raise ValueError(f"required unit is not inactive: {name}")
         evidence[name] = fields
     return evidence
+
+
+def prepare_rollback_service_state(run=command):
+    """Clear only a stopped failed emoji oneshot before committed rollback.
+
+    This helper never restores files or selectors.  It deliberately skips an
+    absent timer and returns only after the ordinary immutable rollback guard
+    verifies the complete four-unit set as safely inactive.
+    """
+    for name in SERVICE_UNITS:
+        fields = _systemd_unit_state(name, run)
+        if _safely_inactive(name, fields):
+            continue
+        failed_oneshot = (
+            name == "nocturne-plugin-emoji-sync.service"
+            and fields["LoadState"] == "loaded"
+            and fields["ActiveState"] == "failed"
+            and fields["SubState"] == "failed"
+            and fields.get("MainPID") == "0"
+        )
+        if not failed_oneshot:
+            raise ValueError(f"required unit is not safely resettable: {name}")
+        run(["systemctl", "reset-failed", name])
+    return verify_inactive_services(run)
+
+
+def wait_for_writer_socket(path, *, attempts=40, delay=0.25, expected_uid=None,
+                           expected_gid=None, expected_mode=0o666,
+                           sleep=time.sleep):
+    """Wait a bounded interval for the exact pending-writer socket."""
+    if type(attempts) is not int or attempts < 1 or not 0 <= delay <= 5:
+        raise ValueError("invalid writer readiness bound")
+    path = Path(path)
+    for attempt in range(attempts):
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            metadata = None
+        except OSError as error:
+            raise ValueError("writer socket metadata is unavailable") from error
+        if metadata is not None:
+            if (path.is_symlink() or not stat.S_ISSOCK(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != expected_mode
+                    or (expected_uid is not None and metadata.st_uid != expected_uid)
+                    or (expected_gid is not None and metadata.st_gid != expected_gid)):
+                raise ValueError("writer socket metadata is unsafe")
+            return {"path": str(path), "uid": metadata.st_uid, "gid": metadata.st_gid,
+                    "mode": f"{stat.S_IMODE(metadata.st_mode):04o}"}
+        if attempt + 1 < attempts:
+            sleep(delay)
+    raise TimeoutError(f"writer socket did not become ready: {path}")
+
+
+def wait_for_intake_health(probe, *, attempts=40, delay=0.25,
+                           sleep=time.sleep):
+    """Wait for a caller-supplied bounded local health probe to return True."""
+    if not callable(probe) or type(attempts) is not int or attempts < 1 \
+            or not 0 <= delay <= 5:
+        raise ValueError("invalid intake readiness bound")
+    for attempt in range(attempts):
+        try:
+            if probe() is True:
+                return True
+        except (OSError, RuntimeError):
+            pass
+        if attempt + 1 < attempts:
+            sleep(delay)
+    raise TimeoutError("intake did not become healthy within the readiness bound")
 
 
 def _regular_file(path, description):
@@ -589,7 +669,7 @@ def release_units(release, runtime_root):
             if text.count(allowlist) != 1: raise ValueError("intake allowlist changed")
             for line in ("MemoryMax=160M", "TasksMax=32", "InaccessiblePaths=/srv/projects/database"):
                 if text.count(line) != 1: raise ValueError(f"intake limit missing: {line}")
-            for private_path in ("/var/lib/nocturne-plugin-emojis",
+            for private_path in ("-/var/lib/nocturne-plugin-emojis",
                                  "/etc/nocturne-plugin/emoji-sync.json",
                                  "/etc/nocturne-plugin/credentials"):
                 if text.count("InaccessiblePaths=" + private_path) != 1:
@@ -609,10 +689,20 @@ def release_units(release, runtime_root):
             expected_code = current + "/dev/intake/emoji_sync.py"
             if text.count("ExecStart=" + expected_python + " -B " + expected_code + " ") != 1:
                 raise ValueError("emoji synchronizer does not use versioned runtime and immutable code")
+            expected_initialize = ("ExecStartPre=" + expected_python + " -B " + expected_code
+                                   + " --initialize-output ")
+            if text.count(expected_initialize) != 1:
+                raise ValueError("emoji public output initializer is missing or ambiguous")
             for line in ("LoadCredential=emoji-sync-config:",
-                         "LoadCredential=discord-token:", "StateDirectoryMode=0755"):
+                         "LoadCredential=discord-token:",
+                         "StateDirectory=nocturne-plugin-emojis/public",
+                         "StateDirectoryMode=0755",
+                         "--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config",
+                         "--token-file=${CREDENTIALS_DIRECTORY}/discord-token"):
                 if text.count(line) != 1:
                     raise ValueError(f"emoji synchronizer boundary missing: {line}")
+            if "%d/" in text:
+                raise ValueError("emoji synchronizer uses a noncanonical credential path")
         elif name == "nocturne-plugin-emoji-sync.timer":
             if text.count("Unit=nocturne-plugin-emoji-sync.service") != 1:
                 raise ValueError("emoji timer target is missing or ambiguous")

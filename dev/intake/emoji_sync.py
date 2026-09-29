@@ -369,6 +369,70 @@ def _acl_free(path):
     return not {"system.posix_acl_access", "system.posix_acl_default"}.intersection(names)
 
 
+def initialize_public_root(root):
+    """Create or verify the exact public StateDirectory leaf.
+
+    systemd creates this path before the production process starts.  Direct
+    invocation (including guarded preflight) may create the final leaf only
+    beneath an already-existing safe parent.  No parent directory is created
+    here, and an existing link, mount, foreign owner, ACL, or unexpected mode
+    is never adopted.
+    """
+    root = Path(root)
+    if root.name in {"", ".", ".."}:
+        raise SyncFailure("unsafe_output_directory")
+    try:
+        root_stat = root.lstat()
+        existed = True
+    except FileNotFoundError:
+        root_stat = None
+        existed = False
+    except OSError as error:
+        raise SyncFailure("output_initialization_failed") from error
+    try:
+        parent = root.parent.resolve(strict=True)
+        parent_stat = parent.lstat()
+    except (OSError, RuntimeError) as error:
+        raise SyncFailure("unsafe_output_parent") from error
+    if not stat.S_ISDIR(parent_stat.st_mode) or parent.is_symlink():
+        raise SyncFailure("unsafe_output_parent")
+    if not existed:
+        if (parent_stat.st_uid not in {0, os.geteuid()}
+                or parent_stat.st_gid not in {0, os.getegid()}
+                or parent_stat.st_mode & 0o022 or not _acl_free(parent)
+                or os.path.ismount(parent)):
+            raise SyncFailure("unsafe_output_parent")
+        try:
+            root.mkdir(mode=0o700)
+            _fsync_directory(root.parent)
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise SyncFailure("output_initialization_failed") from error
+        try:
+            root_stat = root.lstat()
+        except OSError as error:
+            raise SyncFailure("output_initialization_failed") from error
+    if (not stat.S_ISDIR(root_stat.st_mode) or root.is_symlink()
+            or root_stat.st_dev != parent_stat.st_dev
+            or root_stat.st_uid != os.geteuid() or root_stat.st_gid != os.getegid()
+            or stat.S_IMODE(root_stat.st_mode) not in {0o700, 0o755}
+            or not _acl_free(root) or os.path.ismount(root)):
+        raise SyncFailure("unsafe_output_directory")
+    try:
+        root.chmod(0o755)
+    except OSError as error:
+        raise SyncFailure("output_initialization_failed") from error
+    verified = root.lstat()
+    if (not stat.S_ISDIR(verified.st_mode) or root.is_symlink()
+            or verified.st_dev != parent_stat.st_dev
+            or verified.st_uid != os.geteuid() or verified.st_gid != os.getegid()
+            or stat.S_IMODE(verified.st_mode) != 0o755
+            or not _acl_free(root) or os.path.ismount(root)):
+        raise SyncFailure("unsafe_output_directory")
+    return root
+
+
 def _verified_generation(path, manifest, assets, root_stat):
     path = Path(path)
     if not _public_node(path, root_stat, directory=True, mode=0o755):
@@ -444,14 +508,8 @@ def read_current(root):
 
 @contextmanager
 def sync_lock(root):
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True, mode=0o755)
+    root = initialize_public_root(root)
     root_stat = root.lstat()
-    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.geteuid()
-            or not _acl_free(root)
-            or root_stat.st_mode & 0o022):
-        raise SyncFailure("unsafe_output_directory")
-    os.chmod(root, 0o755)
     lock_path = root / ".sync.lock"
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -661,17 +719,37 @@ def main(argv=None):
     parser.add_argument("--output", default=os.environ.get("NOCTURNE_EMOJI_PUBLIC_ROOT"))
     parser.add_argument("--config-file", default=None)
     parser.add_argument("--token-file", default=None)
+    parser.add_argument("--initialize-output", action="store_true")
     args = parser.parse_args(argv)
-    if not args.config_file or not args.output or not args.token_file:
+    if not args.output or (not args.initialize_output and
+                           (not args.config_file or not args.token_file)):
         parser.error("configuration, output, and token credential files are required")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if PILLOW_VERSION != REQUIRED_PILLOW_VERSION or sys.version_info[:2] != (3, 14):
         log.error("emoji synchronization failed: category=unsupported_runtime")
         return 78
     try:
+        initialize_public_root(args.output)
+        if args.initialize_output:
+            log.info("emoji public output initialized")
+            return 0
+    except SyncFailure as error:
+        log.error("emoji synchronization failed: category=%s retry_after=%s",
+                  error.category, error.retry_after if error.retry_after is not None else "none")
+        return 75
+    try:
         guild_id, denylist = _read_config(args.config_file)
+    except (OSError, ValueError):
+        log.error("emoji synchronization failed: category=invalid_config_file")
+        return 78
+    try:
+        token = _read_credential(args.token_file)
+    except (OSError, ValueError):
+        log.error("emoji synchronization failed: category=invalid_credential_file")
+        return 78
+    try:
         result = EmojiSynchronizer(args.output, DiscordTransport(), denylist=denylist).synchronize(
-            guild_id, _read_credential(args.token_file))
+            guild_id, token)
         log.info("emoji synchronization %s: count=%d revision=%s",
                  result["status"], result["emoji_count"], result["revision"][:12])
     except SyncFailure as error:
@@ -679,8 +757,8 @@ def main(argv=None):
                   error.category, error.retry_after if error.retry_after is not None else "none")
         return 75
     except (OSError, ValueError):
-        log.error("emoji synchronization failed: category=invalid_configuration")
-        return 78
+        log.error("emoji synchronization failed: category=local_publication_error")
+        return 75
     return 0
 
 

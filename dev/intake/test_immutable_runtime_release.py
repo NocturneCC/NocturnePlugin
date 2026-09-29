@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -72,9 +73,12 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             self.assertNotIn("/srv/projects/nocturne-plugin-intake",
                              (release/"deployment-units"/name).read_text())
         self.assertIn("BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",units)
-        self.assertIn("InaccessiblePaths=/var/lib/nocturne-plugin-emojis",units)
+        self.assertIn("InaccessiblePaths=-/var/lib/nocturne-plugin-emojis",units)
+        self.assertNotIn("InaccessiblePaths=/var/lib/nocturne-plugin-emojis\n",units)
         self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/emoji-sync.json",units)
         self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/credentials",units)
+        self.assertNotIn("After=nocturne-plugin-emoji", units)
+        self.assertNotIn("Requires=nocturne-plugin-emoji", units)
         self.assertEqual([
             "BindReadOnlyPaths=/srv/projects/nocturne-plugin-announcements-public:/run/nocturne-plugin-announcements",
             "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",
@@ -85,6 +89,13 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             generated=(release/"deployment-units"/name).read_text()
             if name == "nocturne-plugin-emoji-sync.service":
                 self.assertEqual(2,generated.count("LoadCredential="))
+                self.assertIn("StateDirectory=nocturne-plugin-emojis/public", generated)
+                self.assertIn("--initialize-output", generated)
+                self.assertIn("--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config",
+                              generated)
+                self.assertIn("--token-file=${CREDENTIALS_DIRECTORY}/discord-token",
+                              generated)
+                self.assertNotIn("%d/", generated)
             else:
                 self.assertNotIn("LoadCredential=",generated)
         self.assertNotIn("/venvs/" + runtime.LEGACY_VENV_NAME + "/", units)
@@ -105,6 +116,47 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         self.assertTrue(other_name.endswith(
             other_lock[:runtime_identity.IDENTITY_DIGEST_LENGTH]))
         self.assertEqual(runtime.GUNICORN_VERSION, "26.2.0")
+
+    def test_emoji_namespace_units_pass_disposable_systemd_verification(self):
+        analyzer = shutil.which("systemd-analyze")
+        if not analyzer:
+            self.skipTest("systemd-analyze unavailable")
+        fixture = self.root / "systemd-fixture"
+        fixture.mkdir()
+        source = Path(__file__).parent
+        for name in runtime.UNITS:
+            lines = []
+            for line in (source / name).read_text().splitlines():
+                if line.startswith("WorkingDirectory="):
+                    line = "WorkingDirectory=/tmp"
+                elif line.startswith("ExecStartPre="):
+                    line = "ExecStartPre=/bin/true"
+                elif line.startswith("ExecStart="):
+                    line = "ExecStart=/bin/true"
+                elif line.startswith("LoadCredential="):
+                    credential = line.split("=", 1)[1].split(":", 1)[0]
+                    line = f"LoadCredential={credential}:/dev/null"
+                lines.append(line)
+            (fixture / name).write_text("\n".join(lines) + "\n")
+        verified = subprocess.run(
+            [analyzer, "verify", *(str(fixture / name) for name in runtime.UNITS)],
+            capture_output=True, text=True)
+        sandbox_warnings = {
+            "Failed to turn off SO_PASSRIGHTS on user lookup socket, ignoring: Operation not permitted",
+            "Failed to enable SO_PASSCRED on handoff timestamp socket: Operation not permitted",
+        }
+        if verified.returncode:
+            self.assertTrue(verified.stderr.splitlines())
+            self.assertTrue(set(verified.stderr.splitlines()) <= sandbox_warnings,
+                            verified.stderr)
+        secured = subprocess.run(
+            [analyzer, "security", "--offline=yes", "--no-pager",
+             str(fixture / "nocturne-plugin-emoji-sync.service")],
+            capture_output=True, text=True)
+        if secured.returncode:
+            self.assertTrue(secured.stderr.splitlines())
+            self.assertTrue(set(secured.stderr.splitlines()) <= sandbox_warnings,
+                            secured.stderr)
 
     def test_legacy_runtime_uses_its_pinned_historical_record(self):
         target=self.runtime/"venvs"/runtime.LEGACY_VENV_NAME
@@ -252,6 +304,112 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
                 evidence[timer] = output
                 with self.assertRaises(ValueError):
                     runtime.verify_inactive_services(self.systemd_runner(evidence))
+
+    def test_rollback_state_reset_handles_failed_oneshot_and_absent_timer(self):
+        evidence = self.inactive_systemd_evidence()
+        service = "nocturne-plugin-emoji-sync.service"
+        timer = "nocturne-plugin-emoji-sync.timer"
+        evidence[service].update(ActiveState="failed", SubState="failed")
+        evidence[timer] = {"Id": timer, "LoadState": "not-found",
+                           "ActiveState": "inactive", "SubState": "dead"}
+        calls = []
+
+        def runner(args, **_kwargs):
+            calls.append(tuple(args))
+            if args[1] == "reset-failed":
+                self.assertEqual(service, args[2])
+                evidence[service].update(ActiveState="inactive", SubState="dead")
+                return SimpleNamespace(stdout="")
+            value = evidence[args[2]]
+            return SimpleNamespace(stdout="".join(
+                f"{key}={item}\n" for key, item in value.items()))
+
+        result = runtime.prepare_rollback_service_state(runner)
+        self.assertEqual("inactive", result[service]["ActiveState"])
+        self.assertNotIn("MainPID", result[timer])
+        self.assertEqual(1, sum(call[1] == "reset-failed" for call in calls))
+
+    def test_rollback_state_reset_accepts_already_reset_service_without_timer_call(self):
+        evidence = self.inactive_systemd_evidence()
+        timer = "nocturne-plugin-emoji-sync.timer"
+        evidence[timer] = {"Id": timer, "LoadState": "not-found",
+                           "ActiveState": "inactive", "SubState": "dead"}
+        calls = []
+
+        def runner(args, **_kwargs):
+            calls.append(tuple(args))
+            if args[1] != "show":
+                raise AssertionError("inactive and absent units must not be reset")
+            value = evidence[args[2]]
+            return SimpleNamespace(stdout="".join(
+                f"{key}={item}\n" for key, item in value.items()))
+
+        runtime.prepare_rollback_service_state(runner)
+        self.assertFalse(any(call[1] == "reset-failed" for call in calls))
+
+    def test_rollback_state_reset_propagates_reset_error_and_rejects_other_states(self):
+        service = "nocturne-plugin-emoji-sync.service"
+        evidence = self.inactive_systemd_evidence()
+        evidence[service].update(ActiveState="failed", SubState="failed")
+
+        def failing(args, **_kwargs):
+            if args[1] == "reset-failed":
+                raise RuntimeError("fixture reset failure")
+            value = evidence[args[2]]
+            return SimpleNamespace(stdout="".join(
+                f"{key}={item}\n" for key, item in value.items()))
+
+        with self.assertRaisesRegex(RuntimeError, "fixture reset failure"):
+            runtime.prepare_rollback_service_state(failing)
+        for active, substate, pid in (("active", "running", "123"),
+                                      ("activating", "start", "0")):
+            with self.subTest(active=active):
+                changed = self.inactive_systemd_evidence()
+                changed[service].update(ActiveState=active, SubState=substate, MainPID=pid)
+                with self.assertRaisesRegex(ValueError, "not safely resettable"):
+                    runtime.prepare_rollback_service_state(self.systemd_runner(changed))
+
+    def test_bounded_writer_socket_and_intake_health_readiness(self):
+        socket_path = self.root / "pending.sock"
+        sleeps = []
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+
+        def create_after_first_wait(delay):
+            sleeps.append(delay)
+            if len(sleeps) == 1:
+                listener.bind(str(socket_path))
+                socket_path.chmod(0o666)
+
+        result = runtime.wait_for_writer_socket(
+            socket_path, attempts=3, delay=0.01,
+            expected_uid=os.getuid(), expected_gid=os.getgid(),
+            sleep=create_after_first_wait)
+        self.assertEqual(("0666", 1), (result["mode"], len(sleeps)))
+
+        probes = iter((False, False, True))
+        health_sleeps = []
+        self.assertTrue(runtime.wait_for_intake_health(
+            lambda: next(probes), attempts=3, delay=0.01,
+            sleep=health_sleeps.append))
+        self.assertEqual([0.01, 0.01], health_sleeps)
+
+    def test_readiness_timeouts_are_bounded_and_unsafe_socket_fails_closed(self):
+        sleeps = []
+        with self.assertRaises(TimeoutError):
+            runtime.wait_for_writer_socket(self.root / "absent.sock", attempts=3,
+                                           delay=0.01, sleep=sleeps.append)
+        self.assertEqual([0.01, 0.01], sleeps)
+        unsafe = self.root / "unsafe.sock"
+        unsafe.write_text("not a socket")
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            runtime.wait_for_writer_socket(unsafe, attempts=3, sleep=lambda _delay: None)
+        probes = []
+        with self.assertRaises(TimeoutError):
+            runtime.wait_for_intake_health(lambda: probes.append(1) or False,
+                                           attempts=3, delay=0,
+                                           sleep=lambda _delay: None)
+        self.assertEqual(3, len(probes))
 
     def venv_inputs(self):
         release=self.runtime/"releases"/("f"*40); (release/"dev/intake").mkdir(parents=True)

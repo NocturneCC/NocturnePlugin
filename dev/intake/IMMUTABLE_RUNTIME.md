@@ -30,6 +30,14 @@ reinstates the verified applied set. Fsynced `prepared` and
 `rollback_prepared` records support explicit recovery after process or host
 failure. Neither staging nor activation reloads a daemon or controls a service.
 
+The intake unit has no ordering or requirement dependency on emoji
+synchronization. Its private StateDirectory denial is optional only with
+respect to a missing path; whenever that path exists it remains inaccessible.
+The only re-exposed path is the exact read-only
+`/var/lib/nocturne-plugin-emojis/public` bind. A missing first-generation
+mirror therefore leaves the emoji endpoint unavailable without preventing the
+drop intake from starting.
+
 ## Runtime virtual environment
 
 Never copy the development `.venv`: Python virtual environments embed absolute
@@ -238,7 +246,13 @@ plugin units are inactive.
    activate its symlink and staged unit files. Run `systemd-analyze verify`
    before the separately approved daemon reload.
 7. Start admin first and prove RuneLite approval returns conflict without rank
-   changes. Start writer, require its socket, then start intake.
+   changes. Start writer and use the committed bounded socket-readiness helper,
+   then start intake and use the committed bounded local-health helper. Start
+   the emoji one-shot and timer only after intake is healthy; emoji failure must
+   not stop or roll back a healthy intake. Before committed rollback, the
+   state-aware helper may reset only a loaded, stopped `failed/failed` emoji
+   oneshot. It skips an absent inactive timer and never restores files, routes,
+   or `current`; those remain exclusive to the activation-record interface.
 8. Run the bounded synthetic compatibility/idempotency verifier. Keep screenshot
    cleanup in dry-run mode.
 
