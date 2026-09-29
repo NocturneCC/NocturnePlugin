@@ -225,6 +225,9 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
         self.assertEqual(entry["byte_length"], len(raw))
         self.assertEqual(0o644, asset.stat().st_mode & 0o777)
+        self.assertEqual(0o755, self.root.stat().st_mode & 0o777)
+        self.assertEqual(0o755, (self.root / "generations").stat().st_mode & 0o777)
+        self.assertEqual(0o755, (self.root / "current").resolve().stat().st_mode & 0o777)
 
     def test_exceptions_and_logs_do_not_include_token_or_headers(self):
         secret = "fixture-secret-must-not-leak"

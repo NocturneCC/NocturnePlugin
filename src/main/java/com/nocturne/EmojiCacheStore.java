@@ -163,6 +163,7 @@ final class EmojiCacheStore
 	{
 		if (raw == null || raw.length != entry.byteLength || raw.length > EmojiManifest.MAX_ASSET_BYTES
 			|| raw.length < 33 || raw[0] != (byte) 0x89 || raw[1] != 'P' || raw[2] != 'N' || raw[3] != 'G'
+			|| raw[12] != 'I' || raw[13] != 'H' || raw[14] != 'D' || raw[15] != 'R'
 			|| readInt(raw, 16) != entry.width || readInt(raw, 20) != entry.height
 			|| raw[raw.length - 12] != 0 || raw[raw.length - 11] != 0
 			|| raw[raw.length - 10] != 0 || raw[raw.length - 9] != 0

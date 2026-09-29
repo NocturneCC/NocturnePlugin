@@ -293,6 +293,7 @@ def sync_lock(root):
     root.mkdir(parents=True, exist_ok=True, mode=0o755)
     if not root.is_dir() or root.is_symlink():
         raise SyncFailure("unsafe_output_directory")
+    os.chmod(root, 0o755)
     lock_path = root / ".sync.lock"
     with lock_path.open("a+b") as lock:
         try:
@@ -382,6 +383,7 @@ class EmojiSynchronizer:
         generations.mkdir(parents=True, exist_ok=True, mode=0o755)
         if not generations.is_dir() or generations.is_symlink():
             raise SyncFailure("unsafe_generation_directory")
+        os.chmod(generations, 0o755)
         temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=self.output))
         try:
             os.chmod(temporary, 0o700)
