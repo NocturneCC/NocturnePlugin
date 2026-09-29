@@ -155,6 +155,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
         valid = png()
         cases = [(b"not-image", "image/png", False), (valid[:-5], "image/png", False),
                  (valid + b"payload", "image/png", False),
+                 (gif() + b"payload;", "image/gif", True),
                  (b"x" * (256 * 1024 + 1), "image/png", False),
                  (valid, "image/gif", False)]
         for raw, mime, animated in cases:
@@ -256,6 +257,24 @@ class EmojiSynchronizerTest(unittest.TestCase):
         with self.assertRaisesRegex(SyncFailure, "unsafe_sync_lock"):
             sync.synchronize("123", "fixture-token")
         self.assertEqual("unchanged", victim.read_text())
+
+    def test_generation_directory_is_verified_before_chmod(self):
+        self.configure([item(1, "one")])
+        victim = self.root / "victim"
+        victim.mkdir(mode=0o700)
+        (self.root / "generations").symlink_to(victim, target_is_directory=True)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_generation_directory"):
+            self.sync.synchronize("123", "fixture-token")
+        self.assertEqual(0o700, victim.stat().st_mode & 0o777)
+
+        (self.root / "generations").unlink()
+        generations = self.root / "generations"
+        generations.mkdir(mode=0o700)
+        with patch("emoji_sync.os.path.ismount",
+                   side_effect=lambda path: Path(path) == generations), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_generation_directory"):
+            self.sync.synchronize("123", "fixture-token")
+        self.assertEqual(0o700, generations.stat().st_mode & 0o777)
 
     def test_concurrent_sync_is_excluded(self):
         self.configure([item(1, "one")])

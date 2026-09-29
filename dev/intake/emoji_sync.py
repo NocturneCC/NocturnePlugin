@@ -178,6 +178,49 @@ def _png_container(raw):
     return seen_iend and offset == len(raw)
 
 
+def _gif_container(raw):
+    if len(raw) < 14 or not raw.startswith((b"GIF87a", b"GIF89a")):
+        return False
+    offset = 13
+    packed = raw[10]
+    if packed & 0x80:
+        offset += 3 * (1 << ((packed & 0x07) + 1))
+    seen_image = False
+    while offset < len(raw):
+        marker = raw[offset]
+        offset += 1
+        if marker == 0x3b:
+            return seen_image and offset == len(raw)
+        if marker == 0x2c:
+            if offset + 9 > len(raw):
+                return False
+            local_packed = raw[offset + 8]
+            offset += 9
+            if local_packed & 0x80:
+                offset += 3 * (1 << ((local_packed & 0x07) + 1))
+            if offset >= len(raw):
+                return False
+            offset += 1  # LZW minimum code size.
+            seen_image = True
+        elif marker == 0x21:
+            if offset >= len(raw):
+                return False
+            offset += 1  # Extension label.
+        else:
+            return False
+        while offset < len(raw):
+            block_size = raw[offset]
+            offset += 1
+            if block_size == 0:
+                break
+            if offset + block_size > len(raw):
+                return False
+            offset += block_size
+        else:
+            return False
+    return False
+
+
 def normalize_image(raw, content_type, animated_source):
     if not isinstance(raw, bytes) or not 1 <= len(raw) <= MAX_INPUT_BYTES:
         raise SyncFailure("invalid_image")
@@ -186,7 +229,7 @@ def normalize_image(raw, content_type, animated_source):
     if media_type != expected:
         raise SyncFailure("invalid_image_type")
     if animated_source:
-        if not raw.startswith((b"GIF87a", b"GIF89a")) or not raw.endswith(b";"):
+        if not _gif_container(raw):
             raise SyncFailure("invalid_image_container")
     elif not _png_container(raw):
         raise SyncFailure("invalid_image_container")
@@ -493,8 +536,16 @@ class EmojiSynchronizer:
 
     def _publish(self, revision, manifest, assets):
         generations = self.output / "generations"
-        generations.mkdir(parents=True, exist_ok=True, mode=0o755)
         root_stat = self.output.lstat()
+        try:
+            generations.mkdir(mode=0o700)
+        except FileExistsError:
+            value = generations.lstat()
+            if (not stat.S_ISDIR(value.st_mode) or value.st_dev != root_stat.st_dev
+                    or value.st_uid != root_stat.st_uid or value.st_gid != root_stat.st_gid
+                    or stat.S_IMODE(value.st_mode) not in {0o700, 0o755}
+                    or not _acl_free(generations) or os.path.ismount(generations)):
+                raise SyncFailure("unsafe_generation_directory") from None
         os.chmod(generations, 0o755)
         if not _public_node(generations, root_stat, directory=True, mode=0o755):
             raise SyncFailure("unsafe_generation_directory")
