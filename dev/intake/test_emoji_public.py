@@ -8,7 +8,7 @@ import unittest
 from PIL import Image
 
 from emoji_public import MANIFEST_PATH, public_wsgi
-from emoji_sync import EmojiSynchronizer
+from emoji_sync import EmojiSynchronizer, SyncFailure
 from intake import create_app
 
 
@@ -46,8 +46,11 @@ class EmojiPublicTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        EmojiSynchronizer(self.root, FixtureTransport()).synchronize("123", "fixture-token")
+        self.base = Path(self.temp.name)
+        self.state = self.base / "private"
+        self.root = self.base / "public"
+        EmojiSynchronizer(self.state, self.root, FixtureTransport()).synchronize(
+            "123", "fixture-token")
         self.app = lambda env, start: public_wsgi(self.root, env, start)
 
     def test_manifest_get_head_etag_304_and_deterministic_body(self):
@@ -146,6 +149,25 @@ class EmojiPublicTest(unittest.TestCase):
         app = create_app(state, ["Tester"], handoff=lambda _value: None,
                          presence_identity_resolver=lambda _value: None,
                          emoji_public_root=missing)
+        self.assertEqual("503 Service Unavailable", request(app)["status"])
+        self.assertEqual("405 Method Not Allowed",
+                         request(app, "/api/plugin/dev/drops", method="GET")["status"])
+
+    def test_sync_failure_initializes_public_root_before_intake_start(self):
+        class FailureTransport:
+            def list_emojis(self, _guild_id, _token):
+                raise SyncFailure("transport_error")
+
+        state = self.base / "failure-private"
+        public = self.base / "failure-public"
+        with self.assertRaisesRegex(SyncFailure, "transport_error"):
+            EmojiSynchronizer(state, public, FailureTransport()).synchronize(
+                "123", "fixture-token")
+        self.assertTrue(public.is_dir())
+        app = create_app(self.base / "failure-intake", ["Tester"],
+                         handoff=lambda _value: None,
+                         presence_identity_resolver=lambda _value: None,
+                         emoji_public_root=public)
         self.assertEqual("503 Service Unavailable", request(app)["status"])
         self.assertEqual("405 Method Not Allowed",
                          request(app, "/api/plugin/dev/drops", method="GET")["status"])

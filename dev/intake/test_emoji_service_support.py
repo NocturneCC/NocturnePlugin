@@ -127,7 +127,12 @@ class EmojiServiceSupportTest(unittest.TestCase):
         self.assertIn("--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config", unit)
         self.assertIn("--token-file=${CREDENTIALS_DIRECTORY}/discord-token", unit)
         self.assertIn("--initialize-output", unit)
-        self.assertIn("StateDirectory=nocturne-plugin-emojis/public", unit)
+        self.assertIn("StateDirectory=nocturne-plugin-emojis nocturne-plugin-emoji-public", unit)
+        self.assertIn("NOCTURNE_EMOJI_PRIVATE_ROOT=/var/lib/nocturne-plugin-emojis", unit)
+        self.assertIn("NOCTURNE_EMOJI_PUBLIC_ROOT=/var/lib/nocturne-plugin-emoji-public", unit)
+        self.assertEqual(2, unit.count("--state=${NOCTURNE_EMOJI_PRIVATE_ROOT}"))
+        self.assertEqual(2, unit.count("--output=${NOCTURNE_EMOJI_PUBLIC_ROOT}"))
+        self.assertNotIn("/var/lib/nocturne-plugin-emojis/public", unit)
         self.assertNotIn("%d/", unit)
         self.assertIn("/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0-5c09fb94deb5/bin/python", unit)
         for required in ("DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes",

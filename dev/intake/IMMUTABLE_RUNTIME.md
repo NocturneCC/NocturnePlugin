@@ -33,10 +33,10 @@ failure. Neither staging nor activation reloads a daemon or controls a service.
 The intake unit has no ordering or requirement dependency on emoji
 synchronization. Its private StateDirectory denial is optional only with
 respect to a missing path; whenever that path exists it remains inaccessible.
-The only re-exposed path is the exact read-only
-`/var/lib/nocturne-plugin-emojis/public` bind. A missing first-generation
-mirror therefore leaves the emoji endpoint unavailable without preventing the
-drop intake from starting.
+The separate `/var/lib/nocturne-plugin-emoji-public` StateDirectory is the only
+path bound read-only into intake. It is not nested below the inaccessible
+private root. A missing first-generation mirror therefore leaves the emoji
+endpoint unavailable without preventing the drop intake from starting.
 
 ## Runtime virtual environment
 
@@ -247,9 +247,11 @@ plugin units are inactive.
    before the separately approved daemon reload.
 7. Start admin first and prove RuneLite approval returns conflict without rank
    changes. Start writer and use the committed bounded socket-readiness helper,
-   then start intake and use the committed bounded local-health helper. Start
-   the emoji one-shot and timer only after intake is healthy; emoji failure must
-   not stop or roll back a healthy intake. Before committed rollback, the
+   then attempt the emoji one-shot so its pre-start initializer creates the
+   independent public bind source. Start intake even if the bounded Discord
+   synchronization fails, use the committed bounded local-health helper, and
+   enable the timer only after intake is healthy. Emoji failure must not stop or
+   roll back intake. Before committed rollback, the
    state-aware helper may reset only a loaded, stopped `failed/failed` emoji
    oneshot. It skips an absent inactive timer and never restores files, routes,
    or `current`; those remain exclusive to the activation-record interface.

@@ -68,15 +68,19 @@ needed by the client and are not published.
 The intake's read-only bind is `/run/nocturne-plugin-emojis`. It cannot see the
 credential, Discord bot state, databases or unrelated paths.
 
-The emoji unit declares the exact nested
-`StateDirectory=nocturne-plugin-emojis/public`, so systemd creates the public
-leaf with the DynamicUser identity before credentials or network are used. The
-synchronizer independently validates that leaf and rejects links, mounts,
-foreign ownership, unexpected modes, and extended ACLs. Source credential
-files may remain root-owned mode 0600; systemd copies them into its private
-per-unit credential directory. Runtime code uses the documented
-`${CREDENTIALS_DIRECTORY}` path and does not infer source-file safety from the
-mode of systemd's private copy.
+The emoji unit declares two independent StateDirectory entries. Private locks
+and build workspace stay under `/var/lib/nocturne-plugin-emojis`; completed
+sanitized generations are selected atomically under
+`/var/lib/nocturne-plugin-emoji-public`. The intake masks the private path and
+binds only the independent public path read-only. The synchronizer validates
+both roots and rejects links, mounts, foreign ownership, unexpected modes,
+extended ACLs and hard-linked files. The only accepted root-link shape is
+systemd's exact `private/<StateDirectory-name>` DynamicUser indirection, whose
+link, backing parent and target are all independently verified. Source
+credential files may remain root-owned mode 0600; systemd copies them into its
+private per-unit credential directory. Runtime code uses the documented
+`${CREDENTIALS_DIRECTORY}` path
+and does not infer source-file safety from the mode of systemd's private copy.
 
 ## RuneLite behavior
 
@@ -156,9 +160,11 @@ automatic third-party traffic.
    consumes only verified commit-scoped staging. Neither helper installs
    directly from the mutable source tree.
 7. Separately approve daemon reload, writer and intake startup, Nginx reload,
-   and health checks. Wait boundedly for the writer socket and intake health,
-   then start the emoji one-shot and timer. Emoji failure leaves intake
-   available and the optional emoji endpoint fails open. Verify the first
+   and health checks. Wait boundedly for the writer socket, then attempt the
+   emoji one-shot before intake starts so its pre-start initializer makes the
+   independent public bind source available. A bounded Discord synchronization
+   failure must not prevent intake startup; the emoji endpoint then fails open.
+   Wait boundedly for intake health and enable the timer. Verify the first
    generation before tester rollout.
 
 Activation and the narrow repair helpers preserve metadata/ACLs, create

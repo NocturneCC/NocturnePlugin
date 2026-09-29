@@ -72,25 +72,42 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         for name in runtime.UNITS:
             self.assertNotIn("/srv/projects/nocturne-plugin-intake",
                              (release/"deployment-units"/name).read_text())
-        self.assertIn("BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",units)
+        self.assertIn("BindReadOnlyPaths=-/var/lib/nocturne-plugin-emoji-public:/run/nocturne-plugin-emojis",units)
         self.assertIn("InaccessiblePaths=-/var/lib/nocturne-plugin-emojis",units)
         self.assertNotIn("InaccessiblePaths=/var/lib/nocturne-plugin-emojis\n",units)
+        self.assertNotIn("/var/lib/nocturne-plugin-emojis/public", units)
         self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/emoji-sync.json",units)
         self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/credentials",units)
         self.assertNotIn("After=nocturne-plugin-emoji", units)
         self.assertNotIn("Requires=nocturne-plugin-emoji", units)
         self.assertEqual([
             "BindReadOnlyPaths=/srv/projects/nocturne-plugin-announcements-public:/run/nocturne-plugin-announcements",
-            "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",
+            "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emoji-public:/run/nocturne-plugin-emojis",
         ], [line for line in units.splitlines() if line.startswith("BindReadOnlyPaths=")])
+        inaccessible = [line.split("=", 1)[1].lstrip("-") for line in units.splitlines()
+                        if line.startswith("InaccessiblePaths=")]
+        bind_sources = [line.split("=", 1)[1].split(":", 1)[0].lstrip("-")
+                        for line in units.splitlines() if line.startswith("BindReadOnlyPaths=")]
+        self.assertFalse(any(source.startswith(hidden.rstrip("/") + "/")
+                             for source in bind_sources for hidden in inaccessible))
         self.assertNotIn("discord-token",units)
         self.assertNotIn("emoji-sync-config",units)
         for name in runtime.UNITS:
             generated=(release/"deployment-units"/name).read_text()
             if name == "nocturne-plugin-emoji-sync.service":
                 self.assertEqual(2,generated.count("LoadCredential="))
-                self.assertIn("StateDirectory=nocturne-plugin-emojis/public", generated)
+                self.assertIn(
+                    "StateDirectory=nocturne-plugin-emojis nocturne-plugin-emoji-public",
+                    generated)
+                self.assertIn(
+                    "Environment=NOCTURNE_EMOJI_PRIVATE_ROOT=/var/lib/nocturne-plugin-emojis",
+                    generated)
+                self.assertIn(
+                    "Environment=NOCTURNE_EMOJI_PUBLIC_ROOT=/var/lib/nocturne-plugin-emoji-public",
+                    generated)
                 self.assertIn("--initialize-output", generated)
+                self.assertEqual(2, generated.count("--state=${NOCTURNE_EMOJI_PRIVATE_ROOT}"))
+                self.assertEqual(2, generated.count("--output=${NOCTURNE_EMOJI_PUBLIC_ROOT}"))
                 self.assertIn("--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config",
                               generated)
                 self.assertIn("--token-file=${CREDENTIALS_DIRECTORY}/discord-token",
@@ -99,6 +116,9 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             else:
                 self.assertNotIn("LoadCredential=",generated)
         self.assertNotIn("/venvs/" + runtime.LEGACY_VENV_NAME + "/", units)
+        route = (release / "dev/intake/nginx-emojis-location.conf").read_text()
+        self.assertIn("/var/lib/nocturne-plugin-emoji-public", route)
+        self.assertNotIn("/var/lib/nocturne-plugin-emojis", route)
 
     def test_dependency_lock_changes_create_distinct_runtime_identities(self):
         source=Path(__file__).parent
@@ -149,14 +169,15 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             self.assertTrue(verified.stderr.splitlines())
             self.assertTrue(set(verified.stderr.splitlines()) <= sandbox_warnings,
                             verified.stderr)
-        secured = subprocess.run(
-            [analyzer, "security", "--offline=yes", "--no-pager",
-             str(fixture / "nocturne-plugin-emoji-sync.service")],
-            capture_output=True, text=True)
-        if secured.returncode:
-            self.assertTrue(secured.stderr.splitlines())
-            self.assertTrue(set(secured.stderr.splitlines()) <= sandbox_warnings,
-                            secured.stderr)
+        for name in ("nocturne-plugin-dev.service",
+                     "nocturne-plugin-emoji-sync.service"):
+            secured = subprocess.run(
+                [analyzer, "security", "--offline=yes", "--no-pager",
+                 str(fixture / name)], capture_output=True, text=True)
+            if secured.returncode:
+                self.assertTrue(secured.stderr.splitlines())
+                self.assertTrue(set(secured.stderr.splitlines()) <= sandbox_warnings,
+                                secured.stderr)
 
     def test_legacy_runtime_uses_its_pinned_historical_record(self):
         target=self.runtime/"venvs"/runtime.LEGACY_VENV_NAME

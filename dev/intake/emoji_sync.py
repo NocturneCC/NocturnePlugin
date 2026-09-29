@@ -369,39 +369,68 @@ def _acl_free(path):
     return not {"system.posix_acl_access", "system.posix_acl_default"}.intersection(names)
 
 
-def initialize_public_root(root):
-    """Create or verify the exact public StateDirectory leaf.
+def _safe_directory_metadata(path, metadata):
+    return (stat.S_ISDIR(metadata.st_mode)
+            and metadata.st_uid in {0, os.geteuid()}
+            and metadata.st_gid in {0, os.getegid()}
+            and not metadata.st_mode & 0o022 and _acl_free(path)
+            and not os.path.ismount(path))
 
-    systemd creates this path before the production process starts.  Direct
-    invocation (including guarded preflight) may create the final leaf only
-    beneath an already-existing safe parent.  No parent directory is created
-    here, and an existing link, mount, foreign owner, ACL, or unexpected mode
-    is never adopted.
-    """
+
+def _resolve_state_directory(root, category):
+    """Resolve only systemd's exact DynamicUser StateDirectory link shape."""
     root = Path(root)
-    if root.name in {"", ".", ".."}:
-        raise SyncFailure("unsafe_output_directory")
     try:
-        root_stat = root.lstat()
-        existed = True
+        metadata = root.lstat()
     except FileNotFoundError:
-        root_stat = None
-        existed = False
+        return root, None
     except OSError as error:
         raise SyncFailure("output_initialization_failed") from error
+    if not stat.S_ISLNK(metadata.st_mode):
+        return root, metadata
     try:
-        parent = root.parent.resolve(strict=True)
+        parent = root.parent
+        parent_metadata = parent.lstat()
+        target = os.readlink(root)
+        expected = f"private/{root.name}"
+        private_parent = parent / "private"
+        private_metadata = private_parent.lstat()
+        resolved = private_parent / root.name
+        resolved_metadata = resolved.lstat()
+    except OSError as error:
+        raise SyncFailure(category) from error
+    if (not re.fullmatch(r"[a-z0-9-]{1,64}", root.name)
+            or metadata.st_nlink != 1 or metadata.st_uid not in {0, os.geteuid()}
+            or metadata.st_gid not in {0, os.getegid()} or target != expected
+            or not _safe_directory_metadata(parent, parent_metadata)
+            or not _safe_directory_metadata(private_parent, private_metadata)
+            or not stat.S_ISDIR(resolved_metadata.st_mode)
+            or resolved_metadata.st_uid != os.geteuid()
+            or resolved_metadata.st_gid != os.getegid()):
+        raise SyncFailure(category)
+    return resolved, resolved_metadata
+
+
+def _initialize_root(root, *, final_mode, accepted_modes, category):
+    """Create or verify one exact StateDirectory without following links."""
+    root = Path(root)
+    if not root.is_absolute() or root.name in {"", ".", ".."}:
+        raise SyncFailure(category)
+    root, root_stat = _resolve_state_directory(root, category)
+    existed = root_stat is not None
+    try:
+        unresolved_parent = root.parent
+        unresolved_stat = unresolved_parent.lstat()
+        parent = unresolved_parent.resolve(strict=True)
         parent_stat = parent.lstat()
     except (OSError, RuntimeError) as error:
         raise SyncFailure("unsafe_output_parent") from error
-    if not stat.S_ISDIR(parent_stat.st_mode) or parent.is_symlink():
+    if (unresolved_parent != parent or unresolved_parent.is_symlink()
+            or (unresolved_stat.st_dev, unresolved_stat.st_ino)
+            != (parent_stat.st_dev, parent_stat.st_ino)
+            or parent.is_symlink() or not _safe_directory_metadata(parent, parent_stat)):
         raise SyncFailure("unsafe_output_parent")
     if not existed:
-        if (parent_stat.st_uid not in {0, os.geteuid()}
-                or parent_stat.st_gid not in {0, os.getegid()}
-                or parent_stat.st_mode & 0o022 or not _acl_free(parent)
-                or os.path.ismount(parent)):
-            raise SyncFailure("unsafe_output_parent")
         try:
             root.mkdir(mode=0o700)
             _fsync_directory(root.parent)
@@ -413,24 +442,54 @@ def initialize_public_root(root):
             root_stat = root.lstat()
         except OSError as error:
             raise SyncFailure("output_initialization_failed") from error
-    if (not stat.S_ISDIR(root_stat.st_mode) or root.is_symlink()
-            or root_stat.st_dev != parent_stat.st_dev
-            or root_stat.st_uid != os.geteuid() or root_stat.st_gid != os.getegid()
-            or stat.S_IMODE(root_stat.st_mode) not in {0o700, 0o755}
-            or not _acl_free(root) or os.path.ismount(root)):
-        raise SyncFailure("unsafe_output_directory")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        root.chmod(0o755)
+        descriptor = os.open(root, flags)
     except OSError as error:
+        if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise SyncFailure(category) from error
         raise SyncFailure("output_initialization_failed") from error
-    verified = root.lstat()
-    if (not stat.S_ISDIR(verified.st_mode) or root.is_symlink()
-            or verified.st_dev != parent_stat.st_dev
-            or verified.st_uid != os.geteuid() or verified.st_gid != os.getegid()
-            or stat.S_IMODE(verified.st_mode) != 0o755
-            or not _acl_free(root) or os.path.ismount(root)):
-        raise SyncFailure("unsafe_output_directory")
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISDIR(opened.st_mode) or opened.st_dev != parent_stat.st_dev
+                or opened.st_uid != os.geteuid() or opened.st_gid != os.getegid()
+                or stat.S_IMODE(opened.st_mode) not in accepted_modes
+                or not _acl_free(root) or os.path.ismount(root)):
+            raise SyncFailure(category)
+        os.fchmod(descriptor, final_mode)
+        verified = os.fstat(descriptor)
+        named = root.lstat()
+        if (not stat.S_ISDIR(verified.st_mode)
+                or (verified.st_dev, verified.st_ino) != (named.st_dev, named.st_ino)
+                or verified.st_uid != os.geteuid() or verified.st_gid != os.getegid()
+                or stat.S_IMODE(verified.st_mode) != final_mode
+                or root.is_symlink() or not _acl_free(root) or os.path.ismount(root)):
+            raise SyncFailure(category)
+    finally:
+        os.close(descriptor)
     return root
+
+
+def initialize_private_root(root):
+    return _initialize_root(root, final_mode=0o700, accepted_modes={0o700, 0o755},
+                            category="unsafe_private_directory")
+
+
+def initialize_public_root(root):
+    return _initialize_root(root, final_mode=0o755, accepted_modes={0o700, 0o755},
+                            category="unsafe_output_directory")
+
+
+def initialize_roots(state, output):
+    state = Path(state)
+    output = Path(output)
+    if (not state.is_absolute() or not output.is_absolute() or state == output
+            or state in output.parents or output in state.parents):
+        raise SyncFailure("unsafe_root_layout")
+    initialize_private_root(state)
+    initialize_public_root(output)
+    return state, output
 
 
 def _verified_generation(path, manifest, assets, root_stat):
@@ -462,9 +521,37 @@ def _verified_generation(path, manifest, assets, root_stat):
     return True
 
 
-def _safe_removable_tree(path, root_stat):
+def _verified_private_generation(path, manifest, assets, root_stat):
     path = Path(path)
-    if not _public_node(path, root_stat, directory=True, mode=0o755):
+    if not _public_node(path, root_stat, directory=True, mode=0o700):
+        return False
+    asset_dir = path / "assets"
+    if not _public_node(asset_dir, root_stat, directory=True, mode=0o700):
+        return False
+    expected_root = {"assets", "manifest.json"}
+    expected_assets = {f"{digest}.png" for digest in assets}
+    try:
+        if {value.name for value in path.iterdir()} != expected_root:
+            return False
+        if {value.name for value in asset_dir.iterdir()} != expected_assets:
+            return False
+        manifest_path = path / "manifest.json"
+        if (not _public_node(manifest_path, root_stat, directory=False, mode=0o600)
+                or manifest_path.read_bytes() != _canonical(manifest)):
+            return False
+        for digest, raw in assets.items():
+            asset = asset_dir / f"{digest}.png"
+            if (not _public_node(asset, root_stat, directory=False, mode=0o600)
+                    or asset.read_bytes() != raw or hashlib.sha256(raw).hexdigest() != digest):
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def _safe_removable_tree(path, root_stat, mode=0o755):
+    path = Path(path)
+    if not _public_node(path, root_stat, directory=True, mode=mode):
         return False
     try:
         for value in path.rglob("*"):
@@ -473,7 +560,8 @@ def _safe_removable_tree(path, root_stat):
                     or metadata.st_gid != root_stat.st_gid or stat.S_ISLNK(metadata.st_mode)
                     or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1)
                     or (stat.S_ISDIR(metadata.st_mode) and os.path.ismount(value))
-                    or not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode))):
+                    or not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode))
+                    or not _acl_free(value)):
                 return False
     except OSError:
         return False
@@ -508,7 +596,7 @@ def read_current(root):
 
 @contextmanager
 def sync_lock(root):
-    root = initialize_public_root(root)
+    root = initialize_private_root(root)
     root_stat = root.lstat()
     lock_path = root / ".sync.lock"
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -525,12 +613,17 @@ def sync_lock(root):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SyncFailure("sync_in_progress") from None
-        yield
+        yield root
 
 
 class EmojiSynchronizer:
-    def __init__(self, output, transport, clock=None, denylist=()):
+    def __init__(self, state, output, transport, clock=None, denylist=()):
+        self.state = Path(state)
         self.output = Path(output)
+        if (not self.state.is_absolute() or not self.output.is_absolute()
+                or self.state == self.output or self.state in self.output.parents
+                or self.output in self.state.parents):
+            raise ValueError("private and public emoji roots must be separate")
         self.transport = transport
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.denylist = parse_denylist(denylist)
@@ -540,7 +633,9 @@ class EmojiSynchronizer:
             raise ValueError("invalid guild ID")
         if not isinstance(token, str) or not token or len(token) > 4096:
             raise ValueError("invalid credential")
-        with sync_lock(self.output):
+        with sync_lock(self.state) as state:
+            self.state = state
+            self.output = initialize_public_root(self.output)
             try:
                 status, headers, raw = self.transport.list_emojis(guild_id, token)
             except SyncFailure:
@@ -606,6 +701,7 @@ class EmojiSynchronizer:
     def _publish(self, revision, manifest, assets):
         generations = self.output / "generations"
         root_stat = self.output.lstat()
+        state_stat = self.state.lstat()
         try:
             generations.mkdir(mode=0o700)
         except FileExistsError:
@@ -618,15 +714,33 @@ class EmojiSynchronizer:
         os.chmod(generations, 0o755)
         if not _public_node(generations, root_stat, directory=True, mode=0o755):
             raise SyncFailure("unsafe_generation_directory")
-        temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=self.output))
+        private_temporary = Path(tempfile.mkdtemp(prefix=".generation-build-", dir=self.state))
+        temporary = None
         try:
+            os.chmod(private_temporary, 0o700)
+            private_assets = private_temporary / "assets"
+            private_assets.mkdir(mode=0o700)
+            for digest, raw in sorted(assets.items()):
+                _write(private_assets / f"{digest}.png", raw, 0o600)
+            _fsync_directory(private_assets)
+            _write(private_temporary / "manifest.json", _canonical(manifest), 0o600)
+            _fsync_directory(private_temporary)
+            if not _verified_private_generation(private_temporary, manifest, assets, state_stat):
+                raise SyncFailure("private_generation_verification_failed")
+
+            # A public staging directory is required for same-filesystem atomic
+            # selection. It contains only already-validated sanitized data and
+            # remains mode 0700 until its complete contents are revalidated.
+            temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=self.output))
             os.chmod(temporary, 0o700)
             asset_dir = temporary / "assets"
             asset_dir.mkdir(mode=0o700)
-            for digest, raw in sorted(assets.items()):
-                _write(asset_dir / f"{digest}.png", raw)
+            for digest in sorted(assets):
+                _write(asset_dir / f"{digest}.png",
+                       (private_assets / f"{digest}.png").read_bytes(), 0o600)
             _fsync_directory(asset_dir)
-            _write(temporary / "manifest.json", _canonical(manifest))
+            _write(temporary / "manifest.json",
+                   (private_temporary / "manifest.json").read_bytes(), 0o600)
             _fsync_directory(temporary)
             for path in asset_dir.iterdir():
                 path.chmod(0o644)
@@ -653,8 +767,13 @@ class EmojiSynchronizer:
             finally:
                 staged_link.unlink(missing_ok=True)
         finally:
-            if temporary.exists():
+            if (temporary is not None and temporary.exists()
+                    and (_safe_removable_tree(temporary, root_stat, mode=0o700)
+                         or _safe_removable_tree(temporary, root_stat))):
                 shutil.rmtree(temporary)
+            if private_temporary.exists() \
+                    and _safe_removable_tree(private_temporary, state_stat, mode=0o700):
+                shutil.rmtree(private_temporary)
 
     def _cleanup(self, current):
         generations = self.output / "generations"
@@ -716,22 +835,23 @@ def _read_config(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--state", default=os.environ.get("NOCTURNE_EMOJI_PRIVATE_ROOT"))
     parser.add_argument("--output", default=os.environ.get("NOCTURNE_EMOJI_PUBLIC_ROOT"))
     parser.add_argument("--config-file", default=None)
     parser.add_argument("--token-file", default=None)
     parser.add_argument("--initialize-output", action="store_true")
     args = parser.parse_args(argv)
-    if not args.output or (not args.initialize_output and
+    if not args.state or not args.output or (not args.initialize_output and
                            (not args.config_file or not args.token_file)):
-        parser.error("configuration, output, and token credential files are required")
+        parser.error("configuration, private state, public output, and token files are required")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if PILLOW_VERSION != REQUIRED_PILLOW_VERSION or sys.version_info[:2] != (3, 14):
         log.error("emoji synchronization failed: category=unsupported_runtime")
         return 78
     try:
-        initialize_public_root(args.output)
+        initialize_roots(args.state, args.output)
         if args.initialize_output:
-            log.info("emoji public output initialized")
+            log.info("emoji private state and public output initialized")
             return 0
     except SyncFailure as error:
         log.error("emoji synchronization failed: category=%s retry_after=%s",
@@ -748,8 +868,8 @@ def main(argv=None):
         log.error("emoji synchronization failed: category=invalid_credential_file")
         return 78
     try:
-        result = EmojiSynchronizer(args.output, DiscordTransport(), denylist=denylist).synchronize(
-            guild_id, token)
+        result = EmojiSynchronizer(args.state, args.output, DiscordTransport(),
+                                   denylist=denylist).synchronize(guild_id, token)
         log.info("emoji synchronization %s: count=%d revision=%s",
                  result["status"], result["emoji_count"], result["revision"][:12])
     except SyncFailure as error:

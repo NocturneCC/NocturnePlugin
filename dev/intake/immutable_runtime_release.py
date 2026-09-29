@@ -674,9 +674,11 @@ def release_units(release, runtime_root):
                                  "/etc/nocturne-plugin/credentials"):
                 if text.count("InaccessiblePaths=" + private_path) != 1:
                     raise ValueError("intake private emoji state denial is missing")
-            public_bind = "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis"
+            public_bind = "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emoji-public:/run/nocturne-plugin-emojis"
             if text.count(public_bind) != 1:
                 raise ValueError("intake public emoji mirror bind is missing or ambiguous")
+            if "/var/lib/nocturne-plugin-emojis/public" in text:
+                raise ValueError("intake uses obsolete nested emoji public path")
             for forbidden in ("LoadCredential=", "%d/emoji-sync-config", "%d/discord-token"):
                 if forbidden in text:
                     raise ValueError("intake unit exposes emoji private state")
@@ -695,14 +697,22 @@ def release_units(release, runtime_root):
                 raise ValueError("emoji public output initializer is missing or ambiguous")
             for line in ("LoadCredential=emoji-sync-config:",
                          "LoadCredential=discord-token:",
-                         "StateDirectory=nocturne-plugin-emojis/public",
+                         "Environment=NOCTURNE_EMOJI_PRIVATE_ROOT=/var/lib/nocturne-plugin-emojis",
+                         "Environment=NOCTURNE_EMOJI_PUBLIC_ROOT=/var/lib/nocturne-plugin-emoji-public",
+                         "StateDirectory=nocturne-plugin-emojis nocturne-plugin-emoji-public",
                          "StateDirectoryMode=0755",
                          "--config-file=${CREDENTIALS_DIRECTORY}/emoji-sync-config",
                          "--token-file=${CREDENTIALS_DIRECTORY}/discord-token"):
                 if text.count(line) != 1:
                     raise ValueError(f"emoji synchronizer boundary missing: {line}")
+            for line in ("--state=${NOCTURNE_EMOJI_PRIVATE_ROOT}",
+                         "--output=${NOCTURNE_EMOJI_PUBLIC_ROOT}"):
+                if text.count(line) != 2:
+                    raise ValueError(f"emoji synchronizer root boundary missing: {line}")
             if "%d/" in text:
                 raise ValueError("emoji synchronizer uses a noncanonical credential path")
+            if "/var/lib/nocturne-plugin-emojis/public" in text:
+                raise ValueError("emoji synchronizer uses obsolete nested public path")
         elif name == "nocturne-plugin-emoji-sync.timer":
             if text.count("Unit=nocturne-plugin-emoji-sync.service") != 1:
                 raise ValueError("emoji timer target is missing or ambiguous")
@@ -820,6 +830,10 @@ def stage_deployment(runtime_root, commit, *, apply=False, uid=0, gid=0):
     verify_release_ownership(release, uid, gid)
     unit_artifacts = {name: release / "deployment-units" / name for name in UNITS}
     route_artifacts = {EMOJI_ROUTE: release / "dev/intake" / EMOJI_ROUTE}
+    route_text = route_artifacts[EMOJI_ROUTE].read_text()
+    if (route_text.count("/var/lib/nocturne-plugin-emoji-public") != 1
+            or "/var/lib/nocturne-plugin-emojis" in route_text):
+        raise ValueError("emoji route does not identify the isolated public mirror")
     unit_manifest = _artifact_manifest(UNIT_STAGE_PURPOSE, commit, release,
                                        unit_artifacts, uid, gid)
     unit_manifest["emoji_runtime"] = {

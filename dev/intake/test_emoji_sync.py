@@ -17,8 +17,9 @@ from PIL import Image
 from emoji_sync import (CANVAS_SIZE, DISCORD_USER_AGENT, DiscordTransport,
                         EmojiSynchronizer, MAX_GENERATIONS, NoRedirect,
                         SyncFailure, _read_config, _read_credential,
-                        eligible_metadata, initialize_public_root,
-                        main, normalize_image, parse_denylist, read_current)
+                        eligible_metadata, initialize_private_root, initialize_public_root,
+                        initialize_roots, main, normalize_image, parse_denylist,
+                        read_current)
 
 
 def png(size=(12, 8), color=(120, 40, 200, 180)):
@@ -70,8 +71,10 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.state = self.root / "private"
+        self.public = self.root / "public"
         self.transport = FakeTransport()
-        self.sync = EmojiSynchronizer(self.root, self.transport,
+        self.sync = EmojiSynchronizer(self.state, self.public, self.transport,
                                       clock=lambda: __import__("datetime").datetime(
                                           2026, 9, 28, 20, 0,
                                           tzinfo=__import__("datetime").timezone.utc))
@@ -89,7 +92,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.configure([item(10, "wave")])
         first = self.sync.synchronize("123", "fixture-token")
         self.assertEqual("published", first["status"])
-        initial = read_current(self.root)
+        initial = read_current(self.public)
         self.assertEqual(["wave"], [value["name"] for value in initial["emojis"]])
         self.assertNotIn("fixture-token", json.dumps(initial))
 
@@ -99,24 +102,24 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.configure([item(10, "renamed"), item(11, "new_one")])
         renamed = self.sync.synchronize("123", "fixture-token")
         self.assertEqual(["new_one", "renamed"],
-                         [value["name"] for value in read_current(self.root)["emojis"]])
+                         [value["name"] for value in read_current(self.public)["emojis"]])
         self.configure([item(11, "new_one")])
         deleted = self.sync.synchronize("123", "fixture-token")
         self.assertNotEqual(renamed["revision"], deleted["revision"])
-        self.assertEqual(["new_one"], [value["name"] for value in read_current(self.root)["emojis"]])
+        self.assertEqual(["new_one"], [value["name"] for value in read_current(self.public)["emojis"]])
 
     def test_valid_empty_is_published_but_failure_preserves_last_generation(self):
         self.configure([item(10, "wave")])
         original = self.sync.synchronize("123", "fixture-token")["revision"]
         self.transport.values = []
         empty = self.sync.synchronize("123", "fixture-token")
-        self.assertEqual("ok_empty", read_current(self.root)["source_status"])
+        self.assertEqual("ok_empty", read_current(self.public)["source_status"])
         self.assertNotEqual(original, empty["revision"])
         empty_revision = empty["revision"]
         self.transport.failure = SyncFailure("transport_error")
         with self.assertRaises(SyncFailure):
             self.sync.synchronize("123", "fixture-token")
-        self.assertEqual(empty_revision, read_current(self.root)["revision"])
+        self.assertEqual(empty_revision, read_current(self.public)["revision"])
 
     def test_rate_limit_is_bounded_and_does_not_retry(self):
         self.transport.list_status = 429
@@ -133,8 +136,10 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 def list_emojis(self, guild_id, token):
                     return 200, {"Content-Type": "application/json"}, raw
             with self.subTest(raw=raw), self.assertRaises(SyncFailure):
-                EmojiSynchronizer(self.root / hashlib.sha256(raw).hexdigest(), Raw()).synchronize(
-                    "123", "fixture-token")
+                digest = hashlib.sha256(raw).hexdigest()
+                EmojiSynchronizer(self.root / ("private-" + digest),
+                                  self.root / ("public-" + digest), Raw()).synchronize(
+                                      "123", "fixture-token")
 
     def test_duplicate_ids_names_normalization_and_eligibility_filters(self):
         values = [item(1, "One"), item(2, "one"), item(3, "safe"), item(3, "other"),
@@ -172,7 +177,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.configure([item(1, "good"), item(2, "bad")])
         self.transport.assets["2"] = (200, {"Content-Type": "text/html"}, b"no")
         self.sync.synchronize("123", "fixture-token")
-        manifest = read_current(self.root)
+        manifest = read_current(self.public)
         self.assertEqual(["good"], [value["name"] for value in manifest["emojis"]])
         serialized = json.dumps(manifest).lower()
         for forbidden in ("token", "guild", "creator", "roles", "user", "cdn", "header"):
@@ -191,7 +196,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
             return real_replace(source, target)
         with patch("emoji_sync.os.replace", side_effect=interrupted), self.assertRaises(OSError):
             self.sync.synchronize("123", "fixture-token")
-        self.assertEqual(original, read_current(self.root)["revision"])
+        self.assertEqual(original, read_current(self.public)["revision"])
 
     def test_every_publication_boundary_preserves_last_complete_generation(self):
         self.configure([item(1, "first")])
@@ -228,14 +233,14 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 self.configure([item(1, f"second_{name}")])
                 with patch(target, side_effect=replacement), self.assertRaises(OSError):
                     self.sync.synchronize("123", "fixture-token")
-                self.assertEqual(original, read_current(self.root)["revision"])
+                self.assertEqual(original, read_current(self.public)["revision"])
 
     def test_preexisting_generation_hardlinks_mounts_and_lock_links_fail_closed(self):
         self.configure([item(1, "one")])
         revision = self.sync.synchronize("123", "fixture-token")["revision"]
-        generation = self.root / "generations" / revision
+        generation = self.public / "generations" / revision
         manifest = generation / "manifest.json"
-        saved = self.root / "saved-manifest"
+        saved = self.public / "saved-manifest"
         saved.write_bytes(manifest.read_bytes())
         saved.chmod(0o644)
         manifest.unlink()
@@ -250,28 +255,30 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 self.assertRaisesRegex(SyncFailure, "unsafe_generation_target"):
             self.sync.synchronize("123", "fixture-token")
 
-        other = Path(self.temp.name) / "other-root"
-        other.mkdir()
-        other.chmod(0o700)
+        other = Path(self.temp.name) / "other-private"
+        other.mkdir(mode=0o700)
+        other_public = Path(self.temp.name) / "other-public"
         victim = other / "victim"
         victim.write_text("unchanged")
         (other / ".sync.lock").symlink_to(victim)
-        sync = EmojiSynchronizer(other, self.transport)
+        sync = EmojiSynchronizer(other, other_public, self.transport)
         with self.assertRaisesRegex(SyncFailure, "unsafe_sync_lock"):
             sync.synchronize("123", "fixture-token")
         self.assertEqual("unchanged", victim.read_text())
 
     def test_generation_directory_is_verified_before_chmod(self):
         self.configure([item(1, "one")])
-        victim = self.root / "victim"
+        initialize_private_root(self.state)
+        initialize_public_root(self.public)
+        victim = self.public / "victim"
         victim.mkdir(mode=0o700)
-        (self.root / "generations").symlink_to(victim, target_is_directory=True)
+        (self.public / "generations").symlink_to(victim, target_is_directory=True)
         with self.assertRaisesRegex(SyncFailure, "unsafe_generation_directory"):
             self.sync.synchronize("123", "fixture-token")
         self.assertEqual(0o700, victim.stat().st_mode & 0o777)
 
-        (self.root / "generations").unlink()
-        generations = self.root / "generations"
+        (self.public / "generations").unlink()
+        generations = self.public / "generations"
         generations.mkdir(mode=0o700)
         with patch("emoji_sync.os.path.ismount",
                    side_effect=lambda path: Path(path) == generations), \
@@ -291,7 +298,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 return parent.list_emojis(guild_id, token)
             def fetch_asset(self, emoji_id, animated):
                 return parent.fetch_asset(emoji_id, animated)
-        blocking = EmojiSynchronizer(self.root, Blocking())
+        blocking = EmojiSynchronizer(self.state, self.public, Blocking())
         thread = threading.Thread(target=lambda: blocking.synchronize("123", "fixture-token"))
         thread.start()
         self.assertTrue(entered.wait(1))
@@ -305,7 +312,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
         for number in range(MAX_GENERATIONS + 3):
             self.configure([item(number + 1, f"emoji_{number}")])
             self.sync.synchronize("123", "fixture-token")
-        generations = [path for path in (self.root / "generations").iterdir() if path.is_dir()]
+        generations = [path for path in (self.public / "generations").iterdir() if path.is_dir()]
         self.assertLessEqual(len(generations), MAX_GENERATIONS)
 
     def test_manifest_asset_digest_size_and_permissions(self):
@@ -315,55 +322,101 @@ class EmojiSynchronizerTest(unittest.TestCase):
             self.sync.synchronize("123", "fixture-token")
         finally:
             os.umask(previous)
-        manifest = read_current(self.root)
+        manifest = read_current(self.public)
         entry = manifest["emojis"][0]
-        generation = (self.root / "current").resolve()
+        generation = (self.public / "current").resolve()
         manifest_path = generation / "manifest.json"
-        asset = self.root / "current" / "assets" / f'{entry["sha256"]}.png'
+        asset = self.public / "current" / "assets" / f'{entry["sha256"]}.png'
         raw = asset.read_bytes()
         self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
         self.assertEqual(entry["byte_length"], len(raw))
         self.assertEqual(0o644, asset.stat().st_mode & 0o777)
-        self.assertEqual(0o755, self.root.stat().st_mode & 0o777)
-        self.assertEqual(0o755, (self.root / "generations").stat().st_mode & 0o777)
+        self.assertEqual(0o700, self.state.stat().st_mode & 0o777)
+        self.assertEqual(0o755, self.public.stat().st_mode & 0o777)
+        self.assertEqual(0o755, (self.public / "generations").stat().st_mode & 0o777)
         self.assertEqual(0o755, generation.stat().st_mode & 0o777)
         self.assertEqual(0o755, (generation / "assets").stat().st_mode & 0o777)
         self.assertEqual(0o644, manifest_path.stat().st_mode & 0o777)
         self.assertEqual(0o644, asset.stat().st_mode & 0o777)
-        for directory in (self.root, self.root / "generations", generation,
+        for directory in (self.public, self.public / "generations", generation,
                           generation / "assets"):
             self.assertTrue(directory.stat().st_mode & stat.S_IXOTH,
                             f"distinct UID cannot traverse {directory}")
         for value in (manifest_path, asset):
             self.assertTrue(value.stat().st_mode & stat.S_IROTH,
                             f"distinct UID cannot read {value}")
-        for value in (self.root, self.root / "generations", generation,
+        for value in (self.public, self.public / "generations", generation,
                       generation / "assets", manifest_path, asset):
             self.assertFalse({"system.posix_acl_access", "system.posix_acl_default"}
                              .intersection(os.listxattr(value, follow_symlinks=False)))
 
-    def test_first_run_initializes_missing_public_state_leaf(self):
-        state = self.root / "state"
-        state.mkdir(mode=0o700)
-        public = state / "public"
+    def test_first_run_initializes_separate_private_and_public_roots(self):
+        state = self.root / "first-private"
+        public = self.root / "first-public"
         self.configure([item(1, "one")])
-        result = EmojiSynchronizer(public, self.transport).synchronize(
+        result = EmojiSynchronizer(state, public, self.transport).synchronize(
             "123", "fixture-token")
         self.assertEqual("published", result["status"])
+        self.assertEqual(0o700, stat.S_IMODE(state.lstat().st_mode))
         metadata = public.lstat()
         self.assertEqual((os.geteuid(), os.getegid(), 0o755),
                          (metadata.st_uid, metadata.st_gid,
                           stat.S_IMODE(metadata.st_mode)))
         self.assertIsNotNone(read_current(public))
 
+    def test_existing_private_root_and_absent_public_root_are_supported(self):
+        state = self.root / "existing-private"
+        initialize_private_root(state)
+        public = self.root / "new-public"
+        self.configure([item(1, "one")])
+        result = EmojiSynchronizer(state, public, self.transport).synchronize(
+            "123", "fixture-token")
+        self.assertEqual("published", result["status"])
+        self.assertEqual(0o700, stat.S_IMODE(state.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(public.stat().st_mode))
+        self.assertIsNotNone(read_current(public))
+
+    def test_private_and_public_roots_must_be_independent(self):
+        private = self.root / "layout-private"
+        for public in (private, private / "public"):
+            with self.subTest(public=public), \
+                    self.assertRaisesRegex(SyncFailure, "unsafe_root_layout"):
+                initialize_roots(private, public)
+            with self.assertRaisesRegex(ValueError, "must be separate"):
+                EmojiSynchronizer(private, public, self.transport)
+
+    def test_exact_systemd_dynamic_user_state_links_are_verified(self):
+        container = self.root / "state-container"
+        container.mkdir(mode=0o700)
+        backing = container / "private"
+        backing.mkdir(mode=0o700)
+        private_backing = backing / "nocturne-plugin-emojis"
+        public_backing = backing / "nocturne-plugin-emoji-public"
+        private_backing.mkdir(mode=0o755)
+        public_backing.mkdir(mode=0o755)
+        private_alias = container / "nocturne-plugin-emojis"
+        public_alias = container / "nocturne-plugin-emoji-public"
+        private_alias.symlink_to("private/nocturne-plugin-emojis")
+        public_alias.symlink_to("private/nocturne-plugin-emoji-public")
+        self.assertEqual(private_backing, initialize_private_root(private_alias))
+        self.assertEqual(public_backing, initialize_public_root(public_alias))
+        self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
+
     def test_output_initialization_is_idempotent_and_precedes_credentials(self):
-        public = self.root / "public"
+        state = self.root / "initialize-private"
+        public = self.root / "initialize-public"
+        self.assertEqual(state, initialize_private_root(state))
         self.assertEqual(public, initialize_public_root(public))
+        state_before = state.lstat().st_ino
         before = public.lstat().st_ino
+        self.assertEqual(state, initialize_private_root(state))
         self.assertEqual(public, initialize_public_root(public))
+        self.assertEqual(state_before, state.lstat().st_ino)
         self.assertEqual(before, public.lstat().st_ino)
         with patch("emoji_sync.DiscordTransport") as transport:
-            self.assertEqual(0, main(["--initialize-output", "--output", str(public)]))
+            self.assertEqual(0, main(["--initialize-output", "--state", str(state),
+                                      "--output", str(public)]))
         transport.assert_not_called()
 
         bad_config = self.root / "bad-config.json"
@@ -372,9 +425,11 @@ class EmojiSynchronizerTest(unittest.TestCase):
         token = self.root / "token"
         token.write_text("fixture-token")
         token.chmod(0o600)
+        second_state = self.root / "second-private"
         second_public = self.root / "second-public"
         with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
-            self.assertEqual(78, main(["--output", str(second_public),
+            self.assertEqual(78, main(["--state", str(second_state),
+                                      "--output", str(second_public),
                                       "--config-file", str(bad_config),
                                       "--token-file", str(token)]))
         self.assertIn("category=invalid_config_file", "\n".join(captured.output))
@@ -388,7 +443,8 @@ class EmojiSynchronizerTest(unittest.TestCase):
         unsafe_token.write_text("fixture-token")
         unsafe_token.chmod(0o644)
         with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
-            self.assertEqual(78, main(["--output", str(second_public),
+            self.assertEqual(78, main(["--state", str(second_state),
+                                      "--output", str(second_public),
                                       "--config-file", str(good_config),
                                       "--token-file", str(unsafe_token)]))
         self.assertIn("category=invalid_credential_file", "\n".join(captured.output))
@@ -401,8 +457,10 @@ class EmojiSynchronizerTest(unittest.TestCase):
         linked.symlink_to(victim, target_is_directory=True)
         with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
             initialize_public_root(linked)
+        valid_state = self.root / "valid-private"
         with self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
-            self.assertEqual(75, main(["--initialize-output", "--output", str(linked)]))
+            self.assertEqual(75, main(["--initialize-output", "--state", str(valid_state),
+                                      "--output", str(linked)]))
         self.assertIn("category=unsafe_output_directory", "\n".join(captured.output))
 
         wrong_mode = self.root / "wrong-mode"
@@ -418,10 +476,17 @@ class EmojiSynchronizerTest(unittest.TestCase):
         with self.assertRaisesRegex(SyncFailure, "unsafe_output_parent"):
             initialize_public_root(nested)
 
+        real_parent = self.root / "real-parent"
+        real_parent.mkdir(mode=0o700)
+        linked_parent = self.root / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_output_parent"):
+            initialize_public_root(linked_parent / "public")
+
         foreign = self.root / "foreign"
         foreign.mkdir(mode=0o700)
         with patch("emoji_sync.os.geteuid", return_value=os.geteuid() + 1), \
-                self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+                self.assertRaisesRegex(SyncFailure, "unsafe_output_(parent|directory)"):
             initialize_public_root(foreign)
 
         mounted = self.root / "mounted"
@@ -431,6 +496,11 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
             initialize_public_root(mounted)
 
+        private_link = self.root / "private-link"
+        private_link.symlink_to(victim, target_is_directory=True)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_private_directory"):
+            initialize_private_root(private_link)
+
     def test_publication_io_failure_is_not_mislabeled_as_configuration(self):
         config = self.root / "config.json"
         config.write_text('{"guild_id":"123","denylist":[]}')
@@ -438,13 +508,15 @@ class EmojiSynchronizerTest(unittest.TestCase):
         token = self.root / "token"
         token.write_text("fixture-token")
         token.chmod(0o600)
+        state = self.root / "publication-private"
         public = self.root / "publication-error"
         self.transport.values = []
         with patch("emoji_sync.DiscordTransport", return_value=self.transport), \
                 patch.object(EmojiSynchronizer, "_publish",
                              side_effect=OSError("fixture publication failure")), \
                 self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
-            result = main(["--output", str(public), "--config-file", str(config),
+            result = main(["--state", str(state), "--output", str(public),
+                           "--config-file", str(config),
                            "--token-file", str(token)])
         self.assertEqual(75, result)
         rendered = "\n".join(captured.output)
@@ -468,15 +540,27 @@ class EmojiSynchronizerTest(unittest.TestCase):
     def test_unexpected_public_acl_fails_closed_when_supported(self):
         if not __import__("shutil").which("setfacl"):
             self.skipTest("setfacl unavailable")
-        self.root.chmod(0o700)
+        initialize_private_root(self.state)
+        self.public.mkdir(mode=0o700)
         result = __import__("subprocess").run(
-            ["setfacl", "-m", "u:65534:---", str(self.root)],
+            ["setfacl", "-m", "u:65534:---", str(self.public)],
             capture_output=True, text=True)
         if result.returncode:
             self.skipTest("fixture filesystem has no POSIX ACL support")
         self.configure([item(1, "one")])
         with self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
             self.sync.synchronize("123", "fixture-token")
+
+    def test_private_workspace_and_lock_are_never_in_public_mirror(self):
+        self.configure([item(1, "one")])
+        self.sync.synchronize("123", "fixture-token")
+        self.assertEqual({".sync.lock"}, {path.name for path in self.state.iterdir()})
+        self.assertEqual({"current", "generations"},
+                         {path.name for path in self.public.iterdir()})
+        lock = self.state / ".sync.lock"
+        self.assertEqual(0o600, stat.S_IMODE(lock.stat().st_mode))
+        self.assertEqual(1, lock.stat().st_nlink)
+        self.assertFalse((self.public / ".sync.lock").exists())
 
     def test_transport_hosts_headers_redirects_and_bounds_are_fixed(self):
         class Response:
