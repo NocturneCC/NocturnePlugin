@@ -403,6 +403,59 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
         self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
 
+    def test_exact_systemd_dynamic_user_state_mounts_are_verified(self):
+        container = self.root / "mounted-state-container"
+        container.mkdir(mode=0o700)
+        backing = container / "private"
+        backing.mkdir(mode=0o700)
+        private_backing = backing / "nocturne-plugin-emojis"
+        public_backing = backing / "nocturne-plugin-emoji-public"
+        private_backing.mkdir(mode=0o755)
+        public_backing.mkdir(mode=0o755)
+        private_alias = container / "nocturne-plugin-emojis"
+        public_alias = container / "nocturne-plugin-emoji-public"
+        private_alias.symlink_to("private/nocturne-plugin-emojis")
+        public_alias.symlink_to("private/nocturne-plugin-emoji-public")
+        mounts = {private_backing, public_backing}
+        with patch("emoji_sync.os.path.ismount",
+                   side_effect=lambda path: Path(path) in mounts):
+            self.assertEqual(private_backing, initialize_private_root(private_alias))
+            self.assertEqual(public_backing, initialize_public_root(public_alias))
+        self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
+
+    def test_systemd_state_link_shape_remains_fail_closed(self):
+        container = self.root / "unsafe-state-container"
+        container.mkdir(mode=0o700)
+        backing = container / "private"
+        backing.mkdir(mode=0o700)
+
+        wrong = backing / "wrong"
+        wrong.mkdir(mode=0o755)
+        wrong_alias = container / "nocturne-plugin-emojis"
+        wrong_alias.symlink_to("private/wrong")
+        with self.assertRaisesRegex(SyncFailure, "unsafe_private_directory"):
+            initialize_private_root(wrong_alias)
+
+        for case in ("mode", "ownership", "acl"):
+            with self.subTest(case=case):
+                name = f"nocturne-plugin-{case}"
+                target = backing / name
+                target.mkdir(mode=0o755)
+                alias = container / name
+                alias.symlink_to(f"private/{name}")
+                if case == "mode":
+                    target.chmod(0o750)
+                    context = patch("emoji_sync.os.path.ismount", return_value=False)
+                elif case == "ownership":
+                    context = patch("emoji_sync.os.geteuid", return_value=os.geteuid() + 1)
+                else:
+                    context = patch("emoji_sync._acl_free",
+                                    side_effect=lambda path: Path(path) != target)
+                with context, self.assertRaisesRegex(
+                        SyncFailure, "unsafe_(private|output)_directory"):
+                    initialize_private_root(alias)
+
     def test_output_initialization_is_idempotent_and_precedes_credentials(self):
         state = self.root / "initialize-private"
         public = self.root / "initialize-public"

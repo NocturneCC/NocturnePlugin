@@ -383,11 +383,11 @@ def _resolve_state_directory(root, category):
     try:
         metadata = root.lstat()
     except FileNotFoundError:
-        return root, None
+        return root, None, False
     except OSError as error:
         raise SyncFailure("output_initialization_failed") from error
     if not stat.S_ISLNK(metadata.st_mode):
-        return root, metadata
+        return root, metadata, False
     try:
         parent = root.parent
         parent_metadata = parent.lstat()
@@ -408,7 +408,7 @@ def _resolve_state_directory(root, category):
             or resolved_metadata.st_uid != os.geteuid()
             or resolved_metadata.st_gid != os.getegid()):
         raise SyncFailure(category)
-    return resolved, resolved_metadata
+    return resolved, resolved_metadata, True
 
 
 def _initialize_root(root, *, final_mode, accepted_modes, category):
@@ -416,7 +416,8 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
     root = Path(root)
     if not root.is_absolute() or root.name in {"", ".", ".."}:
         raise SyncFailure(category)
-    root, root_stat = _resolve_state_directory(root, category)
+    root, root_stat, verified_systemd_state_directory = \
+        _resolve_state_directory(root, category)
     existed = root_stat is not None
     try:
         unresolved_parent = root.parent
@@ -455,7 +456,8 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
         if (not stat.S_ISDIR(opened.st_mode) or opened.st_dev != parent_stat.st_dev
                 or opened.st_uid != os.geteuid() or opened.st_gid != os.getegid()
                 or stat.S_IMODE(opened.st_mode) not in accepted_modes
-                or not _acl_free(root) or os.path.ismount(root)):
+                or not _acl_free(root)
+                or (os.path.ismount(root) and not verified_systemd_state_directory)):
             raise SyncFailure(category)
         os.fchmod(descriptor, final_mode)
         verified = os.fstat(descriptor)
@@ -464,7 +466,8 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
                 or (verified.st_dev, verified.st_ino) != (named.st_dev, named.st_ino)
                 or verified.st_uid != os.geteuid() or verified.st_gid != os.getegid()
                 or stat.S_IMODE(verified.st_mode) != final_mode
-                or root.is_symlink() or not _acl_free(root) or os.path.ismount(root)):
+                or root.is_symlink() or not _acl_free(root)
+                or (os.path.ismount(root) and not verified_systemd_state_directory)):
             raise SyncFailure(category)
     finally:
         os.close(descriptor)

@@ -73,10 +73,12 @@ and build workspace stay under `/var/lib/nocturne-plugin-emojis`; completed
 sanitized generations are selected atomically under
 `/var/lib/nocturne-plugin-emoji-public`. The intake masks the private path and
 binds only the independent public path read-only. The synchronizer validates
-both roots and rejects links, mounts, foreign ownership, unexpected modes,
-extended ACLs and hard-linked files. The only accepted root-link shape is
-systemd's exact `private/<StateDirectory-name>` DynamicUser indirection, whose
-link, backing parent and target are all independently verified. Source
+both roots and rejects arbitrary links and mounts, foreign ownership,
+unexpected modes, extended ACLs and hard-linked files. A mount is accepted
+only after resolving systemd's exact `private/<StateDirectory-name>`
+DynamicUser indirection, whose link, backing parent and target are all
+independently verified; this permits systemd's ID-mapped `StateDirectory=`
+mount without weakening mount rejection for direct caller-provided roots. Source
 credential files may remain root-owned mode 0600; systemd copies them into its
 private per-unit credential directory. Runtime code uses the documented
 `${CREDENTIALS_DIRECTORY}` path
