@@ -73,6 +73,39 @@ class EmojiServiceSupportTest(unittest.TestCase):
         self.assertEqual(self.old, (self.targets / "nocturne-plugin-dev.service").read_text())
         self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.service").exists())
 
+    def test_post_replace_metadata_failure_restores_every_target(self):
+        first, second, _third = self.mocks()
+        def verify(path, _metadata):
+            path = Path(path)
+            if path.parent == self.targets and path.name == "nocturne-plugin-emoji-sync.service":
+                raise RuntimeError("fixture metadata failure")
+        with first, second, patch("emoji_service_support._verify_metadata", side_effect=verify):
+            with self.assertRaisesRegex(RuntimeError, "fixture metadata failure"):
+                install(self.targets, self.source, self.backups, apply=True,
+                        confirmed_services_stopped=True, validate=lambda paths: None)
+        self.assertEqual(self.old, (self.targets / "nocturne-plugin-dev.service").read_text())
+        self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.service").exists())
+        self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.timer").exists())
+
+    def test_real_unit_uses_private_credentials_and_pinned_runtime(self):
+        source = Path(__file__).resolve().parent
+        unit = (source / "nocturne-plugin-emoji-sync.service").read_text()
+        self.assertNotIn("EnvironmentFile=", unit)
+        self.assertNotIn("NOCTURNE_DISCORD_GUILD_ID", unit)
+        self.assertNotIn("NOCTURNE_EMOJI_DENYLIST", unit)
+        self.assertIn("LoadCredential=emoji-sync-config:", unit)
+        self.assertIn("LoadCredential=discord-token:", unit)
+        self.assertIn("--config-file=%d/emoji-sync-config", unit)
+        self.assertIn("--token-file=%d/discord-token", unit)
+        for required in ("DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes",
+                         "PrivateDevices=yes", "NoNewPrivileges=yes", "MemoryMax=128M"):
+            self.assertIn(required, unit)
+        requirements = (source / "emoji-sync-requirements.txt").read_text()
+        self.assertIn("--only-binary=:all:", requirements)
+        self.assertIn("Pillow==12.3.0", requirements)
+        self.assertIn("251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b",
+                      requirements)
+
 
 if __name__ == "__main__":
     unittest.main()

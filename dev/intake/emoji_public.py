@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 import re
+import stat
 
 
 SCHEMA_VERSION = 1
@@ -18,6 +19,20 @@ MAX_EMOJIS = 256
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_ASSET_BYTES = 8 * 1024
 MAX_TOTAL_BYTES = MAX_EMOJIS * MAX_ASSET_BYTES
+
+
+def _public_node(path, root_stat, *, directory):
+    try:
+        value = Path(path).lstat()
+    except OSError:
+        return False
+    expected = stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode)
+    mode = 0o755 if directory else 0o644
+    return (expected and value.st_dev == root_stat.st_dev
+            and value.st_uid == root_stat.st_uid and value.st_gid == root_stat.st_gid
+            and stat.S_IMODE(value.st_mode) == mode
+            and (directory or value.st_nlink == 1)
+            and (not directory or not os.path.ismount(path)))
 
 
 def _strict_object(pairs):
@@ -47,13 +62,17 @@ def _generation(root):
     resolved = generation.resolve(strict=True)
     if resolved.parent != (resolved_root / "generations").resolve(strict=True):
         raise ValueError("emoji generation escaped mirror")
-    return generation, match.group(1)
+    root_stat = root.lstat()
+    if not _public_node(generation, root_stat, directory=True):
+        raise ValueError("unsafe emoji generation")
+    return generation, match.group(1), root_stat
 
 
 def load_manifest(root):
-    generation, revision = _generation(root)
+    generation, revision, root_stat = _generation(root)
     path = generation / "manifest.json"
-    if not path.is_file() or path.is_symlink() or not 1 <= path.stat().st_size <= MAX_MANIFEST_BYTES:
+    if not _public_node(path, root_stat, directory=False) \
+            or not 1 <= path.stat().st_size <= MAX_MANIFEST_BYTES:
         raise ValueError("invalid emoji manifest file")
     raw = path.read_bytes()
     try:
@@ -104,14 +123,18 @@ def load_manifest(root):
     canonical = _canonical(value)
     if len(canonical) > MAX_MANIFEST_BYTES:
         raise ValueError("emoji response too large")
-    return generation, value, canonical, frozenset(digests)
+    return generation, value, canonical, frozenset(digests), root_stat
 
 
-def _asset(generation, digest, allowed):
+def _asset(generation, digest, allowed, root_stat):
     if digest not in allowed:
         raise FileNotFoundError("unknown emoji digest")
-    path = generation / "assets" / f"{digest}.png"
-    if not path.is_file() or path.is_symlink() or not 1 <= path.stat().st_size <= MAX_ASSET_BYTES:
+    asset_directory = generation / "assets"
+    if not _public_node(asset_directory, root_stat, directory=True):
+        raise ValueError("unsafe emoji asset directory")
+    path = asset_directory / f"{digest}.png"
+    if not _public_node(path, root_stat, directory=False) \
+            or not 1 <= path.stat().st_size <= MAX_ASSET_BYTES:
         raise FileNotFoundError("emoji asset unavailable")
     raw = path.read_bytes()
     if (hashlib.sha256(raw).hexdigest() != digest
@@ -137,7 +160,7 @@ def public_wsgi(root, environ, start_response):
     if path != MANIFEST_PATH and asset_match is None:
         return _empty(start_response, "404 Not Found")
     try:
-        generation, _manifest, raw, digests = load_manifest(root)
+        generation, _manifest, raw, digests, root_stat = load_manifest(root)
         if asset_match is None:
             etag = '"' + hashlib.sha256(raw).hexdigest() + '"'
             common = (("ETag", etag),
@@ -148,7 +171,7 @@ def public_wsgi(root, environ, start_response):
                                 ("Content-Length", str(len(raw))))
         else:
             digest = asset_match.group(1)
-            raw = _asset(generation, digest, digests)
+            raw = _asset(generation, digest, digests, root_stat)
             etag = '"' + digest + '"'
             common = (("ETag", etag),
                       ("Cache-Control", "public, max-age=31536000, immutable"))

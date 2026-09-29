@@ -19,14 +19,17 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
+import sys
 import tempfile
 import unicodedata
+from uuid import uuid4
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 import warnings
 import zlib
 
-from PIL import Image
+from PIL import Image, __version__ as PILLOW_VERSION
 
 
 SCHEMA_VERSION = 1
@@ -39,6 +42,7 @@ MAX_DIMENSION = 512
 CANVAS_SIZE = 20
 MAX_GENERATIONS = 3
 MAX_TOTAL_GENERATION_BYTES = MAX_EMOJIS * MAX_OUTPUT_BYTES + 256 * 1024
+REQUIRED_PILLOW_VERSION = "12.3.0"
 NAME = re.compile(r"[a-z0-9_]{1,32}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 DISCORD_ID = re.compile(r"[0-9]{1,24}\Z")
@@ -65,17 +69,24 @@ class NoRedirect(HTTPRedirectHandler):
 class DiscordTransport:
     """Production HTTP boundary. Authorization is used only for the list call."""
 
-    def __init__(self, timeout=10):
+    def __init__(self, timeout=10, opener=None):
+        if not 1 <= timeout <= 30:
+            raise ValueError("invalid Discord timeout")
         self.timeout = timeout
-        self.opener = build_opener(NoRedirect())
+        self.opener = opener or build_opener(NoRedirect())
 
     def list_emojis(self, guild_id, token):
+        if not isinstance(guild_id, str) or not DISCORD_ID.fullmatch(guild_id):
+            raise SyncFailure("invalid_guild_id")
         url = f"{API_BASE}/guilds/{guild_id}/emojis"
         request = Request(url, headers={"Authorization": f"Bot {token}",
                                         "Accept": "application/json"})
         return self._request(request, MAX_INPUT_BYTES)
 
     def fetch_asset(self, emoji_id, animated):
+        if (not isinstance(emoji_id, str) or not DISCORD_ID.fullmatch(emoji_id)
+                or type(animated) is not bool):
+            raise SyncFailure("invalid_emoji_id")
         extension = "gif" if animated else "png"
         request = Request(f"{CDN_BASE}/{emoji_id}.{extension}",
                           headers={"Accept": "image/gif,image/png"})
@@ -268,6 +279,79 @@ def _write(path, raw, mode=0o644):
         os.fsync(output.fileno())
 
 
+def _safe_private_file(path, maximum):
+    path = Path(path)
+    try:
+        value = path.lstat()
+    except OSError as error:
+        raise ValueError("invalid private file") from error
+    if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
+            or value.st_uid not in {0, os.geteuid()}
+            or stat.S_IMODE(value.st_mode) & 0o077 or not 1 <= value.st_size <= maximum):
+        raise ValueError("unsafe private file")
+    return path.read_bytes()
+
+
+def _public_node(path, root_stat, *, directory, mode):
+    try:
+        value = Path(path).lstat()
+    except OSError:
+        return False
+    expected = stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode)
+    return (expected and value.st_dev == root_stat.st_dev
+            and value.st_uid == root_stat.st_uid and value.st_gid == root_stat.st_gid
+            and stat.S_IMODE(value.st_mode) == mode
+            and (directory or value.st_nlink == 1)
+            and (not directory or not os.path.ismount(path)))
+
+
+def _verified_generation(path, manifest, assets, root_stat):
+    path = Path(path)
+    if not _public_node(path, root_stat, directory=True, mode=0o755):
+        return False
+    asset_dir = path / "assets"
+    if not _public_node(asset_dir, root_stat, directory=True, mode=0o755):
+        return False
+    expected_root = {"assets", "manifest.json"}
+    expected_assets = {f"{digest}.png" for digest in assets}
+    try:
+        if {value.name for value in path.iterdir()} != expected_root:
+            return False
+        if {value.name for value in asset_dir.iterdir()} != expected_assets:
+            return False
+        manifest_path = path / "manifest.json"
+        if not _public_node(manifest_path, root_stat, directory=False, mode=0o644):
+            return False
+        if manifest_path.read_bytes() != _canonical(manifest):
+            return False
+        for digest, raw in assets.items():
+            asset = asset_dir / f"{digest}.png"
+            if (not _public_node(asset, root_stat, directory=False, mode=0o644)
+                    or asset.read_bytes() != raw or hashlib.sha256(raw).hexdigest() != digest):
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def _safe_removable_tree(path, root_stat):
+    path = Path(path)
+    if not _public_node(path, root_stat, directory=True, mode=0o755):
+        return False
+    try:
+        for value in path.rglob("*"):
+            metadata = value.lstat()
+            if (metadata.st_dev != root_stat.st_dev or metadata.st_uid != root_stat.st_uid
+                    or metadata.st_gid != root_stat.st_gid or stat.S_ISLNK(metadata.st_mode)
+                    or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1)
+                    or (stat.S_ISDIR(metadata.st_mode) and os.path.ismount(value))
+                    or not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode))):
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def read_current(root):
     root = Path(root)
     current = root / "current"
@@ -277,8 +361,15 @@ def read_current(root):
     match = re.fullmatch(r"generations/([0-9a-f]{64})", target)
     if not match:
         return None
-    manifest = root / target / "manifest.json"
-    if not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_size > 256 * 1024:
+    generation = root / target
+    manifest = generation / "manifest.json"
+    try:
+        root_stat = root.lstat()
+    except OSError:
+        return None
+    if (not _public_node(generation, root_stat, directory=True, mode=0o755)
+            or not _public_node(manifest, root_stat, directory=False, mode=0o644)
+            or manifest.stat().st_size > 256 * 1024):
         return None
     try:
         value = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
@@ -291,11 +382,22 @@ def read_current(root):
 def sync_lock(root):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o755)
-    if not root.is_dir() or root.is_symlink():
+    root_stat = root.lstat()
+    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.geteuid()
+            or root_stat.st_mode & 0o022):
         raise SyncFailure("unsafe_output_directory")
     os.chmod(root, 0o755)
     lock_path = root / ".sync.lock"
-    with lock_path.open("a+b") as lock:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise SyncFailure("unsafe_sync_lock") from error
+    with os.fdopen(descriptor, "a+b") as lock:
+        value = os.fstat(lock.fileno())
+        if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
+                or value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) != 0o600):
+            raise SyncFailure("unsafe_sync_lock")
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -381,9 +483,10 @@ class EmojiSynchronizer:
     def _publish(self, revision, manifest, assets):
         generations = self.output / "generations"
         generations.mkdir(parents=True, exist_ok=True, mode=0o755)
-        if not generations.is_dir() or generations.is_symlink():
-            raise SyncFailure("unsafe_generation_directory")
+        root_stat = self.output.lstat()
         os.chmod(generations, 0o755)
+        if not _public_node(generations, root_stat, directory=True, mode=0o755):
+            raise SyncFailure("unsafe_generation_directory")
         temporary = Path(tempfile.mkdtemp(prefix=".generation-", dir=self.output))
         try:
             os.chmod(temporary, 0o700)
@@ -399,34 +502,46 @@ class EmojiSynchronizer:
             asset_dir.chmod(0o755)
             (temporary / "manifest.json").chmod(0o644)
             temporary.chmod(0o755)
+            if not _verified_generation(temporary, manifest, assets, root_stat):
+                raise SyncFailure("generation_verification_failed")
             target = generations / revision
             if target.exists() and (not target.is_dir() or target.is_symlink()):
                 raise SyncFailure("unsafe_generation_target")
             if target.exists():
+                if not _verified_generation(target, manifest, assets, root_stat):
+                    raise SyncFailure("unsafe_generation_target")
                 shutil.rmtree(temporary)
             else:
                 os.replace(temporary, target)
                 _fsync_directory(generations)
-            staged_link = self.output / f".current-{os.getpid()}"
-            staged_link.unlink(missing_ok=True)
-            os.symlink(f"generations/{revision}", staged_link)
-            os.replace(staged_link, self.output / "current")
-            _fsync_directory(self.output)
+            staged_link = self.output / f".current-{os.getpid()}-{uuid4().hex}"
+            try:
+                os.symlink(f"generations/{revision}", staged_link)
+                os.replace(staged_link, self.output / "current")
+                _fsync_directory(self.output)
+            finally:
+                staged_link.unlink(missing_ok=True)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
 
     def _cleanup(self, current):
         generations = self.output / "generations"
+        root_stat = self.output.lstat()
         values = sorted((path for path in generations.iterdir()
                          if path.is_dir() and not path.is_symlink() and DIGEST.fullmatch(path.name)),
                         key=lambda path: path.stat().st_mtime_ns, reverse=True)
         keep = {current}
+        selected = self.output / "current"
+        if selected.is_symlink():
+            match = re.fullmatch(r"generations/([0-9a-f]{64})", os.readlink(selected))
+            if match:
+                keep.add(match.group(1))
         for path in values:
             if len(keep) < MAX_GENERATIONS:
                 keep.add(path.name)
         for path in values:
-            if path.name not in keep:
+            if path.name not in keep and _safe_removable_tree(path, root_stat):
                 shutil.rmtree(path)
         _fsync_directory(generations)
 
@@ -443,31 +558,47 @@ def _media_type(value):
 
 
 def _read_credential(path):
-    path = Path(path)
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > 4096:
-        raise ValueError("invalid credential file")
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise ValueError("empty credential")
+    try:
+        value = _safe_private_file(path, 4096).decode("ascii", errors="strict").rstrip("\r\n")
+    except (OSError, UnicodeError) as error:
+        raise ValueError("invalid credential file") from error
+    if not re.fullmatch(r"[\x21-\x7e]{1,4096}", value):
+        raise ValueError("invalid credential")
     return value
+
+
+def _read_config(path):
+    try:
+        value = _strict_json(_safe_private_file(path, 8192))
+    except SyncFailure as error:
+        raise ValueError("invalid synchronization config") from error
+    if (not isinstance(value, dict) or set(value) - {"guild_id", "denylist"}
+            or "guild_id" not in value or not isinstance(value["guild_id"], str)
+            or not DISCORD_ID.fullmatch(value["guild_id"])):
+        raise ValueError("invalid synchronization config")
+    denylist = value.get("denylist", [])
+    if (not isinstance(denylist, list) or len(denylist) > MAX_EMOJIS
+            or any(not isinstance(item, str) for item in denylist)):
+        raise ValueError("invalid synchronization config")
+    return value["guild_id"], parse_denylist(denylist)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--guild-id", default=os.environ.get("NOCTURNE_DISCORD_GUILD_ID"))
     parser.add_argument("--output", default=os.environ.get("NOCTURNE_EMOJI_PUBLIC_ROOT"))
+    parser.add_argument("--config-file", default=None)
     parser.add_argument("--token-file", default=None)
-    parser.add_argument("--deny", action="append", default=[])
     args = parser.parse_args(argv)
-    if not args.guild_id or not args.output or not args.token_file:
-        parser.error("guild ID, output, and token credential file are required")
+    if not args.config_file or not args.output or not args.token_file:
+        parser.error("configuration, output, and token credential files are required")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    configured_denylist = [value for value in
-                           os.environ.get("NOCTURNE_EMOJI_DENYLIST", "").split(",") if value.strip()]
+    if PILLOW_VERSION != REQUIRED_PILLOW_VERSION or sys.version_info[:2] != (3, 14):
+        log.error("emoji synchronization failed: category=unsupported_runtime")
+        return 78
     try:
-        result = EmojiSynchronizer(args.output, DiscordTransport(),
-                                   denylist=args.deny + configured_denylist).synchronize(
-            args.guild_id, _read_credential(args.token_file))
+        guild_id, denylist = _read_config(args.config_file)
+        result = EmojiSynchronizer(args.output, DiscordTransport(), denylist=denylist).synchronize(
+            guild_id, _read_credential(args.token_file))
         log.info("emoji synchronization %s: count=%d revision=%s",
                  result["status"], result["emoji_count"], result["revision"][:12])
     except SyncFailure as error:

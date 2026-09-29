@@ -110,11 +110,13 @@ def install(target_dir=Path("/etc/systemd/system"), source_dir=None,
                     output.flush()
                     os.fsync(output.fileno())
                 _apply_metadata(staged, entry["metadata"])
+                # Record the target before the atomic replacement so every
+                # interruption at or after replace is covered by restoration.
+                changed.append(entry)
                 os.replace(staged, target)
                 _verify_metadata(target, entry["metadata"])
                 if _digest(target.read_bytes()) != entry["after_sha256"]:
                     raise ValueError("unit activation verification failed")
-                changed.append(entry)
             finally:
                 staged.unlink(missing_ok=True)
         validate([Path(entry["target"]) for entry in manifest_entries])

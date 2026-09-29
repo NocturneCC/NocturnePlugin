@@ -2,7 +2,9 @@ import hashlib
 from io import BytesIO
 import json
 import logging
+import os
 from pathlib import Path
+import stat
 import tempfile
 import threading
 import unittest
@@ -10,8 +12,9 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from emoji_sync import (CANVAS_SIZE, EmojiSynchronizer, MAX_GENERATIONS,
-                        SyncFailure, eligible_metadata, normalize_image,
+from emoji_sync import (CANVAS_SIZE, DiscordTransport, EmojiSynchronizer,
+                        MAX_GENERATIONS, NoRedirect, SyncFailure, _read_config,
+                        _read_credential, eligible_metadata, normalize_image,
                         parse_denylist, read_current)
 
 
@@ -186,6 +189,74 @@ class EmojiSynchronizerTest(unittest.TestCase):
             self.sync.synchronize("123", "fixture-token")
         self.assertEqual(original, read_current(self.root)["revision"])
 
+    def test_every_publication_boundary_preserves_last_complete_generation(self):
+        self.configure([item(1, "first")])
+        original = self.sync.synchronize("123", "fixture-token")["revision"]
+        real_write = __import__("emoji_sync")._write
+        real_replace = os.replace
+
+        def fail_asset(path, raw, mode=0o644):
+            if Path(path).suffix == ".png":
+                raise OSError("asset fixture interruption")
+            return real_write(path, raw, mode)
+
+        def fail_manifest(path, raw, mode=0o644):
+            if Path(path).name == "manifest.json":
+                raise OSError("manifest fixture interruption")
+            return real_write(path, raw, mode)
+
+        def fail_generation(source, target):
+            if Path(target).parent.name == "generations":
+                raise OSError("generation fixture interruption")
+            return real_replace(source, target)
+
+        def fail_current(source, target):
+            if Path(target).name == "current":
+                raise OSError("current fixture interruption")
+            return real_replace(source, target)
+
+        for name, target, replacement in (
+                ("asset", "emoji_sync._write", fail_asset),
+                ("manifest", "emoji_sync._write", fail_manifest),
+                ("generation", "emoji_sync.os.replace", fail_generation),
+                ("current", "emoji_sync.os.replace", fail_current)):
+            with self.subTest(boundary=name):
+                self.configure([item(1, f"second_{name}")])
+                with patch(target, side_effect=replacement), self.assertRaises(OSError):
+                    self.sync.synchronize("123", "fixture-token")
+                self.assertEqual(original, read_current(self.root)["revision"])
+
+    def test_preexisting_generation_hardlinks_mounts_and_lock_links_fail_closed(self):
+        self.configure([item(1, "one")])
+        revision = self.sync.synchronize("123", "fixture-token")["revision"]
+        generation = self.root / "generations" / revision
+        manifest = generation / "manifest.json"
+        saved = self.root / "saved-manifest"
+        saved.write_bytes(manifest.read_bytes())
+        saved.chmod(0o644)
+        manifest.unlink()
+        os.link(saved, manifest)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_generation_target"):
+            self.sync.synchronize("123", "fixture-token")
+
+        manifest.unlink()
+        manifest.write_bytes(saved.read_bytes())
+        manifest.chmod(0o644)
+        with patch("emoji_sync.os.path.ismount", side_effect=lambda path: Path(path) == generation), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_generation_target"):
+            self.sync.synchronize("123", "fixture-token")
+
+        other = Path(self.temp.name) / "other-root"
+        other.mkdir()
+        other.chmod(0o700)
+        victim = other / "victim"
+        victim.write_text("unchanged")
+        (other / ".sync.lock").symlink_to(victim)
+        sync = EmojiSynchronizer(other, self.transport)
+        with self.assertRaisesRegex(SyncFailure, "unsafe_sync_lock"):
+            sync.synchronize("123", "fixture-token")
+        self.assertEqual("unchanged", victim.read_text())
+
     def test_concurrent_sync_is_excluded(self):
         self.configure([item(1, "one")])
         entered = threading.Event()
@@ -217,9 +288,15 @@ class EmojiSynchronizerTest(unittest.TestCase):
 
     def test_manifest_asset_digest_size_and_permissions(self):
         self.configure([item(1, "one")])
-        self.sync.synchronize("123", "fixture-token")
+        previous = os.umask(0o077)
+        try:
+            self.sync.synchronize("123", "fixture-token")
+        finally:
+            os.umask(previous)
         manifest = read_current(self.root)
         entry = manifest["emojis"][0]
+        generation = (self.root / "current").resolve()
+        manifest_path = generation / "manifest.json"
         asset = self.root / "current" / "assets" / f'{entry["sha256"]}.png'
         raw = asset.read_bytes()
         self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
@@ -227,7 +304,76 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.assertEqual(0o644, asset.stat().st_mode & 0o777)
         self.assertEqual(0o755, self.root.stat().st_mode & 0o777)
         self.assertEqual(0o755, (self.root / "generations").stat().st_mode & 0o777)
-        self.assertEqual(0o755, (self.root / "current").resolve().stat().st_mode & 0o777)
+        self.assertEqual(0o755, generation.stat().st_mode & 0o777)
+        self.assertEqual(0o755, (generation / "assets").stat().st_mode & 0o777)
+        self.assertEqual(0o644, manifest_path.stat().st_mode & 0o777)
+        self.assertEqual(0o644, asset.stat().st_mode & 0o777)
+        for directory in (self.root, self.root / "generations", generation,
+                          generation / "assets"):
+            self.assertTrue(directory.stat().st_mode & stat.S_IXOTH,
+                            f"distinct UID cannot traverse {directory}")
+        for value in (manifest_path, asset):
+            self.assertTrue(value.stat().st_mode & stat.S_IROTH,
+                            f"distinct UID cannot read {value}")
+
+    def test_transport_hosts_headers_redirects_and_bounds_are_fixed(self):
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json", "X-Secret": "ignored"}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, count):
+                self.count = count
+                return b"[]"
+
+        class Opener:
+            def __init__(self): self.calls = []
+            def open(self, request, timeout):
+                response = Response()
+                self.calls.append((request, timeout, response))
+                return response
+
+        opener = Opener()
+        transport = DiscordTransport(timeout=10, opener=opener)
+        transport.list_emojis("123", "fixture-secret")
+        transport.fetch_asset("456", False)
+        listing, asset = opener.calls
+        self.assertEqual("https://discord.com/api/v10/guilds/123/emojis",
+                         listing[0].full_url)
+        self.assertEqual("Bot fixture-secret", listing[0].get_header("Authorization"))
+        self.assertEqual("https://cdn.discordapp.com/emojis/456.png", asset[0].full_url)
+        self.assertIsNone(asset[0].get_header("Authorization"))
+        self.assertEqual((10, 10), (listing[1], asset[1]))
+        self.assertEqual((256 * 1024 + 1, 256 * 1024 + 1),
+                         (listing[2].count, asset[2].count))
+        self.assertNotIn("fixture-secret", listing[0].full_url)
+        self.assertIsNone(NoRedirect().redirect_request(
+            listing[0], None, 302, "redirect", {}, "https://example.invalid/"))
+        for invalid in ("../1", "https://example.invalid/x", "1.png", ""):
+            with self.assertRaisesRegex(SyncFailure, "invalid_emoji_id"):
+                transport.fetch_asset(invalid, False)
+        with self.assertRaises(ValueError):
+            DiscordTransport(timeout=0, opener=opener)
+
+    def test_private_credential_and_strict_config_loading(self):
+        token = self.root / "token"
+        token.write_text("fixture-token\n")
+        token.chmod(0o600)
+        config = self.root / "config.json"
+        config.write_text('{"guild_id":"123","denylist":["blocked","456"]}')
+        config.chmod(0o600)
+        self.assertEqual("fixture-token", _read_credential(token))
+        self.assertEqual(("123", frozenset({"blocked", "456"})), _read_config(config))
+        token.chmod(0o640)
+        with self.assertRaisesRegex(ValueError, "unsafe private file"):
+            _read_credential(token)
+        token.chmod(0o600)
+        token.write_text("bad\nheader\n")
+        with self.assertRaisesRegex(ValueError, "invalid credential"):
+            _read_credential(token)
+        config.write_text('{"guild_id":"123","guild_id":"456"}')
+        with self.assertRaisesRegex(ValueError, "invalid synchronization config"):
+            _read_config(config)
 
     def test_exceptions_and_logs_do_not_include_token_or_headers(self):
         secret = "fixture-secret-must-not-leak"

@@ -14,8 +14,9 @@ no emoji update integration. Adding publication to any of them would couple a
 public plugin data path to broader credentials and unrelated failure domains.
 
 `emoji_sync.py` is therefore a repository-owned one-shot process. A hardened
-systemd timer runs it at least every five minutes with bounded jitter. It uses a
-dedicated `LoadCredential` token and publishes only normalized public data. A
+systemd timer runs it at least every five minutes with bounded jitter. It uses
+dedicated `LoadCredential` files for the token and strict synchronization
+configuration and publishes only normalized public data. A
 future gateway integration may trigger immediate runs on Discord's Guild Emojis
 Update event, but periodic reconciliation remains authoritative.
 
@@ -97,14 +98,29 @@ permitted to mirror should remain installed/enabled. The server denylist can
 suppress an ID or normalized name immediately. Review of the live guild
 collection's rights and Plugin Hub suitability is a release gate. Mirror data is
 never executable, and images are validated independently on server and client.
+Because the eligible collection can change without a plugin-code update,
+Plugin Hub reviewers must explicitly confirm that this same-origin,
+runtime-downloaded, operator-moderated image model is acceptable. RuneLite's
+published rejected-feature list specifically raises redistribution concerns for
+third-party emote services; this design does not use those services, but it does
+not remove the clan operator's responsibility to prove rights for every mirrored
+asset before public distribution.
 
 ## Future deployment and rollback boundary
 
-1. Build a dedicated hash-locked Pillow 12.1.1 environment without changing the
-   intake runtime environment.
+1. On Midgard's CPython 3.14, glibc x86-64 runtime, build a dedicated environment
+   with `pip --require-hashes --only-binary=:all:` and the repository's
+   `emoji-sync-requirements.txt`. It admits only Pillow 12.3.0's verified
+   `cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64` wheel. Refuse a
+   different interpreter, architecture, source distribution or wheel digest;
+   never copy a development virtual environment.
 2. Create a dedicated Discord application or explicitly approve reuse risk.
-3. Store the token at the `LoadCredential` source path and put only the guild ID
-   plus optional comma-separated denylist in `/etc/nocturne-plugin/emoji-sync.conf`.
+3. Store the token at the token `LoadCredential` source path. Create
+   `/etc/nocturne-plugin/emoji-sync.json` as a private regular file containing
+   only strict JSON such as `{"guild_id":"<numeric id>","denylist":[]}`. Both
+   are copied by systemd into the service's private credentials directory; no
+   token or guild configuration is passed in an environment variable or process
+   argument.
 4. Stop `nocturne-plugin-dev.service`, `nocturne-plugin-emoji-sync.service`, and
    `nocturne-plugin-emoji-sync.timer`; record their state.
 5. Run `emoji_service_support.py` without `--apply`, inspect hashes and unit

@@ -100,6 +100,29 @@ class EmojiPublicTest(unittest.TestCase):
         current.unlink()
         self.assertEqual("503 Service Unavailable", request(self.app)["status"])
 
+    def test_hardlinked_manifest_and_asset_are_never_served(self):
+        current = self.root / "current"
+        generation = (self.root / current.readlink())
+        manifest = generation / "manifest.json"
+        manifest_copy = self.root / "manifest-copy"
+        manifest_copy.write_bytes(manifest.read_bytes())
+        manifest_copy.chmod(0o644)
+        manifest.unlink()
+        __import__("os").link(manifest_copy, manifest)
+        self.assertEqual("503 Service Unavailable", request(self.app)["status"])
+
+        manifest.unlink()
+        manifest.write_bytes(manifest_copy.read_bytes())
+        manifest.chmod(0o644)
+        entry = json.loads(request(self.app)["body"])["emojis"][0]
+        asset = generation / "assets" / f'{entry["sha256"]}.png'
+        asset_copy = self.root / "asset-copy"
+        asset_copy.write_bytes(asset.read_bytes())
+        asset_copy.chmod(0o644)
+        asset.unlink()
+        __import__("os").link(asset_copy, asset)
+        self.assertEqual("404 Not Found", request(self.app, entry["asset_path"])["status"])
+
     def test_public_fields_contain_no_identity_or_discord_transport_data(self):
         value = json.loads(request(self.app)["body"])
         serialized = json.dumps(value).lower()
