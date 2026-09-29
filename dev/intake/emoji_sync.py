@@ -26,7 +26,7 @@ import tempfile
 import unicodedata
 from uuid import uuid4
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 import warnings
 import zlib
 
@@ -49,6 +49,7 @@ DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 DISCORD_ID = re.compile(r"[0-9]{1,24}\Z")
 API_BASE = "https://discord.com/api/v10"
 CDN_BASE = "https://cdn.discordapp.com/emojis"
+DISCORD_USER_AGENT = "DiscordBot (https://github.com/NocturneCC/NocturnePlugin, 0.3.2)"
 
 log = logging.getLogger("nocturne-emoji-sync")
 
@@ -74,14 +75,18 @@ class DiscordTransport:
         if not 1 <= timeout <= 30:
             raise ValueError("invalid Discord timeout")
         self.timeout = timeout
-        self.opener = opener or build_opener(NoRedirect())
+        self.opener = opener or build_opener(ProxyHandler({}), NoRedirect())
 
     def list_emojis(self, guild_id, token):
         if not isinstance(guild_id, str) or not DISCORD_ID.fullmatch(guild_id):
             raise SyncFailure("invalid_guild_id")
         url = f"{API_BASE}/guilds/{guild_id}/emojis"
-        request = Request(url, headers={"Authorization": f"Bot {token}",
-                                        "Accept": "application/json"})
+        request = Request(url, method="GET", headers={
+            "Authorization": f"Bot {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": DISCORD_USER_AGENT,
+        })
         return self._request(request, MAX_INPUT_BYTES)
 
     def fetch_asset(self, emoji_id, animated):
@@ -89,8 +94,10 @@ class DiscordTransport:
                 or type(animated) is not bool):
             raise SyncFailure("invalid_emoji_id")
         extension = "gif" if animated else "png"
-        request = Request(f"{CDN_BASE}/{emoji_id}.{extension}",
-                          headers={"Accept": "image/gif,image/png"})
+        request = Request(f"{CDN_BASE}/{emoji_id}.{extension}", method="GET", headers={
+            "Accept": "image/gif,image/png",
+            "User-Agent": DISCORD_USER_AGENT,
+        })
         return self._request(request, MAX_INPUT_BYTES)
 
     def _request(self, request, maximum):
@@ -103,7 +110,11 @@ class DiscordTransport:
         except HTTPError as error:
             # Do not retain or expose response bodies/headers. Retry-After is the
             # only operational field consumed, and is normalized immediately.
-            retry = _retry_after(error.headers.get("Retry-After")) if error.code == 429 else None
+            try:
+                retry = (_retry_after(error.headers.get("Retry-After"))
+                         if error.code == 429 else None)
+            finally:
+                error.close()
             raise SyncFailure("rate_limited" if error.code == 429 else "api_error", retry) from None
         except (URLError, TimeoutError, OSError):
             raise SyncFailure("transport_error") from None

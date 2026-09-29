@@ -9,13 +9,16 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler
 
 from PIL import Image
 
-from emoji_sync import (CANVAS_SIZE, DiscordTransport, EmojiSynchronizer,
-                        MAX_GENERATIONS, NoRedirect, SyncFailure, _read_config,
-                        _read_credential, eligible_metadata, normalize_image,
-                        parse_denylist, read_current)
+from emoji_sync import (CANVAS_SIZE, DISCORD_USER_AGENT, DiscordTransport,
+                        EmojiSynchronizer, MAX_GENERATIONS, NoRedirect,
+                        SyncFailure, _read_config, _read_credential,
+                        eligible_metadata, normalize_image, parse_denylist,
+                        read_current)
 
 
 def png(size=(12, 8), color=(120, 40, 200, 180)):
@@ -374,11 +377,22 @@ class EmojiSynchronizerTest(unittest.TestCase):
         transport.list_emojis("123", "fixture-secret")
         transport.fetch_asset("456", False)
         listing, asset = opener.calls
+        self.assertEqual(
+            "DiscordBot (https://github.com/NocturneCC/NocturnePlugin, 0.3.2)",
+            DISCORD_USER_AGENT)
         self.assertEqual("https://discord.com/api/v10/guilds/123/emojis",
                          listing[0].full_url)
+        self.assertEqual("GET", listing[0].get_method())
         self.assertEqual("Bot fixture-secret", listing[0].get_header("Authorization"))
+        self.assertEqual(DISCORD_USER_AGENT, listing[0].get_header("User-agent"))
+        self.assertEqual("application/json", listing[0].get_header("Accept"))
+        self.assertEqual("application/json", listing[0].get_header("Content-type"))
         self.assertEqual("https://cdn.discordapp.com/emojis/456.png", asset[0].full_url)
+        self.assertEqual("GET", asset[0].get_method())
         self.assertIsNone(asset[0].get_header("Authorization"))
+        self.assertEqual(DISCORD_USER_AGENT, asset[0].get_header("User-agent"))
+        self.assertEqual("image/gif,image/png", asset[0].get_header("Accept"))
+        self.assertIsNone(asset[0].get_header("Content-type"))
         self.assertEqual((10, 10), (listing[1], asset[1]))
         self.assertEqual((256 * 1024 + 1, 256 * 1024 + 1),
                          (listing[2].count, asset[2].count))
@@ -390,6 +404,54 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 transport.fetch_asset(invalid, False)
         with self.assertRaises(ValueError):
             DiscordTransport(timeout=0, opener=opener)
+
+    def test_default_transport_disables_environment_proxies(self):
+        with patch("emoji_sync.build_opener") as build:
+            DiscordTransport()
+        handlers = build.call_args.args
+        self.assertEqual(2, len(handlers))
+        self.assertIsInstance(handlers[0], ProxyHandler)
+        self.assertEqual({}, handlers[0].proxies)
+        self.assertIsInstance(handlers[1], NoRedirect)
+
+    def test_structured_discord_error_is_reduced_to_safe_category(self):
+        body_secret = "structured-body-must-not-leak"
+        header_secret = "structured-header-must-not-leak"
+
+        class Opener:
+            def open(self, request, timeout):
+                raise HTTPError(request.full_url, 403, "Forbidden",
+                                {"Content-Type": "application/json",
+                                 "X-Secret": header_secret},
+                                BytesIO(json.dumps({"code": 50013,
+                                                   "message": "Missing Permissions",
+                                                   "secret": body_secret}).encode()))
+
+        transport = DiscordTransport(opener=Opener())
+        with self.assertRaisesRegex(SyncFailure, "api_error") as caught:
+            transport.list_emojis("123", "structured-token-must-not-leak")
+        rendered = repr(caught.exception)
+        self.assertNotIn(body_secret, rendered)
+        self.assertNotIn(header_secret, rendered)
+        self.assertNotIn("structured-token-must-not-leak", rendered)
+
+    def test_unstructured_cloudflare_error_is_reduced_to_safe_category(self):
+        body_secret = "cloudflare-body-must-not-leak"
+        header_secret = "cloudflare-header-must-not-leak"
+
+        class Opener:
+            def open(self, request, timeout):
+                raise HTTPError(request.full_url, 403, "Forbidden",
+                                {"Content-Type": "text/html", "CF-Ray": header_secret},
+                                BytesIO(f"<html>{body_secret}</html>".encode()))
+
+        transport = DiscordTransport(opener=Opener())
+        with self.assertRaisesRegex(SyncFailure, "api_error") as caught:
+            transport.list_emojis("123", "cloudflare-token-must-not-leak")
+        rendered = repr(caught.exception)
+        self.assertNotIn(body_secret, rendered)
+        self.assertNotIn(header_secret, rendered)
+        self.assertNotIn("cloudflare-token-must-not-leak", rendered)
 
     def test_private_credential_and_strict_config_loading(self):
         token = self.root / "token"
