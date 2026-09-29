@@ -30,4 +30,3 @@ CapabilityBoundingSet=
 SystemCallArchitectures=native
 MemoryMax=128M
 TasksMax=16
-
