@@ -45,6 +45,8 @@ final class EmojiCacheStore
 	{
 		try
 		{
+			if (!Files.readAttributes(root, java.nio.file.attribute.BasicFileAttributes.class,
+				LinkOption.NOFOLLOW_LINKS).isDirectory()) return null;
 			Path pointer = root.resolve("current");
 			if (!safeRegularFile(pointer)
 				|| Files.size(pointer) > 128) return null;
@@ -56,6 +58,7 @@ final class EmojiCacheStore
 				|| Files.size(manifestPath) > EmojiManifest.MAX_MANIFEST_BYTES) return null;
 			EmojiManifest manifest = EmojiManifest.parse(Files.readAllBytes(manifestPath), gson);
 			if (!revision.equals(manifest.revision)) return null;
+			if (!generationValid(generation, manifest)) return null;
 			Map<String, EmojiAsset> assets = new LinkedHashMap<>();
 			Map<String, byte[]> rawAssets = new LinkedHashMap<>();
 			for (EmojiManifest.Entry entry : manifest.entries)
@@ -147,6 +150,16 @@ final class EmojiCacheStore
 			if (!actual.revision.equals(expected.revision)) return false;
 			Path assets = generation.resolve("assets");
 			if (!safeDirectory(assets)) return false;
+			Set<String> generationNames = new HashSet<>();
+			try (DirectoryStream<Path> values = Files.newDirectoryStream(generation))
+			{
+				for (Path value : values) generationNames.add(value.getFileName().toString());
+			}
+			if (!generationNames.equals(Set.of("assets", "manifest.json", "etag.txt"))) return false;
+			Path etag = generation.resolve("etag.txt");
+			if (!safeRegularFile(etag) || Files.size(etag) > 80
+				|| !Files.readString(etag, StandardCharsets.US_ASCII).trim()
+					.matches("\"[0-9a-f]{64}\"")) return false;
 			Set<String> expectedNames = new HashSet<>();
 			for (EmojiManifest.Entry entry : actual.entries)
 			{

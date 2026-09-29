@@ -116,10 +116,46 @@ public class EmojiCacheStoreTest
 		finally { delete(root); }
 	}
 
+	@Test public void extraGenerationFilesAndSymlinkCacheRootsFailClosed() throws Exception
+	{
+		Path root = Files.createTempDirectory("emoji-cache-extra-entry");
+		try
+		{
+			Gson gson = new Gson();
+			byte[] image = EmojiTestFixtures.png(0xff113355);
+			EmojiTestFixtures.FixtureEntry fixture = new EmojiTestFixtures.FixtureEntry("wave", image);
+			EmojiManifest manifest = EmojiManifest.parse(
+				EmojiTestFixtures.manifest(gson, List.of(fixture)), gson);
+			EmojiCacheStore store = new EmojiCacheStore(root, gson);
+			store.save(manifest, Map.of(fixture.digest(), image), "\"" + "a".repeat(64) + "\"");
+			Files.writeString(root.resolve("generations").resolve(manifest.revision).resolve("unexpected"),
+				"unexpected");
+			assertNull(store.load());
+
+			Path parent = Files.createTempDirectory("emoji-cache-symlink-parent");
+			try
+			{
+				Path linkedRoot = parent.resolve("cache");
+				Files.createSymbolicLink(linkedRoot, root);
+				EmojiCacheStore linked = new EmojiCacheStore(linkedRoot, gson);
+				assertNull(linked.load());
+				try
+				{
+					linked.save(manifest, Map.of(fixture.digest(), image),
+						"\"" + "b".repeat(64) + "\"");
+					fail("symlink cache root accepted");
+				}
+				catch (java.io.IOException expected) { }
+			}
+			finally { delete(parent); }
+		}
+		finally { delete(root); }
+	}
+
 	private static void delete(Path path) throws Exception
 	{
 		if (!Files.exists(path)) return;
-		if (Files.isDirectory(path))
+		if (Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS))
 			try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(path))
 			{ for (Path child : stream) delete(child); }
 		Files.deleteIfExists(path);

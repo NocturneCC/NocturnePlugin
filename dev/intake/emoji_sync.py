@@ -605,6 +605,9 @@ def main(argv=None):
         log.error("emoji synchronization failed: category=%s retry_after=%s",
                   error.category, error.retry_after if error.retry_after is not None else "none")
         return 75
+    except (OSError, ValueError):
+        log.error("emoji synchronization failed: category=invalid_configuration")
+        return 78
     return 0
 
 
