@@ -11,7 +11,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=NOCTURNE_EMOJI_PUBLIC_ROOT=/var/lib/nocturne-plugin-emojis/public
 LoadCredential=emoji-sync-config:/etc/nocturne-plugin/emoji-sync.json
 LoadCredential=discord-token:/etc/nocturne-plugin/credentials/emoji-sync-token
-ExecStart=/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0/bin/python -B /srv/nocturne-plugin/current/dev/intake/emoji_sync.py --config-file=%d/emoji-sync-config --output=${NOCTURNE_EMOJI_PUBLIC_ROOT} --token-file=%d/discord-token
+ExecStart=/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0-5c09fb94deb5/bin/python -B /srv/nocturne-plugin/current/dev/intake/emoji_sync.py --config-file=%d/emoji-sync-config --output=${NOCTURNE_EMOJI_PUBLIC_ROOT} --token-file=%d/discord-token
 StateDirectory=nocturne-plugin-emojis
 StateDirectoryMode=0755
 UMask=0077

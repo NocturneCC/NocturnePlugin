@@ -40,13 +40,19 @@ Gunicorn wheel in its versioned wheelhouse. The lock and wheel digest are fixed
 in source. Create the venv directly at its final versioned path and install with
 `pip --require-hashes --no-index --find-links <wheelhouse>`, run `pip check`,
 verify imports and permissions, and keep it at
-`/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0`. Never rename a venv:
+`/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0-569f768a6bc8`. The
+suffix is the first 12 hexadecimal characters of the full committed lock-file
+SHA-256. The manifest still records and verifies the complete lock and wheel
+digests, Python ABI, architecture, package version and runtime purpose. A lock
+change therefore creates a distinct target even when package versions do not
+change. Never rename a venv:
 generated launchers contain absolute interpreter paths. Generated units name
 the versioned environment directly. The tool invokes Gunicorn as
 `python -m gunicorn` and requires exactly Gunicorn 26.2.0.
 
 The emoji environment is independently prepared at
-`/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0`. Architecture,
+`/srv/nocturne-plugin/venvs/emoji-python3.14-pillow-12.3.0-5c09fb94deb5`, using
+the same lock-digest identity rule. Architecture,
 CPython ABI and glibc are checked before target creation or pip. Only the
 binary-only hash lock and exact verified Pillow wheel are accepted. A mode-0600
 incomplete marker remains until imports, versions, ownership, modes, ACLs,
@@ -108,15 +114,15 @@ root maintenance step run the following fail-if-present preposition commands:
 
 ```bash
 sudo /bin/mkdir --mode=0755 -- \
-  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0
+  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0-569f768a6bc8
 sudo /usr/bin/install --owner=root --group=root --mode=0444 -- \
   "$DOWNLOAD_DIR/gunicorn/gunicorn-26.2.0-py3-none-any.whl" \
-  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0/gunicorn-26.2.0-py3-none-any.whl
+  /srv/nocturne-plugin/wheelhouse/python3.14-gunicorn-26.2.0-569f768a6bc8/gunicorn-26.2.0-py3-none-any.whl
 sudo /bin/mkdir --mode=0755 -- \
-  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0
+  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0-5c09fb94deb5
 sudo /usr/bin/install --owner=root --group=root --mode=0444 -- \
   "$DOWNLOAD_DIR/pillow/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" \
-  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+  /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0-5c09fb94deb5/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 ```
 
 Each `mkdir` must fail rather than reuse a pre-existing version directory; an
@@ -126,7 +132,7 @@ runtime validators independently reject extra, linked, writable, wrongly owned,
 wrongly named, or digest-mismatched wheel inputs.
 
 The venv is created at
-`/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0` with a root-owned mode
+`/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0-569f768a6bc8` with a root-owned mode
 0600 `PREPARATION_INCOMPLETE` marker. The marker remains after interruption or
 validation failure. A completed target has a verified `VENV-MANIFEST.json` and
 no incomplete marker; reruns validate and reuse it. Ordinary venv links are
@@ -140,7 +146,7 @@ dry-run mode, then explicitly move it into the root-only quarantine:
 ```bash
 cd /srv/projects/nocturne-plugin-intake
 SHA=FULL_SHA
-TARGET=/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0
+TARGET=/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0-569f768a6bc8
 sudo python3.14 -B dev/intake/immutable_runtime_release.py \
   --repo /srv/projects/nocturne-plugin-intake --commit "$SHA" \
   --recover-incomplete-venv "$TARGET"
@@ -150,12 +156,21 @@ sudo python3.14 -B dev/intake/immutable_runtime_release.py \
 sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --prepare "$SHA"
 ```
 
-Recovery accepts either a valid new incomplete marker or the narrowly verified
-legacy failure whose Gunicorn shebang points at an absent
-`.venv-<40-hex-commit>.<pid>/bin/python`. It refuses every other unmarked state.
+Recovery accepts only a valid incomplete marker at the exact content-addressed
+target. It refuses every unmarked state and can never select, relabel, move or
+quarantine the legacy predecessor runtime.
 Quarantined environments remain beneath
 `/srv/nocturne-plugin/quarantine/incomplete-venvs/` for operator inspection and
 are not removed automatically.
+
+The predecessor `/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0` is a
+separate legacy identity. Read-only readiness checks validate its older
+dependency record, launchers, ABI, installed-package set, ownership and ACLs
+when it exists, but never compare its historical lock digest with the new
+lock. It remains selected by the currently active backed-up units and available
+for rollback. New generated units reference only the content-addressed target;
+preparation never changes the legacy directory or the `/srv/nocturne-plugin/venv`
+selector.
 
 ## Ownership inspection
 
@@ -187,7 +202,7 @@ sudo python3.14 -B dev/intake/immutable_runtime_release.py \
 sudo python3.14 -B dev/intake/emoji_runtime_release.py \
   --runtime-root /srv/nocturne-plugin --python /usr/bin/python3.14 \
   --requirements "/srv/nocturne-plugin/releases/$SHA/dev/intake/emoji-sync-requirements.txt" \
-  --wheel /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+  --wheel /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0-5c09fb94deb5/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 ```
 
 Standalone emoji-unit or route repair is not an alternate activation path.

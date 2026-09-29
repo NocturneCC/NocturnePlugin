@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import immutable_runtime_release as runtime
+import runtime_identity
 
 
 class ImmutableRuntimeReleaseTest(unittest.TestCase):
@@ -85,6 +86,57 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
                 self.assertEqual(2,generated.count("LoadCredential="))
             else:
                 self.assertNotIn("LoadCredential=",generated)
+        self.assertNotIn("/venvs/" + runtime.LEGACY_VENV_NAME + "/", units)
+
+    def test_dependency_lock_changes_create_distinct_runtime_identities(self):
+        source=Path(__file__).parent
+        self.assertEqual(runtime.GUNICORN_LOCK_TEXT,
+                         (source/"runtime-requirements.lock").read_text())
+        self.assertEqual(runtime.PILLOW_LOCK_SHA256,
+                         runtime.digest(source/"emoji-sync-requirements.txt"))
+        other_lock = runtime_identity.lock_digest(
+            runtime_identity.GUNICORN_LOCK_TEXT + "# provenance revision\n")
+        other_name = runtime_identity.content_addressed_name(
+            runtime.LEGACY_VENV_NAME, other_lock)
+        self.assertNotEqual(runtime.VENV_NAME, other_name)
+        self.assertTrue(runtime.VENV_NAME.endswith(
+            runtime.GUNICORN_LOCK_SHA256[:runtime_identity.IDENTITY_DIGEST_LENGTH]))
+        self.assertTrue(other_name.endswith(
+            other_lock[:runtime_identity.IDENTITY_DIGEST_LENGTH]))
+        self.assertEqual(runtime.GUNICORN_VERSION, "26.2.0")
+
+    def test_legacy_runtime_uses_its_pinned_historical_record(self):
+        target=self.runtime/"venvs"/runtime.LEGACY_VENV_NAME
+        (target/"bin").mkdir(parents=True)
+        (target/"bin/python").symlink_to("/usr/bin/python3.14")
+        manifest={
+            "purpose": runtime.LEGACY_VENV_PURPOSE,
+            "target": str(target),
+            "python": "/usr/bin/python3.14",
+            "requirements_sha256": runtime.LEGACY_GUNICORN_LOCK_SHA256,
+            "wheel_sha256": runtime.GUNICORN_WHEEL_SHA256,
+            "gunicorn_version": runtime.GUNICORN_VERSION,
+        }
+        (target/runtime.VENV_MANIFEST).write_text(json.dumps(manifest)+"\n")
+        probe={"version":runtime.PYTHON_VERSION,"machine":runtime.PYTHON_MACHINE,
+               "soabi":runtime.PYTHON_SOABI,"executable":"/usr/bin/python3.14",
+               "prefix":str(target.resolve()),
+               "packages":[["gunicorn",runtime.GUNICORN_VERSION],
+                           ["pip","25.1.1"]]}
+        def run(args,**_kwargs):
+            if args[-3:]==["-m","gunicorn","--version"]:
+                return SimpleNamespace(stdout="gunicorn (version 26.2.0)\n")
+            return SimpleNamespace(stdout="")
+        with patch.object(runtime,"_validate_venv_tree"), \
+                patch.object(runtime,"_runtime_probe",return_value=probe), \
+                patch.object(runtime,"_validate_runtime_launchers"):
+            self.assertEqual(runtime.LEGACY_GUNICORN_LOCK_SHA256,
+                runtime.validate_legacy_venv(target,uid=os.getuid(),gid=os.getgid(),
+                                             run=run)["requirements_sha256"])
+            manifest["requirements_sha256"]="0"*64
+            (target/runtime.VENV_MANIFEST).write_text(json.dumps(manifest)+"\n")
+            with self.assertRaisesRegex(ValueError,"dependency record"):
+                runtime.validate_legacy_venv(target,uid=os.getuid(),gid=os.getgid(),run=run)
 
     def test_prepare_rejects_dirty_checkout_wrong_or_abbreviated_commit(self):
         (self.repo/"payload.py").write_text("dirty = True\n")
@@ -103,6 +155,11 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         for forbidden in ("--activate", "systemctl", "daemon-reload", "sqlite3"):
             self.assertNotIn(forbidden,text)
         self.assertLess(text.index("--host-preflight"),text.index(' --prepare\n'))
+        self.assertIn("wheelhouse/"+runtime.VENV_NAME+"/"+runtime.GUNICORN_WHEEL_NAME,text)
+        self.assertIn("venvs/"+runtime.VENV_NAME,text)
+        self.assertIn("wheelhouse/"+runtime.EMOJI_VENV_NAME,text)
+        self.assertIn("venvs/"+runtime.EMOJI_VENV_NAME,text)
+        self.assertNotIn('target="$root/venvs/'+runtime.LEGACY_VENV_NAME+'"',text)
 
     def test_service_state_verifier_requires_exact_inactive_systemd_evidence(self):
         def runner(args,**_kwargs):
@@ -145,18 +202,31 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
                 (bindir/"python").symlink_to(python)
                 launcher=bindir/"gunicorn"; launcher.write_text(f"#!{target}/bin/python\n")
                 launcher.chmod(0o755)
+                pip=bindir/"pip"; pip.write_text(f"#!{target}/bin/python\n")
+                pip.chmod(0o755)
                 (target/"lib").mkdir(); (target/"lib64").symlink_to("lib",target_is_directory=True)
                 return SimpleNamespace(stdout="")
             if args[-3:]==["-m","gunicorn","--version"]:
                 return SimpleNamespace(stdout="gunicorn (version 26.2.0)\n")
-            if "pathlib.Path(sys.executable).resolve()" in " ".join(args):
-                return SimpleNamespace(stdout=f"{python.resolve()}\n{target.resolve()}\n")
+            if "importlib.metadata" in " ".join(args):
+                return SimpleNamespace(stdout=json.dumps({
+                    "version": runtime.PYTHON_VERSION,
+                    "machine": runtime.PYTHON_MACHINE,
+                    "soabi": runtime.PYTHON_SOABI,
+                    "executable": str(python.resolve()),
+                    "prefix": str(target.resolve()),
+                    "packages": [["gunicorn", runtime.GUNICORN_VERSION],
+                                 ["pip", "25.1.1"]],
+                }) + "\n")
             return SimpleNamespace(stdout="")
         return run,calls
 
     def test_venv_is_created_at_final_path_and_reused(self):
         release,python,lock,wheel=self.venv_inputs()
         target=self.runtime/"venvs"/runtime.VENV_NAME
+        selector=self.runtime/"venv"
+        selector.symlink_to(Path("venvs")/runtime.LEGACY_VENV_NAME)
+        original_selector=selector.readlink()
         run,calls=self.fake_venv_runner(target,python)
         with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
             result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
@@ -172,10 +242,8 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
                                         uid=os.getuid(),gid=os.getgid(),run=run)
         self.assertEqual("already_prepared",result["state"])
-        selected=runtime.select_venv(self.runtime,target,apply=True)
-        self.assertEqual("selected",selected["state"])
-        self.assertEqual(target.resolve(),(self.runtime/"venv").resolve())
-        self.assertEqual("already_selected",runtime.select_venv(self.runtime,target)["state"])
+        self.assertEqual(original_selector,selector.readlink())
+        self.assertNotEqual(runtime.LEGACY_VENV_NAME,runtime.VENV_NAME)
 
     def test_interrupted_preparation_is_marked_and_requires_recovery(self):
         release,python,lock,wheel=self.venv_inputs()
@@ -217,7 +285,7 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             runtime._validate_venv_tree(target,uid=os.getuid(),gid=os.getgid(),
                                         approved_python={Path(sys.executable)},run=run)
 
-    def test_exact_legacy_renamed_venv_bad_interpreter_can_only_be_quarantined(self):
+    def test_unmarked_or_legacy_renamed_target_cannot_be_quarantined(self):
         target=self.runtime/"venvs"/runtime.VENV_NAME; (target/"bin").mkdir(parents=True)
         self.runtime.chmod(0o755); (self.runtime/"venvs").chmod(0o755)
         (target/"bin/python").symlink_to(Path(sys.executable))
@@ -225,20 +293,18 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         launcher=target/"bin/gunicorn"; launcher.write_text(f"#!{stale}\n"); launcher.chmod(0o755)
         target.chmod(0o755); (target/"bin").chmod(0o755)
         run=lambda args,**kwargs: SimpleNamespace(stdout="")
-        report=runtime.recover_incomplete_venv(self.runtime,target,uid=os.getuid(),gid=os.getgid(),run=run)
-        self.assertEqual("legacy_renamed_bad_interpreter",report["recovery_kind"])
-        launcher.write_text("#!/some/other/missing/python\n")
-        with self.assertRaisesRegex(ValueError,"not a verified incomplete"):
+        with self.assertRaisesRegex(ValueError,"incomplete marker"):
             runtime.recover_incomplete_venv(self.runtime,target,uid=os.getuid(),gid=os.getgid(),run=run)
 
     def test_recovery_rejects_unknown_target_mount_and_unsafe_acl(self):
         target=self.runtime/"venvs"/runtime.VENV_NAME; target.mkdir(parents=True)
         self.runtime.chmod(0o755); target.parent.chmod(0o755); target.chmod(0o755)
-        with self.assertRaisesRegex(ValueError,"legacy Gunicorn launcher"):
+        with self.assertRaisesRegex(ValueError,"incomplete marker"):
             runtime.recover_incomplete_venv(self.runtime,target,uid=os.getuid(),gid=os.getgid(),
                                             run=lambda args,**kwargs: SimpleNamespace(stdout=""))
         marker=target/runtime.VENV_MARKER
-        marker.write_text('{"purpose":"nocturne-runtime-venv-v1","target":"'+str(target)+'"}\n')
+        marker.write_text(json.dumps({"purpose": runtime.VENV_PURPOSE,
+                                      "target": str(target)}) + "\n")
         marker.chmod(0o600)
         with patch("immutable_runtime_release.os.path.ismount",side_effect=lambda path: Path(path)==target),\
                 self.assertRaisesRegex(ValueError,"mount"):
@@ -248,6 +314,28 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             return SimpleNamespace(stdout="user::rwx\nuser:other:r-x\ngroup::r-x\nother::---\n")
         with self.assertRaisesRegex(ValueError,"ACL"):
             runtime.recover_incomplete_venv(self.runtime,target,uid=os.getuid(),gid=os.getgid(),run=named_acl)
+
+    def test_incomplete_runtime_quarantine_reservation_is_collision_safe(self):
+        target=self.runtime/"venvs"/runtime.VENV_NAME
+        target.mkdir(parents=True)
+        self.runtime.chmod(0o755); target.parent.chmod(0o755); target.chmod(0o755)
+        marker=target/runtime.VENV_MARKER
+        marker.write_text(json.dumps({"purpose":runtime.VENV_PURPOSE,
+                                      "target":str(target)})+"\n")
+        marker.chmod(0o600)
+        quarantine=self.runtime/"quarantine/incomplete-venvs"
+        quarantine.mkdir(parents=True,mode=0o700)
+        (self.runtime/"quarantine").chmod(0o700); quarantine.chmod(0o700)
+        collision=quarantine/(runtime.VENV_NAME+"-collision")
+        collision.mkdir(mode=0o700)
+        run=lambda args,**kwargs: SimpleNamespace(stdout="")
+        identities=[SimpleNamespace(hex="collision"),SimpleNamespace(hex="unique")]
+        with patch("immutable_runtime_release.uuid4",side_effect=identities):
+            moved=runtime.recover_incomplete_venv(
+                self.runtime,target,apply=True,uid=os.getuid(),gid=os.getgid(),run=run)
+        self.assertEqual(quarantine/(runtime.VENV_NAME+"-unique")/"runtime",
+                         Path(moved["quarantine"]))
+        self.assertTrue(collision.is_dir())
 
     def test_prepare_failures_leave_no_release_and_rerun_succeeds(self):
         for phase in ("after_archive","after_manifest","before_release_activation"):
@@ -274,13 +362,23 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         return second
 
     def emoji_runtime_record(self, commit):
-        return {"pillow_version": "12.3.0",
+        return {"schema_version": 2,
+                "purpose": "nocturne-emoji-runtime-v2",
+                "pillow_version": "12.3.0",
+                "python_version": runtime.PYTHON_VERSION,
+                "soabi": runtime.PYTHON_SOABI,
+                "machine": runtime.PYTHON_MACHINE,
                 "wheel_sha256": runtime.EMOJI_WHEEL_SHA256,
                 "requirements_sha256": runtime.digest(
                     self.runtime/"releases"/commit/"dev/intake/emoji-sync-requirements.txt")}
 
     def core_runtime_record(self, commit):
-        return {"gunicorn_version": runtime.GUNICORN_VERSION,
+        return {"schema_version": 2,
+                "purpose": runtime.VENV_PURPOSE,
+                "gunicorn_version": runtime.GUNICORN_VERSION,
+                "python_version": runtime.PYTHON_VERSION,
+                "soabi": runtime.PYTHON_SOABI,
+                "machine": runtime.PYTHON_MACHINE,
                 "wheel_sha256": runtime.GUNICORN_WHEEL_SHA256,
                 "requirements_sha256": runtime.digest(
                     self.runtime/"releases"/commit/"dev/intake/runtime-requirements.lock")}
@@ -361,6 +459,34 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             record,self.runtime,self.systemd,apply=True,unit_uid=os.getuid(),unit_gid=os.getgid(),
             confirmed_services_stopped=True,service_state_verifier=self.service_evidence)
         self.assertTrue(repeated["already_restored"])
+
+    def test_rollback_restores_legacy_runtime_unit_paths_exactly(self):
+        second=self.two_releases()
+        for name in runtime.CORE_UNITS:
+            predecessor=self.runtime/"releases"/self.first/"deployment-units"/name
+            predecessor.chmod(0o644)
+            predecessor.write_text(predecessor.read_text().replace(
+                runtime.VENV_NAME, runtime.LEGACY_VENV_NAME))
+            target=self.systemd/name
+            target.write_text(target.read_text().replace(
+                runtime.VENV_NAME, runtime.LEGACY_VENV_NAME))
+        predecessor_manifest=self.runtime/"releases"/self.first/"RELEASE-MANIFEST.json"
+        predecessor_manifest.chmod(0o644)
+        runtime.build_manifest(self.runtime/"releases"/self.first,self.first)
+        runtime._make_read_only(self.runtime/"releases"/self.first,
+                                os.getuid(),os.getgid())
+        before={name:(self.systemd/name).read_bytes() for name in runtime.UNITS}
+        activated=self.activate(second)
+        runtime.rollback_activation(
+            activated["activation_record"],self.runtime,self.systemd,apply=True,
+            unit_uid=os.getuid(),unit_gid=os.getgid(),
+            confirmed_services_stopped=True,
+            service_state_verifier=self.service_evidence)
+        self.assertEqual(before,{name:(self.systemd/name).read_bytes()
+                                 for name in runtime.UNITS})
+        for name in runtime.CORE_UNITS:
+            self.assertIn(runtime.LEGACY_VENV_NAME,
+                          (self.systemd/name).read_text())
 
     def test_repeated_activation_is_idempotent_only_when_every_artifact_matches(self):
         second=self.two_releases(); self.activate(second)

@@ -11,6 +11,8 @@ import subprocess
 
 from immutable_runtime_release import verify_release, verify_release_ownership
 from deployment_trust import verify_checkout
+from runtime_identity import (GUNICORN_RUNTIME_NAME, LEGACY_GUNICORN_RUNTIME_NAME,
+                              PILLOW_RUNTIME_NAME)
 
 
 PURPOSE = "nocturne-runtime-ownership-migration-v1"
@@ -58,8 +60,9 @@ def inspect(runtime_root, commit=None):
     root = Path(runtime_root)
     paths = [root, *(root / name for name in CONTAINERS),
              root / "current", root / "venv",
-             root / "venvs/python3.14-gunicorn-26.2.0",
-             root / "venvs/emoji-python3.14-pillow-12.3.0"]
+             root / "venvs" / LEGACY_GUNICORN_RUNTIME_NAME,
+             root / "venvs" / GUNICORN_RUNTIME_NAME,
+             root / "venvs" / PILLOW_RUNTIME_NAME]
     if commit:
         paths += [root / "releases" / commit, root / "staged-units" / commit,
                   root / "staged-nginx" / commit]

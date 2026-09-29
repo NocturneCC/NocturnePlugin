@@ -217,6 +217,43 @@ def inspect(repo, runtime_root, commit, *, python=Path("/usr/bin/python3.14"),
             _unsafe(report, "release", release,
                     "verified root-owned immutable release for the exact commit", error)
 
+    legacy_target = root / "venvs" / runtime.LEGACY_VENV_NAME
+    selector = root / "venv"
+    legacy_relevant = False
+    if selector.exists() or selector.is_symlink():
+        if not selector.is_symlink():
+            _unsafe(report, "legacy_runtime_selector", selector,
+                    "absent or exact symlink to the immutable legacy runtime",
+                    _observed(selector))
+        else:
+            try:
+                expected_link = Path("venvs") / runtime.LEGACY_VENV_NAME
+                if selector.readlink() != expected_link:
+                    raise ValueError(f"unexpected selector target {selector.readlink()}")
+                if selector.resolve(strict=True) != legacy_target.resolve(strict=True):
+                    raise ValueError("selector resolution mismatch")
+                legacy_relevant = True
+            except Exception as error:
+                _unsafe(report, "legacy_runtime_selector", selector,
+                        "exact symlink to the immutable legacy runtime", error)
+    if legacy_target.exists() or legacy_target.is_symlink():
+        try:
+            record = runtime.validate_legacy_venv(
+                legacy_target, uid=uid, gid=gid, run=run)
+            report.add(
+                "prepared", "legacy_gunicorn_runtime", legacy_target,
+                "independently safe immutable predecessor runtime",
+                ("valid_predecessor legacy_record=true relevant_to_selector="
+                 f"{str(legacy_relevant).lower()} requirements_sha256="
+                 f"{record['requirements_sha256']}"),
+                "none")
+        except Exception as error:
+            _unsafe(report, "legacy_gunicorn_runtime", legacy_target,
+                    "independently safe predecessor retained for rollback", error)
+    elif legacy_relevant:
+        _unsafe(report, "legacy_gunicorn_runtime", legacy_target,
+                "selector target must exist and validate", "legacy runtime is absent")
+
     core_target = root / "venvs" / runtime.VENV_NAME
     if container_safe["venvs"] is False:
         pass

@@ -73,6 +73,76 @@ class ImmutableRuntimeCheckTest(unittest.TestCase):
         self.assertIn("status=not_prepared", rendered)
         self.assertIn("check_mode=read_only", rendered)
 
+    def test_safe_legacy_predecessor_does_not_collide_with_absent_new_runtime(self):
+        legacy = self.root / "venvs" / runtime.LEGACY_VENV_NAME
+        legacy.mkdir(parents=True)
+        (self.root / "venvs").chmod(0o755)
+        (self.root / "venv").symlink_to(
+            Path("venvs") / runtime.LEGACY_VENV_NAME)
+        before = self.tree_state()
+        with patch("immutable_runtime_check.verify_checkout"), \
+                patch("immutable_runtime_check.emoji_runtime.validate_host",
+                      return_value={"version": [3, 14]}), \
+                patch("immutable_runtime_check.runtime.validate_legacy_venv",
+                      return_value={"requirements_sha256":
+                                    runtime.LEGACY_GUNICORN_LOCK_SHA256}):
+            report = check.inspect(self.repo, self.root, COMMIT,
+                                   uid=os.getuid(), gid=os.getgid(), run=self.command_run)
+        self.assertEqual(before, self.tree_state())
+        self.assertEqual("not_prepared", report.state)
+        by_phase = {item["phase"]: item for item in report.diagnostics}
+        self.assertEqual("prepared", by_phase["legacy_gunicorn_runtime"]["classification"])
+        self.assertIn("valid_predecessor", by_phase["legacy_gunicorn_runtime"]["observed"])
+        self.assertEqual("not_prepared", by_phase["gunicorn_runtime"]["classification"])
+        self.assertEqual("absent", by_phase["gunicorn_runtime"]["observed"])
+        self.assertIn(runtime.VENV_NAME, by_phase["gunicorn_runtime"]["path"])
+
+    def test_corrupt_selected_legacy_predecessor_fails_closed_without_mutation(self):
+        legacy = self.root / "venvs" / runtime.LEGACY_VENV_NAME
+        legacy.mkdir(parents=True)
+        (self.root / "venvs").chmod(0o755)
+        (self.root / "venv").symlink_to(
+            Path("venvs") / runtime.LEGACY_VENV_NAME)
+        before = self.tree_state()
+        with patch("immutable_runtime_check.verify_checkout"), \
+                patch("immutable_runtime_check.emoji_runtime.validate_host",
+                      return_value={"version": [3, 14]}), \
+                patch("immutable_runtime_check.runtime.validate_legacy_venv",
+                      side_effect=ValueError("legacy launcher mismatch")):
+            report = check.inspect(self.repo, self.root, COMMIT,
+                                   uid=os.getuid(), gid=os.getgid(), run=self.command_run)
+        self.assertEqual(before, self.tree_state())
+        self.assertEqual("unsafe_blocking", report.state)
+        item = next(value for value in report.diagnostics
+                    if value["phase"] == "legacy_gunicorn_runtime")
+        self.assertIn("legacy launcher mismatch", item["observed"])
+
+    def test_legacy_and_current_lock_runtimes_can_coexist(self):
+        legacy = self.root / "venvs" / runtime.LEGACY_VENV_NAME
+        current = self.root / "venvs" / runtime.VENV_NAME
+        legacy.mkdir(parents=True)
+        current.mkdir()
+        (self.root / "venvs").chmod(0o755)
+        (self.root / "venv").symlink_to(
+            Path("venvs") / runtime.LEGACY_VENV_NAME)
+        before = self.tree_state()
+        with patch("immutable_runtime_check.verify_checkout"), \
+                patch("immutable_runtime_check.emoji_runtime.validate_host",
+                      return_value={"version": [3, 14]}), \
+                patch("immutable_runtime_check.runtime.validate_legacy_venv",
+                      return_value={"requirements_sha256":
+                                    runtime.LEGACY_GUNICORN_LOCK_SHA256}), \
+                patch("immutable_runtime_check.runtime.validate_venv",
+                      return_value={"requirements_sha256":
+                                    runtime.GUNICORN_LOCK_SHA256}):
+            report = check.inspect(self.repo, self.root, COMMIT,
+                                   uid=os.getuid(), gid=os.getgid(), run=self.command_run)
+        self.assertEqual(before, self.tree_state())
+        self.assertNotEqual("unsafe_blocking", report.state)
+        phases = [item["phase"] for item in report.diagnostics]
+        self.assertIn("legacy_gunicorn_runtime", phases)
+        self.assertNotIn("gunicorn_runtime", phases)
+
     def test_git_mismatch_is_unsafe_and_diagnostic(self):
         before = self.tree_state()
         with patch("immutable_runtime_check.verify_checkout",

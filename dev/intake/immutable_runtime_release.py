@@ -16,19 +16,22 @@ from derived_review_support import (_apply_metadata, _capture_safe_metadata,
                                     _verify_metadata)
 from deployment_trust import verify_checkout
 from emoji_route_support import candidate_site
+from runtime_identity import (
+    GUNICORN_LOCK_SHA256, GUNICORN_LOCK_TEXT, GUNICORN_RUNTIME_NAME,
+    GUNICORN_VERSION, GUNICORN_WHEEL_NAME, GUNICORN_WHEEL_SHA256,
+    LEGACY_GUNICORN_LOCK_SHA256, LEGACY_GUNICORN_RUNTIME_NAME,
+    PILLOW_LOCK_SHA256, PILLOW_RUNTIME_NAME,
+    PILLOW_VERSION, PILLOW_WHEEL_SHA256, PYTHON_MACHINE, PYTHON_SOABI,
+    PYTHON_VERSION,
+)
 
 PURPOSE = "nocturne-immutable-runtime-v1"
-VENV_PURPOSE = "nocturne-runtime-venv-v1"
-VENV_NAME = "python3.14-gunicorn-26.2.0"
+VENV_PURPOSE = "nocturne-runtime-venv-v2"
+LEGACY_VENV_PURPOSE = "nocturne-runtime-venv-v1"
+VENV_NAME = GUNICORN_RUNTIME_NAME
+LEGACY_VENV_NAME = LEGACY_GUNICORN_RUNTIME_NAME
 VENV_MARKER = "PREPARATION_INCOMPLETE"
 VENV_MANIFEST = "VENV-MANIFEST.json"
-GUNICORN_VERSION = "26.2.0"
-GUNICORN_WHEEL_NAME = "gunicorn-26.2.0-py3-none-any.whl"
-GUNICORN_WHEEL_SHA256 = "bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3"
-GUNICORN_LOCK_TEXT = (
-    "--only-binary=:all:\n"
-    "gunicorn==26.2.0 \\\n"
-    "    --hash=sha256:" + GUNICORN_WHEEL_SHA256 + "\n")
 CORE_UNITS = ("nocturne-plugin-writer.service", "nocturne-plugin-dev.service")
 EMOJI_UNITS = ("nocturne-plugin-emoji-sync.service",
                "nocturne-plugin-emoji-sync.timer")
@@ -37,8 +40,8 @@ UNIT_MANIFEST = "STAGED-UNITS-MANIFEST.json"
 ROUTE_MANIFEST = "STAGED-NGINX-MANIFEST.json"
 UNIT_STAGE_PURPOSE = "nocturne-commit-scoped-units-v1"
 ROUTE_STAGE_PURPOSE = "nocturne-commit-scoped-emoji-route-v1"
-EMOJI_VENV_NAME = "emoji-python3.14-pillow-12.3.0"
-EMOJI_WHEEL_SHA256 = "251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b"
+EMOJI_VENV_NAME = PILLOW_RUNTIME_NAME
+EMOJI_WHEEL_SHA256 = PILLOW_WHEEL_SHA256
 EMOJI_ROUTE = "nginx-emojis-location.conf"
 ACTIVATION_CONFIRMATION = (
     "intake, writer, emoji synchronizer, emoji timer, and Nginx reload activity "
@@ -253,14 +256,76 @@ def _validate_venv_tree(venv, *, uid=0, gid=0, approved_python=None, run=command
             raise ValueError("runtime venv contains an unsupported file type")
 
 
-def _venv_manifest(venv, python, lock, wheel):
+def _runtime_probe(interpreter, run=command):
+    script = (
+        "import importlib.metadata as m,json,pathlib,platform,sys,sysconfig;"
+        "packages=sorted([[(d.metadata.get('Name') or '').lower().replace('_','-'),d.version] "
+        "for d in m.distributions()]);"
+        "print(json.dumps({'version':[sys.version_info.major,sys.version_info.minor],"
+        "'machine':platform.machine(),'soabi':sysconfig.get_config_var('SOABI'),"
+        "'executable':str(pathlib.Path(sys.executable).resolve()),"
+        "'prefix':str(pathlib.Path(sys.prefix).resolve()),"
+        "'packages':packages},sort_keys=True))")
+    result = run([str(interpreter), "-B", "-c", script],
+                 stdout=subprocess.PIPE, text=True)
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("runtime identity probe returned invalid data") from error
+    return value
+
+
+def _validate_runtime_probe(value, venv, python):
+    expected_keys = {"version", "machine", "soabi", "executable", "prefix", "packages"}
+    packages = value.get("packages")
+    if (set(value) != expected_keys or value.get("version") != PYTHON_VERSION
+            or value.get("machine") != PYTHON_MACHINE
+            or value.get("soabi") != PYTHON_SOABI
+            or value.get("executable") != str(Path(python).resolve(strict=True))
+            or value.get("prefix") != str(Path(venv).resolve(strict=True))
+            or not isinstance(packages, list)
+            or len(packages) != 2
+            or packages[0] != ["gunicorn", GUNICORN_VERSION]
+            or not isinstance(packages[1], list)
+            or len(packages[1]) != 2
+            or packages[1][0] != "pip"
+            or not isinstance(packages[1][1], str)
+            or not packages[1][1]):
+        raise ValueError("runtime Python ABI, path, or installed package set mismatch")
+    return value
+
+
+def _validate_runtime_launchers(venv, python):
+    venv, python = Path(venv), Path(python).resolve(strict=True)
+    pip = venv / "bin/pip"
+    if not pip.is_file() or pip.is_symlink() or pip.stat().st_nlink != 1:
+        raise ValueError("runtime pip launcher is missing or unsafe")
+    for launcher in (venv / "bin").iterdir():
+        if launcher.name in {"python", "python3", "python3.14"}:
+            if not launcher.is_symlink() or launcher.resolve(strict=True) != python:
+                raise ValueError("runtime interpreter launcher is not exact")
+        elif launcher.is_file() and not launcher.is_symlink() and os.access(launcher, os.X_OK):
+            with launcher.open("rb") as source:
+                first = source.readline(4096)
+            allowed = {("#!" + str(venv / "bin/python") + "\n").encode(),
+                       ("#!" + str(venv / "bin/python3.14") + "\n").encode()}
+            if first not in allowed:
+                raise ValueError("runtime launcher does not name its final venv")
+
+
+def _venv_manifest(venv, python, lock, wheel, probe):
     return {
+        "schema_version": 2,
         "purpose": VENV_PURPOSE,
         "target": str(Path(venv)),
         "python": str(Path(python).resolve(strict=True)),
+        "python_version": PYTHON_VERSION,
+        "soabi": PYTHON_SOABI,
+        "machine": PYTHON_MACHINE,
         "requirements_sha256": digest(lock),
         "wheel_sha256": digest(wheel),
         "gunicorn_version": GUNICORN_VERSION,
+        "installed_packages": probe["packages"],
     }
 
 
@@ -272,12 +337,7 @@ def _validate_venv_runtime(venv, release, python, lock, wheel, *, uid=0, gid=0,
     interpreter = venv / "bin/python"
     if not interpreter.exists() or not os.access(interpreter, os.X_OK):
         raise ValueError("runtime venv interpreter is missing")
-    probe = run([str(interpreter), "-B", "-c",
-                 "import pathlib,sys;print(pathlib.Path(sys.executable).resolve());print(pathlib.Path(sys.prefix).resolve())"],
-                stdout=subprocess.PIPE, text=True)
-    lines = probe.stdout.splitlines()
-    if lines != [str(Path(python).resolve(strict=True)), str(venv.resolve(strict=True))]:
-        raise ValueError("runtime venv interpreter path mismatch")
+    probe = _validate_runtime_probe(_runtime_probe(interpreter, run), venv, python)
     run([str(interpreter), "-B", "-m", "pip", "check"], stdout=subprocess.PIPE, text=True)
     version = run([str(interpreter), "-B", "-m", "gunicorn", "--version"],
                   stdout=subprocess.PIPE, text=True).stdout.strip()
@@ -287,7 +347,8 @@ def _validate_venv_runtime(venv, release, python, lock, wheel, *, uid=0, gid=0,
     environment.update({"PYTHONPATH": str(release / "dev/intake"), "PYTHONDONTWRITEBYTECODE": "1"})
     run([str(interpreter), "-B", "-c", "import intake; import pending_writer"],
         cwd=release / "dev/intake", env=environment, stdout=subprocess.PIPE, text=True)
-    expected = _venv_manifest(venv, python, lock, wheel)
+    _validate_runtime_launchers(venv, python)
+    expected = _venv_manifest(venv, python, lock, wheel, probe)
     manifest_path = venv / VENV_MANIFEST
     _regular_file(manifest_path, "runtime venv manifest")
     if json.loads(manifest_path.read_text()) != expected:
@@ -353,7 +414,8 @@ def prepare_venv(runtime_root, release, python, lock, wheel, *, apply=False,
         os.chown(path, uid, gid, follow_symlinks=False)
         if not path.is_symlink(): path.chmod((path.stat().st_mode & 0o777) & ~0o022)
     manifest = target / VENV_MANIFEST
-    _write_json_fsync(manifest, _venv_manifest(target, python, lock, wheel),
+    probe = _validate_runtime_probe(_runtime_probe(interpreter, run), target, python)
+    _write_json_fsync(manifest, _venv_manifest(target, python, lock, wheel, probe),
                       0o644, uid, gid)
     _validate_venv_runtime(target, release, python, lock, wheel, uid=uid, gid=gid,
                            run=run, allow_incomplete=True)
@@ -378,28 +440,15 @@ def recover_incomplete_venv(runtime_root, target, *, apply=False, uid=0, gid=0, 
     completion = target / VENV_MANIFEST
     _validate_venv_tree(target, uid=uid, gid=gid,
                         approved_python={Path("/usr/bin/python3.14")}, run=run)
-    recovery_kind = "marked"
-    if marker.exists() or marker.is_symlink():
-        marker_metadata = _regular_file(marker, "incomplete marker")
-        if (marker_metadata.st_uid, marker_metadata.st_gid,
-                stat.S_IMODE(marker_metadata.st_mode)) != (uid, gid, 0o600):
-            raise ValueError("incomplete marker metadata mismatch")
-        expected_marker = {"purpose": VENV_PURPOSE, "target": str(target)}
-        if json.loads(marker.read_text()) != expected_marker:
-            raise ValueError("incomplete marker contents mismatch")
-    else:
-        # One narrowly identified legacy state was produced by the original
-        # preparation command: venv was renamed and its Gunicorn shebang still
-        # names the now-absent .venv-<commit>.<pid> staging directory.
-        launcher = target / "bin/gunicorn"
-        _regular_file(launcher, "legacy Gunicorn launcher")
-        first_line = launcher.read_text(errors="strict").splitlines()[0]
-        pattern = (r"^#!" + re.escape(str(target.parent)) +
-                   r"/\.venv-[0-9a-f]{40}\.[0-9]+/bin/python$")
-        embedded = Path(first_line[2:]) if re.fullmatch(pattern, first_line) else None
-        if embedded is None or embedded.exists() or completion.exists():
-            raise ValueError("existing runtime venv is not a verified incomplete preparation")
-        recovery_kind = "legacy_renamed_bad_interpreter"
+    if not marker.exists() and not marker.is_symlink():
+        raise ValueError("verified incomplete marker is required at the exact new runtime target")
+    marker_metadata = _regular_file(marker, "incomplete marker")
+    if (marker_metadata.st_uid, marker_metadata.st_gid,
+            stat.S_IMODE(marker_metadata.st_mode)) != (uid, gid, 0o600):
+        raise ValueError("incomplete marker metadata mismatch")
+    expected_marker = {"purpose": VENV_PURPOSE, "target": str(target)}
+    if json.loads(marker.read_text()) != expected_marker:
+        raise ValueError("incomplete marker contents mismatch")
     if completion.exists() or completion.is_symlink():
         _regular_file(completion, "incomplete venv manifest")
         value = json.loads(completion.read_text())
@@ -408,7 +457,7 @@ def recover_incomplete_venv(runtime_root, target, *, apply=False, uid=0, gid=0, 
     quarantine_parent = runtime_root / "quarantine"
     quarantine = quarantine_parent / "incomplete-venvs"
     report = {"dry_run": not apply, "target": str(target), "state": "verified_incomplete",
-              "recovery_kind": recovery_kind}
+              "recovery_kind": "marked_content_addressed_target"}
     if not apply: return report
     for directory in (quarantine_parent, quarantine):
         if directory.exists() or directory.is_symlink():
@@ -441,25 +490,6 @@ def recover_incomplete_venv(runtime_root, target, *, apply=False, uid=0, gid=0, 
         reservation.rmdir()
         raise
     return {**report, "dry_run": False, "state": "quarantined", "quarantine": str(destination)}
-
-
-def select_venv(runtime_root, target, *, apply=False):
-    runtime_root, target = Path(runtime_root), Path(target)
-    expected = runtime_root / "venvs" / VENV_NAME
-    if (target != expected or not target.is_dir() or target.is_symlink() or
-            (target / VENV_MARKER).exists()):
-        raise ValueError("only the completed versioned runtime venv may be selected")
-    link = runtime_root / "venv"
-    if link.is_symlink():
-        if link.resolve(strict=True) != target.resolve(strict=True):
-            raise ValueError("runtime venv selector points to another environment")
-        return {"dry_run": not apply, "state": "already_selected", "target": str(target)}
-    if link.exists(): raise ValueError("runtime venv selector is not a symlink")
-    if not apply: return {"dry_run": True, "state": "not_selected", "target": str(target)}
-    staged = runtime_root / (".venv-link-" + uuid4().hex)
-    staged.symlink_to(Path("venvs") / VENV_NAME)
-    os.replace(staged, link)
-    return {"dry_run": False, "state": "selected", "target": str(target)}
 
 
 def full_commit(repo, revision, run=command):
@@ -651,13 +681,25 @@ def stage_deployment(runtime_root, commit, *, apply=False, uid=0, gid=0):
     unit_manifest = _artifact_manifest(UNIT_STAGE_PURPOSE, commit, release,
                                        unit_artifacts, uid, gid)
     unit_manifest["emoji_runtime"] = {
+        "schema_version": 2,
+        "purpose": "nocturne-emoji-runtime-v2",
         "path": str(runtime_root / "venvs" / EMOJI_VENV_NAME),
-        "pillow": "12.3.0", "wheel_sha256": EMOJI_WHEEL_SHA256,
+        "pillow": PILLOW_VERSION,
+        "python_version": PYTHON_VERSION,
+        "soabi": PYTHON_SOABI,
+        "machine": PYTHON_MACHINE,
+        "wheel_sha256": EMOJI_WHEEL_SHA256,
         "requirements_sha256": digest(
             release / "dev/intake/emoji-sync-requirements.txt")}
     unit_manifest["core_runtime"] = {
+        "schema_version": 2,
+        "purpose": VENV_PURPOSE,
         "path": str(runtime_root / "venvs" / VENV_NAME),
-        "gunicorn": GUNICORN_VERSION, "wheel_sha256": GUNICORN_WHEEL_SHA256,
+        "gunicorn": GUNICORN_VERSION,
+        "python_version": PYTHON_VERSION,
+        "soabi": PYTHON_SOABI,
+        "machine": PYTHON_MACHINE,
+        "wheel_sha256": GUNICORN_WHEEL_SHA256,
         "requirements_sha256": digest(
             release / "dev/intake/runtime-requirements.lock")}
     route_manifest = _artifact_manifest(ROUTE_STAGE_PURPOSE, commit, release,
@@ -688,6 +730,11 @@ def build_manifest(release, commit):
     value = {"purpose": PURPOSE, "commit": commit, "files": files,
              "runtime_venv": {"path": "/srv/nocturne-plugin/venvs/" + VENV_NAME,
                               "requirements": "dev/intake/runtime-requirements.lock",
+                              "requirements_sha256": GUNICORN_LOCK_SHA256,
+                              "wheel_sha256": GUNICORN_WHEEL_SHA256,
+                              "python_version": PYTHON_VERSION,
+                              "soabi": PYTHON_SOABI,
+                              "machine": PYTHON_MACHINE,
                               "copied_virtualenv_allowed": False}}
     target = release / "RELEASE-MANIFEST.json"
     target.write_text(json.dumps(value, sort_keys=True) + "\n")
@@ -788,6 +835,8 @@ def prepare(repo, runtime_root, revision="HEAD", *, apply=False, uid=0, gid=0, r
 
 def validate_venv(venv, run=command, *, uid=0, gid=0):
     venv = Path(venv)
+    if venv.name != VENV_NAME:
+        raise ValueError("runtime venv does not match the requested lock identity")
     _validate_venv_tree(venv, uid=uid, gid=gid,
                         approved_python={Path("/usr/bin/python3.14")}, run=run)
     if (venv / VENV_MARKER).exists() or (venv / VENV_MARKER).is_symlink():
@@ -795,33 +844,69 @@ def validate_venv(venv, run=command, *, uid=0, gid=0):
     python = venv / "bin/python"
     if not python.is_file() or not os.access(python, os.X_OK):
         raise ValueError("reproducible runtime venv is missing")
+    probe = _validate_runtime_probe(
+        _runtime_probe(python, run), venv, Path("/usr/bin/python3.14"))
     version = run([str(python), "-B", "-m", "gunicorn", "--version"],
                   stdout=subprocess.PIPE, text=True).stdout.strip()
     if version != f"gunicorn (version {GUNICORN_VERSION})": raise ValueError("runtime gunicorn version mismatch")
     run([str(python), "-B", "-m", "pip", "check"], stdout=subprocess.PIPE, text=True)
-    for launcher in (venv / "bin").iterdir():
-        if launcher.name in {"python", "python3", "python3.14"}:
-            if (not launcher.is_symlink()
-                    or launcher.resolve(strict=True) != Path("/usr/bin/python3.14")):
-                raise ValueError("runtime interpreter launcher is not exact")
-        elif launcher.is_file() and not launcher.is_symlink() and os.access(launcher, os.X_OK):
-            with launcher.open("rb") as source:
-                first = source.readline(4096)
-            allowed = {("#!" + str(venv / "bin/python") + "\n").encode(),
-                       ("#!" + str(venv / "bin/python3.14") + "\n").encode()}
-            if first not in allowed:
-                raise ValueError("runtime launcher does not name the final venv")
+    _validate_runtime_launchers(venv, Path("/usr/bin/python3.14"))
     manifest = venv / VENV_MANIFEST
     if (not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_nlink != 1):
         raise ValueError("runtime venv manifest is missing or unsafe")
     value = json.loads(manifest.read_text())
-    if (set(value) != {"purpose", "target", "python", "requirements_sha256",
-                       "wheel_sha256", "gunicorn_version"}
+    if (set(value) != {"schema_version", "purpose", "target", "python",
+                       "python_version", "soabi", "machine", "requirements_sha256",
+                       "wheel_sha256", "gunicorn_version", "installed_packages"}
+            or value.get("schema_version") != 2
             or value.get("purpose") != VENV_PURPOSE or value.get("target") != str(venv)
             or value.get("gunicorn_version") != GUNICORN_VERSION
             or value.get("python") != "/usr/bin/python3.14"
-            or value.get("wheel_sha256") != GUNICORN_WHEEL_SHA256):
+            or value.get("python_version") != PYTHON_VERSION
+            or value.get("soabi") != PYTHON_SOABI
+            or value.get("machine") != PYTHON_MACHINE
+            or value.get("requirements_sha256") != GUNICORN_LOCK_SHA256
+            or value.get("wheel_sha256") != GUNICORN_WHEEL_SHA256
+            or value.get("installed_packages") != probe["packages"]):
         raise ValueError("runtime venv manifest mismatch")
+    return value
+
+
+def validate_legacy_venv(venv, run=command, *, uid=0, gid=0):
+    """Validate the immutable predecessor without adopting it into the new identity."""
+    venv = Path(venv)
+    if venv.name != LEGACY_VENV_NAME:
+        raise ValueError("legacy runtime path is not exact")
+    _validate_venv_tree(venv, uid=uid, gid=gid,
+                        approved_python={Path("/usr/bin/python3.14")}, run=run)
+    if (venv / VENV_MARKER).exists() or (venv / VENV_MARKER).is_symlink():
+        raise ValueError("legacy runtime is incomplete")
+    python = venv / "bin/python"
+    if not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("legacy runtime interpreter is missing")
+    probe = _validate_runtime_probe(
+        _runtime_probe(python, run), venv, Path("/usr/bin/python3.14"))
+    version = run([str(python), "-B", "-m", "gunicorn", "--version"],
+                  stdout=subprocess.PIPE, text=True).stdout.strip()
+    if version != f"gunicorn (version {GUNICORN_VERSION})":
+        raise ValueError("legacy runtime Gunicorn version mismatch")
+    run([str(python), "-B", "-m", "pip", "check"],
+        stdout=subprocess.PIPE, text=True)
+    _validate_runtime_launchers(venv, Path("/usr/bin/python3.14"))
+    manifest = venv / VENV_MANIFEST
+    if (not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_nlink != 1):
+        raise ValueError("legacy runtime manifest is missing or unsafe")
+    value = json.loads(manifest.read_text())
+    if (set(value) != {"purpose", "target", "python", "requirements_sha256",
+                       "wheel_sha256", "gunicorn_version"}
+            or value.get("purpose") != LEGACY_VENV_PURPOSE
+            or value.get("target") != str(venv)
+            or value.get("python") != "/usr/bin/python3.14"
+            or value.get("gunicorn_version") != GUNICORN_VERSION
+            or value.get("wheel_sha256") != GUNICORN_WHEEL_SHA256
+            or value.get("requirements_sha256") != LEGACY_GUNICORN_LOCK_SHA256
+            or probe["packages"][0] != ["gunicorn", GUNICORN_VERSION]):
+        raise ValueError("legacy runtime dependency record mismatch")
     return value
 
 
@@ -1049,16 +1134,26 @@ def activate(runtime_root, systemd, commit, *, nginx_target=None, apply=False,
         raise ValueError("staged unit set is incomplete")
     runtime_requirement = staged["units"].get("emoji_runtime")
     if (not isinstance(runtime_requirement, dict)
+            or runtime_requirement.get("schema_version") != 2
+            or runtime_requirement.get("purpose") != emoji_record.get("purpose")
             or runtime_requirement.get("path") != str(emoji_venv)
             or runtime_requirement.get("pillow") != emoji_record.get("pillow_version")
+            or runtime_requirement.get("python_version") != emoji_record.get("python_version")
+            or runtime_requirement.get("soabi") != emoji_record.get("soabi")
+            or runtime_requirement.get("machine") != emoji_record.get("machine")
             or runtime_requirement.get("wheel_sha256") != emoji_record.get("wheel_sha256")
             or runtime_requirement.get("requirements_sha256") !=
                 emoji_record.get("requirements_sha256")):
         raise ValueError("emoji runtime does not match staged dependency record")
     core_requirement = staged["units"].get("core_runtime")
     if (not isinstance(core_requirement, dict)
+            or core_requirement.get("schema_version") != 2
+            or core_requirement.get("purpose") != core_record.get("purpose")
             or core_requirement.get("path") != str(venv)
             or core_requirement.get("gunicorn") != core_record.get("gunicorn_version")
+            or core_requirement.get("python_version") != core_record.get("python_version")
+            or core_requirement.get("soabi") != core_record.get("soabi")
+            or core_requirement.get("machine") != core_record.get("machine")
             or core_requirement.get("wheel_sha256") != core_record.get("wheel_sha256")
             or core_requirement.get("requirements_sha256") !=
                 core_record.get("requirements_sha256")):

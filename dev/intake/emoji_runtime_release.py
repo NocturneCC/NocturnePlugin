@@ -15,23 +15,24 @@ from immutable_runtime_release import (_safe_acl, _safe_directory_node,
                                        _validate_venv_tree, _write_json_fsync,
                                        command, digest, validate_locked_wheel)
 from deployment_trust import verify_checkout
+from runtime_identity import (
+    PILLOW_LOCK_SHA256, PILLOW_LOCK_TEXT, PILLOW_RUNTIME_NAME,
+    PILLOW_VERSION, PILLOW_WHEEL_NAME, PILLOW_WHEEL_SHA256,
+    PYTHON_MACHINE, PYTHON_SOABI, PYTHON_VERSION,
+)
 
 
-PURPOSE = "nocturne-emoji-runtime-v1"
-TARGET_NAME = "emoji-python3.14-pillow-12.3.0"
+PURPOSE = "nocturne-emoji-runtime-v2"
+TARGET_NAME = PILLOW_RUNTIME_NAME
 MARKER = "PREPARATION_INCOMPLETE"
 MANIFEST = "EMOJI-RUNTIME-MANIFEST.json"
-PILLOW_VERSION = "12.3.0"
-PYTHON_VERSION = [3, 14]
-MACHINE = "x86_64"
-SOABI = "cpython-314-x86_64-linux-gnu"
+MACHINE = PYTHON_MACHINE
+SOABI = PYTHON_SOABI
 MIN_GLIBC = (2, 27)
-WHEEL_NAME = "pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
-WHEEL_SHA256 = "251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b"
-REQUIREMENTS_TEXT = (
-    "--only-binary=:all:\n"
-    "Pillow==12.3.0 \\\n"
-    "    --hash=sha256:" + WHEEL_SHA256 + "\n")
+WHEEL_NAME = PILLOW_WHEEL_NAME
+WHEEL_SHA256 = PILLOW_WHEEL_SHA256
+REQUIREMENTS_TEXT = PILLOW_LOCK_TEXT
+REQUIREMENTS_SHA256 = PILLOW_LOCK_SHA256
 
 
 def _probe(python, run=command):
@@ -79,7 +80,7 @@ def validate_inputs(requirements, wheel, *, uid=0, gid=0, run=command):
 
 
 def dependency_record(target, host, python, requirements, wheel):
-    return {"purpose": PURPOSE, "target": str(Path(target)),
+    return {"schema_version": 2, "purpose": PURPOSE, "target": str(Path(target)),
             "python": str(Path(python).resolve(strict=True)),
             "python_version": PYTHON_VERSION, "soabi": host["soabi"],
             "machine": host["machine"], "glibc": host["glibc"],
@@ -114,15 +115,17 @@ def validate_runtime(target, *, uid=0, gid=0, approved_python=None, run=command,
     if not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_nlink != 1:
         raise ValueError("emoji runtime dependency record is missing or unsafe")
     value = json.loads(manifest.read_text())
-    expected_keys = {"purpose", "target", "python", "python_version", "soabi",
+    expected_keys = {"schema_version", "purpose", "target", "python", "python_version", "soabi",
                      "machine", "glibc", "requirements_sha256", "wheel",
                      "wheel_sha256", "pillow_version", "copied_virtualenv_allowed"}
-    if (set(value) != expected_keys or value.get("purpose") != PURPOSE
+    if (set(value) != expected_keys or value.get("schema_version") != 2
+            or value.get("purpose") != PURPOSE
             or value.get("target") != str(target)
             or value.get("python") != "/usr/bin/python3.14"
             or value.get("python_version") != PYTHON_VERSION
             or value.get("soabi") != SOABI or value.get("machine") != MACHINE
             or _glibc_tuple(value.get("glibc")) < MIN_GLIBC
+            or value.get("requirements_sha256") != REQUIREMENTS_SHA256
             or value.get("wheel") != WHEEL_NAME
             or value.get("wheel_sha256") != WHEEL_SHA256
             or value.get("pillow_version") != PILLOW_VERSION
