@@ -12,7 +12,10 @@ from uuid import uuid4
 
 from derived_review_support import (_apply_metadata, _capture_safe_metadata,
                                     _verify_metadata)
+from deployment_trust import verify_checkout
 from immutable_runtime_release import (EMOJI_UNITS, digest,
+                                       verify_applied_activation,
+                                       verify_inactive_services,
                                        verify_staged_deployment)
 
 
@@ -20,9 +23,9 @@ PURPOSE = "nocturne_plugin_emoji_systemd_units_v1"
 UNITS = EMOJI_UNITS
 INTAKE_UNIT = "nocturne-plugin-dev.service"
 NEW_METADATA = {"uid": 0, "gid": 0, "mode": 0o644,
-                "acl": "user::rw-\ngroup::r--\nother::r--\n"}
-STOP_CONFIRMATION = ("nocturne-plugin-emoji-sync.service and "
-                     "nocturne-plugin-emoji-sync.timer must be stopped for apply or rollback")
+                "acl": "user::rw-\ngroup::r--\nother::r--\n\n"}
+STOP_CONFIRMATION = ("intake, writer, emoji synchronizer, and emoji timer must all be "
+                     "inactive for apply or rollback")
 
 
 def _digest(data):
@@ -46,12 +49,17 @@ def _validate_units(paths):
 
 def install(target_dir=Path("/etc/systemd/system"), runtime_root=Path("/srv/nocturne-plugin"),
             commit=None, backup_root=Path("/etc/nocturne-plugin-backups"), *, apply=False,
-            confirmed_services_stopped=False, validate=_validate_units):
+            confirmed_services_stopped=False, validate=_validate_units,
+            activation_record=None, service_state_verifier=verify_inactive_services):
     target_dir = Path(target_dir)
     runtime_root = Path(runtime_root)
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("exact staged release commit is required")
+    if activation_record is None:
+        raise ValueError("matching applied activation record is required")
     verify_staged_deployment(runtime_root, commit)
+    verify_applied_activation(activation_record, runtime_root, target_dir, commit,
+                              allow_unit_drift=UNITS)
     source_dir = runtime_root / "staged-units" / commit
     backup_root = Path(backup_root)
     if not target_dir.is_dir() or target_dir.is_symlink() \
@@ -67,6 +75,7 @@ def install(target_dir=Path("/etc/systemd/system"), runtime_root=Path("/srv/noct
             or digest(active_intake) != digest(staged_intake)):
         raise ValueError("active intake is not the matching generated immutable unit")
     validate([source_dir / name for name in UNITS])
+    services = service_state_verifier()
     entries = []
     for name in UNITS:
         target = target_dir / name
@@ -85,6 +94,8 @@ def install(target_dir=Path("/etc/systemd/system"), runtime_root=Path("/srv/noct
         return result
     if not confirmed_services_stopped:
         raise ValueError(STOP_CONFIRMATION)
+    if service_state_verifier() != services:
+        raise ValueError("service state changed after emoji-unit repair preflight")
 
     backup = backup_root / ("plugin-emoji-units-" + uuid4().hex[:8])
     backup.mkdir(mode=0o700)
@@ -169,7 +180,8 @@ def _restore(entries, backup):
 
 def rollback(backup, *, runtime_root=Path("/srv/nocturne-plugin"), commit=None,
              target_dir=Path("/etc/systemd/system"), confirmed_services_stopped=False,
-             validate=_validate_units):
+             validate=_validate_units, activation_record=None,
+             service_state_verifier=verify_inactive_services):
     if not confirmed_services_stopped:
         raise ValueError(STOP_CONFIRMATION)
     backup = Path(backup)
@@ -181,7 +193,14 @@ def rollback(backup, *, runtime_root=Path("/srv/nocturne-plugin"), commit=None,
     commit = commit or manifest.get("commit")
     if commit != manifest.get("commit"):
         raise ValueError("unit rollback commit mismatch")
+    if activation_record is None:
+        raise ValueError("matching applied activation record is required")
     verify_staged_deployment(runtime_root, commit)
+    verify_applied_activation(activation_record, runtime_root, target_dir, commit,
+                              allow_unit_drift=UNITS)
+    services = service_state_verifier()
+    if service_state_verifier() != services:
+        raise ValueError("service state changed after emoji-unit rollback preflight")
     staged_units = Path(runtime_root) / "staged-units" / commit
     if digest(staged_units / "STAGED-UNITS-MANIFEST.json") != manifest.get("staged_manifest_sha256"):
         raise ValueError("unit rollback staged manifest changed")
@@ -240,15 +259,20 @@ def main():
     parser.add_argument("--rollback-backup")
     parser.add_argument("--confirm-services-stopped", action="store_true")
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--repo", default="/srv/projects/nocturne-plugin-intake")
     parser.add_argument("--runtime-root", default="/srv/nocturne-plugin")
+    parser.add_argument("--activation-record", required=True)
     args = parser.parse_args()
+    verify_checkout(args.repo, args.commit)
     if args.apply and args.rollback_backup:
         raise SystemExit("choose --apply or --rollback-backup")
     result = (rollback(args.rollback_backup, runtime_root=args.runtime_root,
                        commit=args.commit,
+                       activation_record=args.activation_record,
                        confirmed_services_stopped=args.confirm_services_stopped)
               if args.rollback_backup else install(runtime_root=args.runtime_root,
                   commit=args.commit, apply=args.apply,
+                  activation_record=args.activation_record,
                   confirmed_services_stopped=args.confirm_services_stopped))
     print(json.dumps(result, sort_keys=True))
     if not (args.apply or args.rollback_backup):

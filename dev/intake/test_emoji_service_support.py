@@ -31,39 +31,55 @@ class EmojiServiceSupportTest(unittest.TestCase):
         (self.targets / "nocturne-plugin-dev.service").write_text(self.intake)
         self.metadata = {"uid": 0, "gid": 0, "mode": 0o640,
                          "acl": "user::rw-\ngroup::r--\nother::---\n"}
+        self.activation_record=self.root/"activation-record"
+
+    def service_state(self): return {"fixture":"inactive"}
+
+    def install(self,*args,**kwargs):
+        kwargs.setdefault("activation_record",self.activation_record)
+        kwargs.setdefault("service_state_verifier",self.service_state)
+        return install(*args,**kwargs)
+
+    def rollback(self,*args,**kwargs):
+        kwargs.setdefault("activation_record",self.activation_record)
+        kwargs.setdefault("service_state_verifier",self.service_state)
+        return rollback(*args,**kwargs)
 
     def mocks(self):
         return (patch("emoji_service_support._capture_safe_metadata", return_value=self.metadata),
                 patch("emoji_service_support._apply_metadata"),
                 patch("emoji_service_support._verify_metadata"),
-                patch("emoji_service_support.verify_staged_deployment", return_value={}))
+                patch("emoji_service_support.verify_staged_deployment", return_value={}),
+                patch("emoji_service_support.verify_applied_activation", return_value={}))
 
     def test_dry_run_requires_explicit_stopped_process_confirmation_for_apply(self):
         validations = []
-        with patch("emoji_service_support.verify_staged_deployment", return_value={}):
-            dry = install(self.targets, self.runtime, self.commit, self.backups,
+        with patch("emoji_service_support.verify_staged_deployment", return_value={}), \
+                patch("emoji_service_support.verify_applied_activation",return_value={}):
+            dry = self.install(self.targets, self.runtime, self.commit, self.backups,
                           validate=lambda paths: validations.append(tuple(paths)))
         self.assertTrue(dry["dry_run"])
         self.assertEqual(STOP_CONFIRMATION, dry["required_stop_confirmation"])
-        with self.assertRaisesRegex(ValueError, "must be stopped"):
-            with patch("emoji_service_support.verify_staged_deployment", return_value={}):
-                install(self.targets, self.runtime, self.commit, self.backups, apply=True,
+        with self.assertRaisesRegex(ValueError, "must all be inactive"):
+            with patch("emoji_service_support.verify_staged_deployment", return_value={}), \
+                    patch("emoji_service_support.verify_applied_activation",return_value={}):
+                self.install(self.targets, self.runtime, self.commit, self.backups, apply=True,
                         validate=lambda paths: None)
 
     def test_apply_idempotency_metadata_validation_and_exact_rollback(self):
-        first, second, third, fourth = self.mocks()
+        first, second, third, fourth, fifth = self.mocks()
         validations = []
-        with first, second as applied, third as verified, fourth:
-            result = install(self.targets, self.runtime, self.commit, self.backups, apply=True,
+        with first, second as applied, third as verified, fourth, fifth:
+            result = self.install(self.targets, self.runtime, self.commit, self.backups, apply=True,
                              confirmed_services_stopped=True,
                              validate=lambda paths: validations.append([Path(p).name for p in paths]))
             self.assertEqual("applied", result["state"])
             self.assertTrue(applied.called)
             self.assertTrue(verified.called)
-            self.assertEqual("already_applied", install(
+            self.assertEqual("already_applied", self.install(
                 self.targets, self.runtime, self.commit, self.backups,
                 validate=lambda paths: None)["state"])
-            restored = rollback(result["backup"], runtime_root=self.runtime,
+            restored = self.rollback(result["backup"], runtime_root=self.runtime,
                                 commit=self.commit, target_dir=self.targets,
                                 confirmed_services_stopped=True,
                                 validate=lambda paths: validations.append([Path(p).name for p in paths]))
@@ -73,28 +89,28 @@ class EmojiServiceSupportTest(unittest.TestCase):
         self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.timer").exists())
 
     def test_validation_failure_restores_old_and_removes_new_units(self):
-        first, second, third, fourth = self.mocks()
+        first, second, third, fourth, fifth = self.mocks()
         calls = []
         def validate(paths):
             calls.append(paths)
             if len(calls) == 2:
                 raise RuntimeError("unit validation failed")
-        with first, second, third, fourth:
+        with first, second, third, fourth, fifth:
             with self.assertRaisesRegex(RuntimeError, "unit validation"):
-                install(self.targets, self.runtime, self.commit, self.backups, apply=True,
+                self.install(self.targets, self.runtime, self.commit, self.backups, apply=True,
                         confirmed_services_stopped=True, validate=validate)
         self.assertEqual(self.intake, (self.targets / "nocturne-plugin-dev.service").read_text())
         self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.service").exists())
 
     def test_post_replace_metadata_failure_restores_every_target(self):
-        first, second, _third, fourth = self.mocks()
+        first, second, _third, fourth, fifth = self.mocks()
         def verify(path, _metadata):
             path = Path(path)
             if path.parent == self.targets and path.name == "nocturne-plugin-emoji-sync.service":
                 raise RuntimeError("fixture metadata failure")
-        with first, second, fourth, patch("emoji_service_support._verify_metadata", side_effect=verify):
+        with first, second, fourth, fifth, patch("emoji_service_support._verify_metadata", side_effect=verify):
             with self.assertRaisesRegex(RuntimeError, "fixture metadata failure"):
-                install(self.targets, self.runtime, self.commit, self.backups, apply=True,
+                self.install(self.targets, self.runtime, self.commit, self.backups, apply=True,
                         confirmed_services_stopped=True, validate=lambda paths: None)
         self.assertEqual(self.intake, (self.targets / "nocturne-plugin-dev.service").read_text())
         self.assertFalse((self.targets / "nocturne-plugin-emoji-sync.service").exists())
@@ -123,13 +139,13 @@ class EmojiServiceSupportTest(unittest.TestCase):
     def test_failed_rollback_restores_applied_units(self):
         for name in UNITS:
             (self.targets / name).write_text("old " + name + "\n")
-        first, second, third, fourth = self.mocks()
-        with first, second, third, fourth:
-            applied = install(self.targets, self.runtime, self.commit, self.backups, apply=True,
+        first, second, third, fourth, fifth = self.mocks()
+        with first, second, third, fourth, fifth:
+            applied = self.install(self.targets, self.runtime, self.commit, self.backups, apply=True,
                               confirmed_services_stopped=True, validate=lambda paths: None)
             expected = {name: (self.targets / name).read_bytes() for name in UNITS}
             with self.assertRaisesRegex(RuntimeError, "rollback unit validation"):
-                rollback(applied["backup"], runtime_root=self.runtime, commit=self.commit,
+                self.rollback(applied["backup"], runtime_root=self.runtime, commit=self.commit,
                          target_dir=self.targets, confirmed_services_stopped=True,
                          validate=lambda paths: (_ for _ in ()).throw(
                              RuntimeError("rollback unit validation")))
@@ -141,16 +157,18 @@ class EmojiServiceSupportTest(unittest.TestCase):
         linked = self.root / "linked-unit"
         __import__("os").link(target, linked)
         with patch("emoji_service_support.verify_staged_deployment", return_value={}), \
+                patch("emoji_service_support.verify_applied_activation",return_value={}), \
                 self.assertRaisesRegex(ValueError, "unsafe unit target"):
-            install(self.targets, self.runtime, self.commit, self.backups,
+            self.install(self.targets, self.runtime, self.commit, self.backups,
                     validate=lambda paths: None)
 
     def test_matching_immutable_intake_is_required_and_never_replaced(self):
         before=(self.targets/"nocturne-plugin-dev.service").read_bytes()
         (self.targets/"nocturne-plugin-dev.service").write_text("mutable checkout unit\n")
         with patch("emoji_service_support.verify_staged_deployment", return_value={}), \
+                patch("emoji_service_support.verify_applied_activation",return_value={}), \
                 self.assertRaisesRegex(ValueError,"matching generated immutable"):
-            install(self.targets,self.runtime,self.commit,self.backups,validate=lambda paths:None)
+            self.install(self.targets,self.runtime,self.commit,self.backups,validate=lambda paths:None)
         (self.targets/"nocturne-plugin-dev.service").write_bytes(before)
 
 

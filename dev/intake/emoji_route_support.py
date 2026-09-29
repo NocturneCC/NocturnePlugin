@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from derived_review_support import (_apply_metadata, _capture_safe_metadata,
                                     _verify_metadata)
+from deployment_trust import verify_checkout
 
 
 ANCHOR_ROUTE = "/api/plugin/v1/announcements"
@@ -42,14 +43,21 @@ def candidate_site(original, announcement_snippet, emoji_snippet):
 def install(target=Path("/etc/nginx/sites-enabled/nocturne"),
             runtime_root=Path("/srv/nocturne-plugin"), commit=None,
             backup_root=Path("/etc/nocturne-plugin-backups"), *, apply=False,
-            validate=lambda: subprocess.run(["/usr/sbin/nginx", "-t"], check=True, timeout=30)):
+            validate=lambda: subprocess.run(["/usr/sbin/nginx", "-t"], check=True, timeout=30),
+            activation_record=None, systemd_dir=Path("/etc/systemd/system")):
     target = Path(target)
     runtime_root = Path(runtime_root)
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("exact staged release commit is required")
+    if activation_record is None:
+        raise ValueError("matching applied activation record is required")
     from immutable_runtime_release import (EMOJI_ROUTE, ROUTE_MANIFEST, digest,
+                                           verify_applied_activation,
                                            verify_staged_deployment)
     verify_staged_deployment(runtime_root, commit)
+    verify_applied_activation(activation_record, runtime_root,
+                              systemd_dir, commit,
+                              allow_nginx_drift=True, nginx_target=target)
     release_dir = runtime_root / "releases" / commit / "dev/intake"
     source_dir = runtime_root / "staged-nginx" / commit
     backup_root = Path(backup_root)
@@ -131,7 +139,8 @@ def install(target=Path("/etc/nginx/sites-enabled/nocturne"),
 
 
 def rollback(backup, target=None, *, runtime_root=Path("/srv/nocturne-plugin"), commit=None,
-             validate=lambda: subprocess.run(["/usr/sbin/nginx", "-t"], check=True, timeout=30)):
+             validate=lambda: subprocess.run(["/usr/sbin/nginx", "-t"], check=True, timeout=30),
+             activation_record=None, systemd_dir=Path("/etc/systemd/system")):
     backup = Path(backup)
     if not backup.is_dir() or backup.is_symlink():
         raise ValueError("rollback backup must be an exact regular directory")
@@ -141,8 +150,16 @@ def rollback(backup, target=None, *, runtime_root=Path("/srv/nocturne-plugin"), 
     commit = commit or manifest.get("commit")
     if commit != manifest.get("commit"):
         raise ValueError("emoji route rollback commit mismatch")
-    from immutable_runtime_release import ROUTE_MANIFEST, digest, verify_staged_deployment
+    if activation_record is None:
+        raise ValueError("matching applied activation record is required")
+    from immutable_runtime_release import (ROUTE_MANIFEST, digest,
+                                           verify_applied_activation,
+                                           verify_staged_deployment)
     verify_staged_deployment(runtime_root, commit)
+    verify_applied_activation(activation_record, runtime_root,
+                              systemd_dir, commit,
+                              allow_nginx_drift=True,
+                              nginx_target=target or manifest.get("target"))
     route_stage = Path(runtime_root) / "staged-nginx" / commit
     if digest(route_stage / ROUTE_MANIFEST) != manifest.get("staged_manifest_sha256"):
         raise ValueError("emoji route staged manifest changed")
@@ -204,13 +221,21 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rollback-backup")
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--repo", default="/srv/projects/nocturne-plugin-intake")
     parser.add_argument("--runtime-root", default="/srv/nocturne-plugin")
+    parser.add_argument("--systemd-dir", default="/etc/systemd/system")
+    parser.add_argument("--activation-record", required=True)
     args = parser.parse_args()
+    verify_checkout(args.repo, args.commit)
     if args.apply and args.rollback_backup:
         raise SystemExit("choose --apply or --rollback-backup")
-    result = (rollback(args.rollback_backup, runtime_root=args.runtime_root, commit=args.commit)
+    result = (rollback(args.rollback_backup, runtime_root=args.runtime_root, commit=args.commit,
+                       systemd_dir=args.systemd_dir,
+                       activation_record=args.activation_record)
               if args.rollback_backup else install(runtime_root=args.runtime_root,
-                                                    commit=args.commit, apply=args.apply))
+                                                    commit=args.commit, apply=args.apply,
+                                                    systemd_dir=args.systemd_dir,
+                                                    activation_record=args.activation_record))
     print(json.dumps(result, sort_keys=True))
     if not (args.apply or args.rollback_backup):
         print("Dry run only; no Nginx file or service was changed.")

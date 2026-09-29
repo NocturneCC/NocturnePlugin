@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         source=Path(__file__).parent
         intake=self.repo/"dev/intake"; intake.mkdir(parents=True)
         for name in runtime.UNITS: shutil.copyfile(source/name,intake/name)
-        (intake/"runtime-requirements.txt").write_text("gunicorn==26.2.0\n")
+        (intake/"runtime-requirements.lock").write_text(runtime.GUNICORN_LOCK_TEXT)
         shutil.copyfile(source/"emoji-sync-requirements.txt",
                         intake/"emoji-sync-requirements.txt")
         for name in ("nginx-announcements-location.conf", "nginx-emojis-location.conf"):
@@ -28,7 +29,6 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         (self.repo/"payload.py").write_text("committed = True\n")
         self.commit("first")
         self.first=runtime.full_commit(self.repo,"HEAD")
-        (self.repo/"payload.py").write_text("committed = False\n")
         self.nginx=self.root/"nocturne"
         announcement=(intake/"nginx-announcements-location.conf").read_text()
         installed="\n".join("    "+line if line else "" for line in announcement.strip().splitlines())+"\n"
@@ -69,10 +69,13 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         for name in runtime.UNITS:
             self.assertNotIn("/srv/projects/nocturne-plugin-intake",
                              (release/"deployment-units"/name).read_text())
-        self.assertIn("BindReadOnlyPaths=/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",units)
+        self.assertIn("BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",units)
+        self.assertIn("InaccessiblePaths=/var/lib/nocturne-plugin-emojis",units)
+        self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/emoji-sync.json",units)
+        self.assertIn("InaccessiblePaths=/etc/nocturne-plugin/credentials",units)
         self.assertEqual([
             "BindReadOnlyPaths=/srv/projects/nocturne-plugin-announcements-public:/run/nocturne-plugin-announcements",
-            "BindReadOnlyPaths=/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",
+            "BindReadOnlyPaths=-/var/lib/nocturne-plugin-emojis/public:/run/nocturne-plugin-emojis",
         ], [line for line in units.splitlines() if line.startswith("BindReadOnlyPaths=")])
         self.assertNotIn("discord-token",units)
         self.assertNotIn("emoji-sync-config",units)
@@ -83,22 +86,54 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             else:
                 self.assertNotIn("LoadCredential=",generated)
 
+    def test_prepare_rejects_dirty_checkout_wrong_or_abbreviated_commit(self):
+        (self.repo/"payload.py").write_text("dirty = True\n")
+        with self.assertRaisesRegex(ValueError,"dirty"):
+            self.prepare()
+        subprocess.run(["git","-C",str(self.repo),"restore","payload.py"],check=True)
+        with self.assertRaisesRegex(ValueError,"exact full"):
+            runtime.prepare(self.repo,self.runtime,self.first[:12],uid=os.getuid(),gid=os.getgid())
+        with self.assertRaisesRegex(ValueError,"HEAD"):
+            runtime.prepare(self.repo,self.runtime,"0"*40,uid=os.getuid(),gid=os.getgid())
+
     def test_operator_script_is_guarded_and_does_not_activate_or_control_services(self):
         text=(Path(__file__).parent/"prepare_immutable_runtime.sh").read_text()
         self.assertTrue(text.startswith("#!/bin/bash\nset -euo pipefail\n"))
         self.assertIn('test "$(id -u)" -ne 0',text)
         for forbidden in ("--activate", "systemctl", "daemon-reload", "sqlite3"):
             self.assertNotIn(forbidden,text)
+        self.assertLess(text.index("--host-preflight"),text.index(' --prepare\n'))
+
+    def test_service_state_verifier_requires_exact_inactive_systemd_evidence(self):
+        def runner(args,**_kwargs):
+            name=args[2]
+            return SimpleNamespace(stdout=(f"Id={name}\nLoadState=loaded\n"
+                "ActiveState=inactive\nSubState=dead\nMainPID=0\n"))
+        self.assertEqual(set(runtime.SERVICE_UNITS),set(runtime.verify_inactive_services(runner)))
+        def active(args,**_kwargs):
+            name=args[2]
+            return SimpleNamespace(stdout=(f"Id={name}\nLoadState=loaded\n"
+                "ActiveState=active\nSubState=running\nMainPID=123\n"))
+        with self.assertRaisesRegex(ValueError,"not inactive"):
+            runtime.verify_inactive_services(active)
 
     def venv_inputs(self):
-        release=self.runtime/"release"; (release/"dev/intake").mkdir(parents=True)
+        release=self.runtime/"releases"/("f"*40); (release/"dev/intake").mkdir(parents=True)
         self.runtime.chmod(0o755)
         (release/"dev/intake/intake.py").write_text("")
         (release/"dev/intake/pending_writer.py").write_text("")
-        lock=self.runtime/"requirements.lock"; lock.write_text("locked\n")
-        wheel=self.runtime/"gunicorn.whl"; wheel.write_text("wheel\n")
-        lock.chmod(0o644); wheel.chmod(0o644)
+        lock=release/"dev/intake/runtime-requirements.lock"
+        lock.write_text(runtime.GUNICORN_LOCK_TEXT); lock.chmod(0o444)
+        wheelhouse=self.runtime/"wheelhouse"/runtime.VENV_NAME
+        wheelhouse.mkdir(parents=True); (self.runtime/"wheelhouse").chmod(0o755); wheelhouse.chmod(0o755)
+        wheel=wheelhouse/runtime.GUNICORN_WHEEL_NAME; wheel.write_text("wheel\n")
+        wheel.chmod(0o444)
         return release,Path(sys.executable),lock,wheel
+
+    def wheel_digest(self, wheel):
+        original=runtime.digest
+        return patch.object(runtime,"digest",side_effect=lambda value:
+            runtime.GUNICORN_WHEEL_SHA256 if Path(value)==wheel else original(value))
 
     def fake_venv_runner(self,target,python):
         calls=[]
@@ -123,8 +158,9 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         release,python,lock,wheel=self.venv_inputs()
         target=self.runtime/"venvs"/runtime.VENV_NAME
         run,calls=self.fake_venv_runner(target,python)
-        result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
-                                    uid=os.getuid(),gid=os.getgid(),run=run)
+        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
+            result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
+                                        uid=os.getuid(),gid=os.getgid(),run=run)
         self.assertEqual("prepared",result["state"])
         self.assertFalse((target/runtime.VENV_MARKER).exists())
         self.assertTrue((target/runtime.VENV_MANIFEST).is_file())
@@ -132,8 +168,9 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         venv_calls=[call for call in calls if "venv" in call]
         self.assertEqual(str(target),venv_calls[0][-1])
         self.assertFalse(any(".venv-" in part for call in calls for part in call))
-        result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
-                                    uid=os.getuid(),gid=os.getgid(),run=run)
+        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
+            result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
+                                        uid=os.getuid(),gid=os.getgid(),run=run)
         self.assertEqual("already_prepared",result["state"])
         selected=runtime.select_venv(self.runtime,target,apply=True)
         self.assertEqual("selected",selected["state"])
@@ -146,11 +183,11 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         run,_calls=self.fake_venv_runner(target,python)
         def fail(phase):
             if phase=="after_venv_creation": raise KeyboardInterrupt()
-        with self.assertRaises(KeyboardInterrupt):
+        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()),self.assertRaises(KeyboardInterrupt):
             runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
                                  uid=os.getuid(),gid=os.getgid(),run=run,fail=fail)
         self.assertTrue((target/runtime.VENV_MARKER).is_file())
-        with self.assertRaisesRegex(ValueError,"explicit recovery"):
+        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()),self.assertRaisesRegex(ValueError,"explicit recovery"):
             runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
                                  uid=os.getuid(),gid=os.getgid(),run=run)
         checked=runtime.recover_incomplete_venv(self.runtime,target,uid=os.getuid(),gid=os.getgid(),run=run)
@@ -158,8 +195,9 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         moved=runtime.recover_incomplete_venv(self.runtime,target,apply=True,
                                               uid=os.getuid(),gid=os.getgid(),run=run)
         self.assertFalse(target.exists()); self.assertTrue(Path(moved["quarantine"]).is_dir())
-        self.assertEqual("prepared",runtime.prepare_venv(
-            self.runtime,release,python,lock,wheel,apply=True,uid=os.getuid(),gid=os.getgid(),run=run)["state"])
+        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
+            self.assertEqual("prepared",runtime.prepare_venv(
+                self.runtime,release,python,lock,wheel,apply=True,uid=os.getuid(),gid=os.getgid(),run=run)["state"])
 
     def test_normal_venv_symlinks_are_allowed_but_dangling_and_escaping_are_not(self):
         target=self.runtime/"venvs"/runtime.VENV_NAME; (target/"bin").mkdir(parents=True)
@@ -230,7 +268,9 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         runtime.stage_deployment(self.runtime,second,apply=True,
                                  uid=os.getuid(),gid=os.getgid())
         self.runtime.mkdir(exist_ok=True); (self.runtime/"current").symlink_to(Path("releases")/self.first)
-        for name in runtime.UNITS: (self.systemd/name).write_text("old "+name+"\n")
+        for name in runtime.UNITS:
+            shutil.copyfile(self.runtime/"releases"/self.first/"deployment-units"/name,
+                            self.systemd/name)
         return second
 
     def emoji_runtime_record(self, commit):
@@ -239,22 +279,37 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
                 "requirements_sha256": runtime.digest(
                     self.runtime/"releases"/commit/"dev/intake/emoji-sync-requirements.txt")}
 
+    def core_runtime_record(self, commit):
+        return {"gunicorn_version": runtime.GUNICORN_VERSION,
+                "wheel_sha256": runtime.GUNICORN_WHEEL_SHA256,
+                "requirements_sha256": runtime.digest(
+                    self.runtime/"releases"/commit/"dev/intake/runtime-requirements.lock")}
+
+    def service_evidence(self):
+        return {name:{"Id":name,"LoadState":"loaded","ActiveState":"inactive",
+                      "SubState":"dead","MainPID":"0"} for name in runtime.SERVICE_UNITS}
+
+    def activate(self, commit, *, fail=None):
+        kwargs={"nginx_target":self.nginx,"unit_uid":os.getuid(),"unit_gid":os.getgid(),
+                "service_state_verifier":self.service_evidence}
+        with patch.object(runtime,"validate_venv",return_value=self.core_runtime_record(commit)), \
+                patch("emoji_runtime_release.validate_runtime",
+                      return_value=self.emoji_runtime_record(commit)):
+            dry=runtime.activate(self.runtime,self.systemd,commit,**kwargs)
+            return runtime.activate(self.runtime,self.systemd,commit,apply=True,fail=fail,
+                                    confirmed_services_stopped=True,
+                                    expected_prestate_sha256=dry["prestate_sha256"],**kwargs)
+
     def test_activation_failure_restores_symlink_and_units(self):
-        phases=("before_activation","after_symlink",
+        phases=("after_activation_record","before_activation","after_symlink",
                 *(f"after_unit_{index}" for index in range(len(runtime.UNITS))),"after_nginx")
         for phase in phases:
             with self.subTest(phase=phase):
                 second=self.two_releases(); before={n:(self.systemd/n).read_bytes() for n in runtime.UNITS}
                 def fail(current):
                     if current==phase: raise KeyboardInterrupt()
-                with patch.object(runtime,"validate_venv"), \
-                        patch("emoji_runtime_release.validate_runtime",
-                              return_value=self.emoji_runtime_record(second)), \
-                        self.assertRaises(KeyboardInterrupt):
-                    runtime.activate(self.runtime,self.systemd,second,nginx_target=self.nginx,
-                                     apply=True,fail=fail,
-                                     unit_uid=os.getuid(),unit_gid=os.getgid(),
-                                     confirmed_services_stopped=True)
+                with self.assertRaises(KeyboardInterrupt):
+                    self.activate(second,fail=fail)
                 self.assertEqual(self.first,(self.runtime/"current").resolve().name)
                 self.assertEqual(before,{n:(self.systemd/n).read_bytes() for n in runtime.UNITS})
                 self.tearDown(); self.setUp()
@@ -263,24 +318,21 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         second=self.two_releases()
         before_units={name:(self.systemd/name).read_bytes() for name in runtime.UNITS}
         before_nginx=self.nginx.read_bytes()
-        with patch.object(runtime,"validate_venv"), \
+        with patch.object(runtime,"validate_venv",return_value=self.core_runtime_record(second)), \
                 patch("emoji_runtime_release.validate_runtime",
                       return_value=self.emoji_runtime_record(second)), \
                 self.assertRaisesRegex(ValueError,"must be quiesced"):
             runtime.activate(self.runtime,self.systemd,second,nginx_target=self.nginx,
-                             apply=True,unit_uid=os.getuid(),unit_gid=os.getgid())
-        with patch.object(runtime,"validate_venv"), \
-                patch("emoji_runtime_release.validate_runtime",
-                      return_value=self.emoji_runtime_record(second)):
-            activated=runtime.activate(self.runtime,self.systemd,second,nginx_target=self.nginx,apply=True,
-                                       unit_uid=os.getuid(),unit_gid=os.getgid(),
-                                       confirmed_services_stopped=True)
+                             apply=True,unit_uid=os.getuid(),unit_gid=os.getgid(),
+                             service_state_verifier=self.service_evidence)
+        activated=self.activate(second)
         record=activated["activation_record"]
         applied_units={name:(self.systemd/name).read_bytes() for name in runtime.UNITS}
         applied_nginx=self.nginx.read_bytes()
         self.assertNotEqual(before_nginx,applied_nginx)
         self.assertEqual(self.first,runtime.rollback_activation(
-            record,self.runtime,self.systemd,unit_uid=os.getuid(),unit_gid=os.getgid()
+            record,self.runtime,self.systemd,unit_uid=os.getuid(),unit_gid=os.getgid(),
+            service_state_verifier=self.service_evidence
         )["restore_commit"])
         phases=("after_rollback_symlink",
                 *(f"after_rollback_unit_{index}" for index in range(len(runtime.UNITS))),
@@ -291,18 +343,37 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             with self.subTest(phase=phase),self.assertRaises(KeyboardInterrupt):
                 runtime.rollback_activation(record,self.runtime,self.systemd,apply=True,fail=fail,
                                             unit_uid=os.getuid(),unit_gid=os.getgid(),
-                                            confirmed_services_stopped=True)
+                                            confirmed_services_stopped=True,
+                                            service_state_verifier=self.service_evidence)
             self.assertEqual(second,(self.runtime/"current").resolve().name)
             self.assertEqual(applied_units,
                              {name:(self.systemd/name).read_bytes() for name in runtime.UNITS})
             self.assertEqual(applied_nginx,self.nginx.read_bytes())
         result=runtime.rollback_activation(record,self.runtime,self.systemd,apply=True,
                                            unit_uid=os.getuid(),unit_gid=os.getgid(),
-                                           confirmed_services_stopped=True)
+                                           confirmed_services_stopped=True,
+                                           service_state_verifier=self.service_evidence)
         self.assertEqual(self.first,result["current_commit"])
         self.assertEqual(before_units,
                          {name:(self.systemd/name).read_bytes() for name in runtime.UNITS})
         self.assertEqual(before_nginx,self.nginx.read_bytes())
+        repeated=runtime.rollback_activation(
+            record,self.runtime,self.systemd,apply=True,unit_uid=os.getuid(),unit_gid=os.getgid(),
+            confirmed_services_stopped=True,service_state_verifier=self.service_evidence)
+        self.assertTrue(repeated["already_restored"])
+
+    def test_repeated_activation_is_idempotent_only_when_every_artifact_matches(self):
+        second=self.two_releases(); self.activate(second)
+        kwargs={"nginx_target":self.nginx,"unit_uid":os.getuid(),"unit_gid":os.getgid(),
+                "service_state_verifier":self.service_evidence}
+        with patch.object(runtime,"validate_venv",return_value=self.core_runtime_record(second)), \
+                patch("emoji_runtime_release.validate_runtime",
+                      return_value=self.emoji_runtime_record(second)):
+            self.assertEqual("already_active",runtime.activate(
+                self.runtime,self.systemd,second,apply=True,**kwargs)["state"])
+            target=self.systemd/runtime.UNITS[0]; target.write_text("tampered\n")
+            with self.assertRaisesRegex(ValueError,"mismatched units"):
+                runtime.activate(self.runtime,self.systemd,second,**kwargs)
 
     def test_commit_scoped_staging_rejects_tamper_and_mixed_lineage(self):
         self.prepare(apply=True)
@@ -314,6 +385,24 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         unit.chmod(0o644); unit.write_text("tampered\n"); unit.chmod(0o444)
         with self.assertRaisesRegex(ValueError,"checksum"):
             runtime.verify_staged_deployment(self.runtime,self.first)
+
+    def test_staging_manifests_bind_commit_metadata_purpose_and_exact_files(self):
+        self.prepare(apply=True)
+        runtime.stage_deployment(self.runtime,self.first,apply=True,
+                                 uid=os.getuid(),gid=os.getgid())
+        for directory,manifest_name,purpose in (
+                (self.runtime/"staged-units"/self.first,runtime.UNIT_MANIFEST,
+                 runtime.UNIT_STAGE_PURPOSE),
+                (self.runtime/"staged-nginx"/self.first,runtime.ROUTE_MANIFEST,
+                 runtime.ROUTE_STAGE_PURPOSE)):
+            manifest=json.loads((directory/manifest_name).read_text())
+            self.assertEqual((self.first,purpose),(manifest["commit"],manifest["purpose"]))
+            self.assertEqual({"uid":os.getuid(),"gid":os.getgid(),"mode":"0555","acl":"basic"},
+                             manifest["directory"])
+            directory.chmod(0o755); (directory/"unexpected").write_text("x"); directory.chmod(0o555)
+            with self.assertRaisesRegex(ValueError,"file set"):
+                runtime.verify_staged_deployment(self.runtime,self.first)
+            directory.chmod(0o755); (directory/"unexpected").unlink(); directory.chmod(0o555)
 
     def test_commit_scoped_route_tamper_fails_closed(self):
         self.prepare(apply=True)
@@ -336,6 +425,69 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         second_stage.chmod(0o555)
         with self.assertRaisesRegex(ValueError,"lineage"):
             runtime.verify_staged_deployment(self.runtime,second)
+
+    def test_prepared_activation_record_recovers_a_mixed_crash_state(self):
+        second=self.two_releases(); activated=self.activate(second)
+        record=Path(activated["activation_record"]); state_path=record/"ACTIVATION.json"
+        state=json.loads(state_path.read_text()); state["status"]="prepared"
+        state_path.write_text(json.dumps(state,sort_keys=True)+"\n"); state_path.chmod(0o600)
+        replacement=self.runtime/".fixture-current"
+        replacement.symlink_to(Path("releases")/self.first)
+        os.replace(replacement,self.runtime/"current")
+        first_entry=state["units"][0]
+        Path(first_entry["target"]).write_bytes((record/first_entry["backup"]).read_bytes())
+        dry=runtime.recover_interrupted_activation(
+            record,self.runtime,self.systemd,nginx_target=self.nginx,
+            unit_uid=os.getuid(),unit_gid=os.getgid(),
+            service_state_verifier=self.service_evidence)
+        recovered=runtime.recover_interrupted_activation(
+            record,self.runtime,self.systemd,nginx_target=self.nginx,apply=True,
+            unit_uid=os.getuid(),unit_gid=os.getgid(),confirmed_services_stopped=True,
+            expected_recovery_sha256=dry["recovery_sha256"],
+            service_state_verifier=self.service_evidence)
+        self.assertEqual("restored",recovered["state"])
+        self.assertEqual(self.first,(self.runtime/"current").resolve().name)
+        self.assertEqual("restored",json.loads(state_path.read_text())["status"])
+
+    def test_interrupted_rollback_record_recovers_applied_state(self):
+        second=self.two_releases(); activated=self.activate(second)
+        record=Path(activated["activation_record"])
+        def fail(phase):
+            if phase=="after_rollback_record_prepared": raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            runtime.rollback_activation(
+                record,self.runtime,self.systemd,nginx_target=self.nginx,apply=True,fail=fail,
+                unit_uid=os.getuid(),unit_gid=os.getgid(),confirmed_services_stopped=True,
+                service_state_verifier=self.service_evidence)
+        self.assertEqual("rollback_prepared",json.loads(
+            (record/"ACTIVATION.json").read_text())["status"])
+        dry=runtime.recover_interrupted_activation(
+            record,self.runtime,self.systemd,nginx_target=self.nginx,
+            unit_uid=os.getuid(),unit_gid=os.getgid(),
+            service_state_verifier=self.service_evidence)
+        result=runtime.recover_interrupted_activation(
+            record,self.runtime,self.systemd,nginx_target=self.nginx,apply=True,
+            unit_uid=os.getuid(),unit_gid=os.getgid(),confirmed_services_stopped=True,
+            expected_recovery_sha256=dry["recovery_sha256"],
+            service_state_verifier=self.service_evidence)
+        self.assertEqual("applied",result["state"])
+        self.assertEqual(second,(self.runtime/"current").resolve().name)
+
+    def test_predecessor_without_emoji_units_is_supported(self):
+        second=self.two_releases(); previous=self.runtime/"releases"/self.first
+        for path in [previous,*previous.rglob("*")]:
+            if not path.is_symlink(): path.chmod(0o755 if path.is_dir() else 0o644)
+        for name in runtime.EMOJI_UNITS:
+            (previous/"deployment-units"/name).unlink()
+            (self.systemd/name).unlink()
+        runtime.build_manifest(previous,self.first)
+        runtime._make_read_only(previous,os.getuid(),os.getgid())
+        self.nginx.write_text("server {\n    # Nocturne plugin development intake\n}\n")
+        activated=self.activate(second)
+        self.assertEqual(second,(self.runtime/"current").resolve().name)
+        self.assertIn("/api/plugin/v1/announcements",self.nginx.read_text())
+        self.assertIn("/api/plugin/v1/emojis",self.nginx.read_text())
+        self.assertTrue(Path(activated["activation_record"]).is_dir())
 
 
 if __name__=="__main__": unittest.main()

@@ -18,23 +18,38 @@ root=/srv/nocturne-plugin
 tool="$repo/dev/intake/immutable_runtime_release.py"
 emoji_runtime="$repo/dev/intake/emoji_runtime_release.py"
 ownership="$repo/dev/intake/runtime_ownership.py"
-wheel="$root/wheelhouse/gunicorn-26.2.0-py3-none-any.whl"
-lock="$root/wheelhouse/runtime-requirements.lock"
-emoji_wheel="$root/wheelhouse/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+wheel="$root/wheelhouse/python3.14-gunicorn-26.2.0/gunicorn-26.2.0-py3-none-any.whl"
+emoji_wheel="$root/wheelhouse/emoji-python3.14-pillow-12.3.0/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
 release="$root/releases/$sha"
+lock="$release/dev/intake/runtime-requirements.lock"
 staged="$root/staged-units/$sha"
 staged_nginx="$root/staged-nginx/$sha"
 target="$root/venvs/python3.14-gunicorn-26.2.0"
 emoji_target="$root/venvs/emoji-python3.14-pillow-12.3.0"
 
+if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "An exact lowercase 40-character Git SHA is required." >&2
+    exit 2
+fi
+test "$(git -C "$repo" rev-parse HEAD)" = "$sha"
 test "$(git -C "$repo" rev-parse --verify "$sha^{commit}")" = "$sha"
+if test -n "$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"; then
+    echo "The deployment checkout must be clean." >&2
+    exit 1
+fi
 test -f "$wheel"; test ! -L "$wheel"
-test -f "$lock"; test ! -L "$lock"
 test -f "$emoji_wheel"; test ! -L "$emoji_wheel"
 test -d "$root"; test ! -L "$root"
 
+# Fail the exact CPython/ABI/architecture gate before creating a release or
+# invoking either dependency installer.
+python3.14 -B "$emoji_runtime" --repo "$repo" --commit "$sha" \
+    --runtime-root "$root" --python /usr/bin/python3.14 \
+    --requirements "$repo/dev/intake/emoji-sync-requirements.txt" \
+    --wheel "$emoji_wheel" --host-preflight
+
 if test "$mode" = --check; then
-    python3.14 -B "$ownership" --runtime-root "$root" --commit "$sha"
+    python3.14 -B "$ownership" --repo "$repo" --runtime-root "$root" --commit "$sha"
     if test "$(stat -c %u:%g:%a "$root")" != 0:0:755; then
         echo "Runtime-root ownership/mode requires guarded correction before preparation." >&2
         exit 1
@@ -47,7 +62,8 @@ if test "$mode" = --check; then
     if test -d "$release" && test ! -L "$release"; then
         python3.14 -B "$tool" --repo "$repo" --runtime-root "$root" --commit "$sha" \
             --check-venv --requirements-lock "$lock" --wheel "$wheel"
-        python3.14 -B "$emoji_runtime" --runtime-root "$root" --python /usr/bin/python3.14 \
+        python3.14 -B "$emoji_runtime" --repo "$repo" --commit "$sha" \
+            --runtime-root "$root" --python /usr/bin/python3.14 \
             --requirements "$release/dev/intake/emoji-sync-requirements.txt" --wheel "$emoji_wheel"
         if test -d "$staged" && test -d "$staged_nginx"; then
             python3.14 -B "$tool" --repo "$repo" --runtime-root "$root" --commit "$sha" \
@@ -102,7 +118,8 @@ active_before=$(snapshot_active)
 python3.14 -B "$tool" --repo "$repo" --runtime-root "$root" --commit "$sha" --prepare
 python3.14 -B "$tool" --repo "$repo" --runtime-root "$root" --commit "$sha" \
     --prepare-venv --requirements-lock "$lock" --wheel "$wheel"
-python3.14 -B "$emoji_runtime" --runtime-root "$root" --python /usr/bin/python3.14 \
+python3.14 -B "$emoji_runtime" --repo "$repo" --commit "$sha" \
+    --runtime-root "$root" --python /usr/bin/python3.14 \
     --requirements "$release/dev/intake/emoji-sync-requirements.txt" --wheel "$emoji_wheel" --prepare
 python3.14 -B "$tool" --repo "$repo" --runtime-root "$root" --commit "$sha" --stage-deployment
 systemd-analyze verify "$staged/nocturne-plugin-writer.service" \

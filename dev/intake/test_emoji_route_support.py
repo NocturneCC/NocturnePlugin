@@ -46,6 +46,18 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
         (self.source / "STAGED-NGINX-MANIFEST.json").write_text("{}\n")
         self.metadata = {"uid": 0, "gid": 0, "mode": 0o640,
                          "acl": "user::rw-\ngroup::r--\nother::---\n"}
+        self.activation_record=self.root/"activation-record"
+        self.systemd=self.root/"systemd"; self.systemd.mkdir()
+
+    def install(self,*args,**kwargs):
+        kwargs.setdefault("activation_record",self.activation_record)
+        kwargs.setdefault("systemd_dir",self.systemd)
+        return install(*args,**kwargs)
+
+    def rollback(self,*args,**kwargs):
+        kwargs.setdefault("activation_record",self.activation_record)
+        kwargs.setdefault("systemd_dir",self.systemd)
+        return rollback(*args,**kwargs)
 
     def mocks(self):
         return (patch("emoji_route_support._capture_safe_metadata", return_value=self.metadata),
@@ -72,15 +84,17 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
         first, second, third = self.mocks()
         validations = []
         with first, second, third:
-            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                dry = install(self.target, self.runtime, self.commit, self.backups)
+            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                    patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                dry = self.install(self.target, self.runtime, self.commit, self.backups)
             self.assertEqual(("not_applied", True), (dry["state"], dry["dry_run"]))
-            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                applied = install(self.target, self.runtime, self.commit, self.backups, apply=True,
+            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                    patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                applied = self.install(self.target, self.runtime, self.commit, self.backups, apply=True,
                                   validate=lambda: validations.append("nginx-t"))
                 self.assertEqual("already_applied",
-                                 install(self.target, self.runtime, self.commit, self.backups)["state"])
-                restored = rollback(applied["backup"], self.target, runtime_root=self.runtime,
+                                 self.install(self.target, self.runtime, self.commit, self.backups)["state"])
+                restored = self.rollback(applied["backup"], self.target, runtime_root=self.runtime,
                                     commit=self.commit,
                                 validate=lambda: validations.append("rollback-t"))
             self.assertFalse(restored["already_restored"])
@@ -90,21 +104,24 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
         first, second, third = self.mocks()
         with first, second, third:
             with self.assertRaisesRegex(RuntimeError, "syntax"):
-                with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                    install(self.target, self.runtime, self.commit, self.backups, apply=True,
+                with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                        patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                    self.install(self.target, self.runtime, self.commit, self.backups, apply=True,
                             validate=lambda: (_ for _ in ()).throw(RuntimeError("syntax")))
         self.assertEqual(self.active, self.target.read_text())
 
     def test_failed_rollback_restores_applied_route(self):
         first, second, third = self.mocks()
         with first, second, third:
-            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                applied = install(self.target, self.runtime, self.commit, self.backups, apply=True,
+            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                    patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                applied = self.install(self.target, self.runtime, self.commit, self.backups, apply=True,
                                   validate=lambda: None)
             applied_text = self.target.read_text()
             with self.assertRaisesRegex(RuntimeError, "rollback syntax"):
-                with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                    rollback(applied["backup"], self.target, runtime_root=self.runtime,
+                with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                        patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                    self.rollback(applied["backup"], self.target, runtime_root=self.runtime,
                              commit=self.commit,
                              validate=lambda: (_ for _ in ()).throw(RuntimeError("rollback syntax")))
         self.assertEqual(applied_text, self.target.read_text())
@@ -113,8 +130,9 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
         linked = self.root / "linked-site"
         __import__("os").link(self.target, linked)
         with self.assertRaisesRegex(ValueError, "hard-linked"):
-            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}):
-                install(self.target, self.runtime, self.commit, self.backups)
+            with patch("immutable_runtime_release.verify_staged_deployment", return_value={}), \
+                    patch("immutable_runtime_release.verify_applied_activation",return_value={}):
+                self.install(self.target, self.runtime, self.commit, self.backups)
 
 
 if __name__ == "__main__":

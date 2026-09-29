@@ -117,8 +117,9 @@ automatic third-party traffic.
 ## Future deployment and rollback boundary
 
 1. On Midgard's CPython 3.14, glibc x86-64 runtime, build a dedicated environment
-   with `pip --require-hashes --only-binary=:all:` and the repository's
-   `emoji-sync-requirements.txt`. It admits only Pillow 12.3.0's verified
+   with `pip --no-index --require-hashes --only-binary=:all:` and the release's
+   `emoji-sync-requirements.txt`. The single mode-0444 wheel lives in the exact
+   versioned wheelhouse directory. It admits only Pillow 12.3.0's verified
    `cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64` wheel. Refuse a
    different interpreter, architecture, source distribution or wheel digest;
    never copy a development virtual environment.
@@ -133,17 +134,21 @@ automatic third-party traffic.
    Nginx staging directories.
 5. Stop intake, writer, emoji synchronizer and timer, and prevent a concurrent
    Nginx reload. Activate the exact commit with explicit stopped-services
-   confirmation. Activation changes `current`, all four matching units and the
+   confirmation, independently captured systemd inactive/PID evidence and the
+   exact digest from the read-only activation preflight. Activation changes
+   `current`, all four matching units and the
    matching route transactionally, but never reloads or starts anything.
 6. `emoji_service_support.py` remains only as a narrow repair helper. It can
    install the emoji service/timer from verified commit staging, never the
-   intake unit, and first proves the active intake is the matching immutable
-   unit. `emoji_route_support.py` likewise consumes only verified commit-scoped
-   staging. Neither helper installs directly from the mutable source tree.
+   intake unit, and requires the matching applied activation record before it
+   proves every artifact outside that narrow repair scope is intact.
+   `emoji_route_support.py` has the same activation-record interlock and likewise
+   consumes only verified commit-scoped staging. Neither helper installs
+   directly from the mutable source tree.
 7. Separately approve daemon reload, timer activation, intake restart, Nginx
    reload and health checks. Verify the first generation before tester rollout.
 
 Activation and the narrow repair helpers preserve metadata/ACLs, create
 verified backups, restore automatically on failure, refuse drift and mixed
-commits, and offer exact rollback. Unit apply/rollback requires explicit stopped
-process confirmation.
+commits, and offer exact rollback. Unit apply/rollback requires direct systemd
+inactivity verification in addition to explicit maintenance confirmation.

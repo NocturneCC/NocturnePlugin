@@ -1,7 +1,10 @@
 # Immutable intake runtime
 
-`immutable_runtime_release.py` is dry-run-only unless an explicit mode is
-selected. It resolves a full Git commit, uses `git archive` rather than the
+Every repository preparation/helper command first requires a clean checkout
+whose `HEAD` is the exact lowercase 40-character SHA supplied by the operator.
+Abbreviations, local changes, untracked files and mismatched checkouts are
+rejected. `immutable_runtime_release.py` is dry-run-only unless an explicit mode
+is selected. It uses `git archive` rather than the
 working tree, rejects links and unsafe archive entries, hashes every release
 file, and prepares root-owned read-only source beneath
 `/srv/nocturne-plugin/releases/<full-commit-sha>`.
@@ -19,18 +22,22 @@ route at `/srv/nocturne-plugin/staged-nginx/<full-sha>`. Each has a SHA-256
 manifest bound to the matching release manifest. Activation verifies all
 release, staging and runtime records again, atomically switches `current`, and
 replaces all four units and the Nginx file as one guarded operation. Its record
-contains the prior selector and every replaced file. Failure restores the
-entire prior set; rollback failure reinstates the verified applied set. Neither
-staging nor activation reloads a daemon or controls a service.
+contains the prior selector and every replaced file. Systemd supplies exact
+inactive/PID-zero evidence before and immediately before mutation; a Boolean
+confirmation alone is insufficient. Apply also requires the digest emitted by
+the read-only preflight. Failure restores the entire prior set; rollback failure
+reinstates the verified applied set. Fsynced `prepared` and
+`rollback_prepared` records support explicit recovery after process or host
+failure. Neither staging nor activation reloads a daemon or controls a service.
 
 ## Runtime virtual environment
 
 Never copy the development `.venv`: Python virtual environments embed absolute
 paths and may contain host- or interpreter-specific binaries. Build the shared
 runtime environment independently with the host's managed Python 3.14, the
-committed `runtime-requirements.txt`, and an operator-reviewed local wheelhouse.
-For a reproducible deployment, generate a hash-locked requirements file from
-that wheelhouse, create the venv directly at its final versioned path, install with
+committed `runtime-requirements.lock`, and the single root-owned mode-0444
+Gunicorn wheel in its versioned wheelhouse. The lock and wheel digest are fixed
+in source. Create the venv directly at its final versioned path and install with
 `pip --require-hashes --no-index --find-links <wheelhouse>`, run `pip check`,
 verify imports and permissions, and keep it at
 `/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0`. Never rename a venv:
@@ -45,6 +52,12 @@ binary-only hash lock and exact verified Pillow wheel are accepted. A mode-0600
 incomplete marker remains until imports, versions, ownership, modes, ACLs,
 links, mounts, launchers and the dependency record pass. Recovery verifies and
 quarantines the exact incomplete artifact instead of deleting it.
+
+The wrapper runs the emoji CPython version, ABI, host architecture and glibc
+preflight before it creates a release or invokes either dependency installer.
+Both installers use no index, required hashes, binary-only inputs and exact
+versioned single-wheel directories. Missing, extra, linked, mounted, writable,
+incorrectly owned or ACL-extended inputs fail closed.
 
 `prepare_immutable_runtime.sh` is the root-only preparation entry point. It is
 read-only with `--check`; `--prepare` builds the release, builds or validates
@@ -74,9 +87,11 @@ cd /srv/projects/nocturne-plugin-intake
 SHA=FULL_SHA
 TARGET=/srv/nocturne-plugin/venvs/python3.14-gunicorn-26.2.0
 sudo python3.14 -B dev/intake/immutable_runtime_release.py \
-  --commit "$SHA" --recover-incomplete-venv "$TARGET"
+  --repo /srv/projects/nocturne-plugin-intake --commit "$SHA" \
+  --recover-incomplete-venv "$TARGET"
 sudo python3.14 -B dev/intake/immutable_runtime_release.py \
-  --commit "$SHA" --recover-incomplete-venv "$TARGET" --apply-recovery
+  --repo /srv/projects/nocturne-plugin-intake --commit "$SHA" \
+  --recover-incomplete-venv "$TARGET" --apply-recovery
 sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --prepare "$SHA"
 ```
 
@@ -95,7 +110,14 @@ ownership. Its optional migration is dry-run by default and can change only an
 enumerated set of exact runtime container nodes from a specified UID/GID to
 root. It rejects links, mounts, unexpected modes or owners and never recursively
 chowns unresolved paths. Immutable release source must already be root-owned
-and read-only; service-user-owned source is rejected and must be rebuilt.
+and read-only; service-user-owned source is rejected and must be rebuilt. Apply
+requires UID 0 and exact source UID/GID values, rechecks every selected inode,
+device, link count, mode, mount and ACL immediately before changing it, and
+rolls back a partial failure. The exact `current` selector may be lchowned
+without following it, but its ownership is never treated as target ownership.
+Run this maintenance only while the four plugin
+units are inactive even though the exact directory-mode preservation is designed
+not to change access to the current release.
 
 Future read-only checks for a published SHA are:
 
@@ -103,14 +125,21 @@ Future read-only checks for a published SHA are:
 SHA=FULL_SHA
 sudo /bin/bash dev/intake/prepare_immutable_runtime.sh --check "$SHA"
 sudo python3.14 -B dev/intake/runtime_ownership.py \
+  --repo /srv/projects/nocturne-plugin-intake \
   --runtime-root /srv/nocturne-plugin --commit "$SHA"
 sudo python3.14 -B dev/intake/immutable_runtime_release.py \
   --runtime-root /srv/nocturne-plugin --commit "$SHA" --check-deployment
 sudo python3.14 -B dev/intake/emoji_runtime_release.py \
   --runtime-root /srv/nocturne-plugin --python /usr/bin/python3.14 \
   --requirements "/srv/nocturne-plugin/releases/$SHA/dev/intake/emoji-sync-requirements.txt" \
-  --wheel /srv/nocturne-plugin/wheelhouse/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+  --wheel /srv/nocturne-plugin/wheelhouse/emoji-python3.14-pillow-12.3.0/pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 ```
+
+Standalone emoji-unit or route repair is not an alternate activation path.
+Each helper requires the matching applied activation record and revalidates the
+current selector, immutable release, both staging manifests and every artifact
+outside its narrow repair scope. Unit repair additionally verifies all four
+plugin units are inactive.
 
 ## One maintenance window
 

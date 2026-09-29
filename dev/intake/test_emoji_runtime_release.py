@@ -18,7 +18,9 @@ class EmojiRuntimeReleaseTest(unittest.TestCase):
         (self.root/"venvs").mkdir(mode=0o755)
         self.requirements=Path(self.temp.name)/"emoji-sync-requirements.txt"
         self.requirements.write_text(runtime.REQUIREMENTS_TEXT)
-        self.wheel=Path(self.temp.name)/runtime.WHEEL_NAME; self.wheel.write_bytes(b"fixture-wheel")
+        wheelhouse=self.root/"wheelhouse"/runtime.TARGET_NAME
+        wheelhouse.mkdir(parents=True); (self.root/"wheelhouse").chmod(0o755); wheelhouse.chmod(0o755)
+        self.wheel=wheelhouse/runtime.WHEEL_NAME; self.wheel.write_bytes(b"fixture-wheel")
         self.requirements.chmod(0o444); self.wheel.chmod(0o444)
         self.python=Path("/usr/bin/python3.14")
         self.target=self.root/"venvs"/runtime.TARGET_NAME
@@ -54,7 +56,9 @@ class EmojiRuntimeReleaseTest(unittest.TestCase):
         return run,calls
 
     def prepare(self,run,**kwargs):
-        with patch("emoji_runtime_release.digest",side_effect=self.digest):
+        with patch("emoji_runtime_release.digest",side_effect=self.digest), \
+                patch("immutable_runtime_release.digest",side_effect=self.digest), \
+                patch("emoji_runtime_release._system_python",return_value=self.python.resolve()):
             return runtime.prepare(self.root,self.python,self.requirements,self.wheel,
                                    uid=os.getuid(),gid=os.getgid(),run=run,**kwargs)
 
@@ -117,10 +121,46 @@ class EmojiRuntimeReleaseTest(unittest.TestCase):
 
     def test_wrong_wheel_digest_fails_before_target_creation(self):
         run,_calls=self.runner()
-        with self.assertRaisesRegex(ValueError,"digest mismatch"):
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                self.assertRaisesRegex(ValueError,"digest mismatch"):
             runtime.prepare(self.root,self.python,self.requirements,self.wheel,apply=True,
                             uid=os.getuid(),gid=os.getgid(),run=run)
         self.assertFalse(self.target.exists())
+
+    def test_wheelhouse_rejects_extra_links_mounts_modes_and_acls(self):
+        run,_calls=self.runner(); parent=self.wheel.parent
+        extra=parent/"extra.whl"; extra.write_text("x")
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                self.assertRaisesRegex(ValueError,"missing or extra"):
+            runtime.prepare(self.root,self.python,self.requirements,self.wheel,
+                            uid=os.getuid(),gid=os.getgid(),run=run)
+        extra.unlink()
+        linked=parent/"alias"; os.link(self.wheel,linked)
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                self.assertRaisesRegex(ValueError,"missing or extra"):
+            runtime.prepare(self.root,self.python,self.requirements,self.wheel,
+                            uid=os.getuid(),gid=os.getgid(),run=run)
+        linked.unlink()
+        self.wheel.chmod(0o644)
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                self.assertRaisesRegex(ValueError,"metadata"):
+            runtime.prepare(self.root,self.python,self.requirements,self.wheel,
+                            uid=os.getuid(),gid=os.getgid(),run=run)
+        self.wheel.chmod(0o444)
+        def named_acl(args,**kwargs):
+            if args[0]=="getfacl":
+                return SimpleNamespace(stdout="user::r--\nuser:other:r--\ngroup::r--\nother::---\n")
+            return run(args,**kwargs)
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                self.assertRaisesRegex(ValueError,"ACL"):
+            runtime.prepare(self.root,self.python,self.requirements,self.wheel,
+                            uid=os.getuid(),gid=os.getgid(),run=named_acl)
+        with patch("emoji_runtime_release._system_python",return_value=self.python.resolve()), \
+                patch("immutable_runtime_release.os.path.ismount",
+                      side_effect=lambda value: Path(value)==self.wheel), \
+                self.assertRaisesRegex(ValueError,"metadata"):
+            runtime.prepare(self.root,self.python,self.requirements,self.wheel,
+                            uid=os.getuid(),gid=os.getgid(),run=run)
 
 
 if __name__=="__main__": unittest.main()

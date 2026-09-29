@@ -10,10 +10,11 @@ import stat
 import subprocess
 from uuid import uuid4
 
-from immutable_runtime_release import (_safe_acl, _safe_input_file,
+from immutable_runtime_release import (_safe_acl, _safe_directory_node,
                                        _safe_owned_directory, _system_python,
                                        _validate_venv_tree, _write_json_fsync,
-                                       command, digest)
+                                       command, digest, validate_locked_wheel)
+from deployment_trust import verify_checkout
 
 
 PURPOSE = "nocturne-emoji-runtime-v1"
@@ -70,16 +71,11 @@ def validate_host(python, run=command):
     return value
 
 
-def validate_inputs(requirements, wheel, *, uid=0, gid=0):
-    requirements, wheel = Path(requirements), Path(wheel)
-    _safe_input_file(requirements, "emoji requirements", uid, gid)
-    _safe_input_file(wheel, "emoji Pillow wheel", uid, gid)
-    text = requirements.read_text()
-    if text != REQUIREMENTS_TEXT:
-        raise ValueError("emoji requirements are not the expected binary hash lock")
-    if wheel.name != WHEEL_NAME or digest(wheel) != WHEEL_SHA256:
-        raise ValueError("emoji Pillow wheel name or digest mismatch")
-    return requirements, wheel
+def validate_inputs(requirements, wheel, *, uid=0, gid=0, run=command):
+    return validate_locked_wheel(
+        requirements, wheel, expected_lock=REQUIREMENTS_TEXT,
+        expected_name=WHEEL_NAME, expected_sha256=WHEEL_SHA256,
+        expected_directory=TARGET_NAME, uid=uid, gid=gid, run=run)
 
 
 def dependency_record(target, host, python, requirements, wheel):
@@ -145,12 +141,16 @@ def validate_runtime(target, *, uid=0, gid=0, approved_python=None, run=command,
     if not pip.is_file() or pip.is_symlink() or pip.stat().st_nlink != 1:
         raise ValueError("emoji runtime pip launcher is missing or unsafe")
     for launcher in (target / "bin").iterdir():
-        if launcher.is_file() and not launcher.is_symlink():
+        if launcher.name in {"python", "python3", "python3.14"}:
+            if (not launcher.is_symlink()
+                    or launcher.resolve(strict=True) != Path("/usr/bin/python3.14")):
+                raise ValueError("emoji runtime interpreter launcher is not exact")
+        elif launcher.is_file() and not launcher.is_symlink():
             with launcher.open("rb") as source:
                 first = source.readline(4096)
-            if first.startswith(b"#!"):
+            if os.access(launcher, os.X_OK):
                 expected = ("#!" + str(target / "bin/python3.14") + "\n").encode()
-                if first != expected:
+                if not first.startswith(b"#!") or first != expected:
                     raise ValueError("emoji runtime launcher does not name the final venv")
     return value
 
@@ -158,9 +158,15 @@ def validate_runtime(target, *, uid=0, gid=0, approved_python=None, run=command,
 def prepare(runtime_root, python, requirements, wheel, *, apply=False,
             uid=0, gid=0, run=command, fail=None):
     runtime_root = Path(runtime_root); python = Path(python)
+    requirements, wheel = Path(requirements), Path(wheel)
+    expected_wheel = runtime_root / "wheelhouse" / TARGET_NAME / WHEEL_NAME
+    if wheel != expected_wheel:
+        raise ValueError("emoji wheel is not at its exact versioned runtime path")
+    _safe_directory_node(runtime_root, {0o755}, uid, gid, run)
+    _safe_directory_node(runtime_root / "wheelhouse", {0o755}, uid, gid, run)
     # Architecture and ABI are deliberately checked before target creation or pip.
     host = validate_host(python, run)
-    requirements, wheel = validate_inputs(requirements, wheel, uid=uid, gid=gid)
+    requirements, wheel = validate_inputs(requirements, wheel, uid=uid, gid=gid, run=run)
     target = runtime_root / "venvs" / TARGET_NAME
     report = {"dry_run": not apply, "target": str(target), "state": "not_prepared",
               "host": {key: host[key] for key in ("version", "machine", "soabi", "glibc")}}
@@ -176,7 +182,6 @@ def prepare(runtime_root, python, requirements, wheel, *, apply=False,
     if not apply: return report
     if os.geteuid() != 0 and uid == 0:
         raise PermissionError("emoji runtime preparation requires root")
-    _safe_owned_directory(runtime_root, 0o755, uid, gid, run)
     parent = runtime_root / "venvs"
     if not parent.exists():
         parent.mkdir(mode=0o755); os.chown(parent, uid, gid)
@@ -245,8 +250,22 @@ def recover_incomplete(runtime_root, target, *, apply=False, uid=0, gid=0, run=c
         _safe_owned_directory(directory, 0o700, uid, gid, run)
     if quarantine.stat().st_dev != target.stat().st_dev or os.path.ismount(quarantine):
         raise ValueError("emoji quarantine is not on the runtime filesystem")
-    destination = quarantine / (TARGET_NAME + "-" + uuid4().hex)
-    os.replace(target, destination)
+    for _attempt in range(32):
+        reservation = quarantine / (TARGET_NAME + "-" + uuid4().hex)
+        try:
+            reservation.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError("could not reserve a unique emoji quarantine path")
+    os.chown(reservation, uid, gid)
+    destination = reservation / "runtime"
+    try:
+        os.rename(target, destination)
+    except BaseException:
+        reservation.rmdir()
+        raise
     return {**result, "dry_run": False, "state": "quarantined",
             "quarantine": str(destination)}
 
@@ -254,18 +273,34 @@ def recover_incomplete(runtime_root, target, *, apply=False, uid=0, gid=0, run=c
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-root", default="/srv/nocturne-plugin")
+    parser.add_argument("--repo", default="/srv/projects/nocturne-plugin-intake")
+    parser.add_argument("--commit", required=True)
     parser.add_argument("--python", default="/usr/bin/python3.14")
     parser.add_argument("--requirements", required=True)
     parser.add_argument("--wheel", required=True)
     parser.add_argument("--prepare", action="store_true")
+    parser.add_argument("--host-preflight", action="store_true")
     parser.add_argument("--recover-incomplete")
     parser.add_argument("--apply-recovery", action="store_true")
     args = parser.parse_args(argv)
+    verify_checkout(args.repo, args.commit)
+    if not args.host_preflight:
+        expected_requirements = (Path(args.runtime_root) / "releases" / args.commit /
+                                 "dev/intake/emoji-sync-requirements.txt")
+        if Path(args.requirements) != expected_requirements:
+            parser.error("--requirements must name the requested release's committed lock")
     if args.apply_recovery and not args.recover_incomplete:
         parser.error("--apply-recovery requires --recover-incomplete")
-    if args.prepare and args.recover_incomplete:
+    if sum((args.prepare, args.host_preflight, bool(args.recover_incomplete))) > 1:
         parser.error("choose preparation or recovery")
-    if args.recover_incomplete:
+    if args.host_preflight:
+        source = Path(args.repo) / "dev/intake/emoji-sync-requirements.txt"
+        if Path(args.requirements) != source or source.read_text() != REQUIREMENTS_TEXT:
+            parser.error("host preflight requires the exact committed emoji lock")
+        host = validate_host(args.python)
+        result = {"dry_run": True, "state": "host_compatible",
+                  "host": {key: host[key] for key in ("version", "machine", "soabi", "glibc")}}
+    elif args.recover_incomplete:
         result = recover_incomplete(args.runtime_root, args.recover_incomplete,
                                     apply=args.apply_recovery)
     else:
