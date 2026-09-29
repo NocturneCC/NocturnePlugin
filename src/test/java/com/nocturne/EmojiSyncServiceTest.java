@@ -2,6 +2,8 @@ package com.nocturne;
 
 import com.google.gson.Gson;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -21,6 +23,11 @@ import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.Buffer;
+import okio.BufferedSource;
+import okio.Okio;
+import okio.Source;
+import okio.Timeout;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -212,6 +219,81 @@ public class EmojiSyncServiceTest
 		harness.close();
 	}
 
+	@Test public void shutdownDuringDnsCannotActivateARegistry() throws Exception
+	{
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		OkHttpClient base = new OkHttpClient.Builder().dns(hostname ->
+		{
+			entered.countDown();
+			try { release.await(3, TimeUnit.SECONDS); }
+			catch (InterruptedException error)
+			{
+				Thread.currentThread().interrupt();
+				throw new UnknownHostException("cancelled");
+			}
+			return List.of(InetAddress.getLoopbackAddress());
+		}).build();
+		Path cache = Files.createTempDirectory("emoji-service-dns");
+		ScheduledExecutorService worker = Executors.newScheduledThreadPool(4);
+		List<Map<String, EmojiAsset>> updates = new CopyOnWriteArrayList<>();
+		EmojiSyncService service = new EmojiSyncService(base, gson, cache, updates::add,
+			worker, false, () -> 0, 0, TimeUnit.DAYS.toMillis(1), 0);
+		Thread poll = new Thread(service::pollForTest);
+		poll.start();
+		assertTrue(entered.await(1, TimeUnit.SECONDS));
+		service.close();
+		release.countDown();
+		poll.join(2_000);
+		assertFalse(poll.isAlive());
+		assertTrue(updates.isEmpty());
+		worker.shutdownNow();
+		base.dispatcher().executorService().shutdownNow();
+		base.connectionPool().evictAll();
+		Harness.delete(cache);
+	}
+
+	@Test public void shutdownDuringManifestBodyCannotActivateARegistry() throws Exception
+	{
+		byte[] image = EmojiTestFixtures.png(0xff224466);
+		byte[] manifest = EmojiTestFixtures.manifest(gson,
+			List.of(new EmojiTestFixtures.FixtureEntry("wave", image)));
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		Harness harness = harness(chain -> blockingResponse(chain.request(), "application/json",
+			manifest, etag(manifest), entered, release));
+		Thread poll = new Thread(harness.service::pollForTest);
+		poll.start();
+		assertTrue(entered.await(1, TimeUnit.SECONDS));
+		harness.service.close();
+		release.countDown();
+		poll.join(2_000);
+		assertFalse(poll.isAlive());
+		assertTrue(harness.updates.isEmpty());
+		harness.close();
+	}
+
+	@Test public void shutdownDuringAssetBodyCannotActivateARegistry() throws Exception
+	{
+		byte[] image = EmojiTestFixtures.png(0xff224466);
+		byte[] manifest = EmojiTestFixtures.manifest(gson,
+			List.of(new EmojiTestFixtures.FixtureEntry("wave", image)));
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		Harness harness = harness(chain -> chain.request().url().encodedPath().endsWith(".png")
+			? blockingResponse(chain.request(), "image/png", image, null, entered, release)
+			: response(chain.request(), 200, "application/json", manifest, etag(manifest)));
+		Thread poll = new Thread(harness.service::pollForTest);
+		poll.start();
+		assertTrue(entered.await(1, TimeUnit.SECONDS));
+		harness.service.close();
+		release.countDown();
+		poll.join(2_000);
+		assertFalse(poll.isAlive());
+		assertTrue(harness.updates.isEmpty());
+		harness.close();
+	}
+
 	private Harness harness(Interceptor interceptor) throws Exception
 	{
 		return harness(Files.createTempDirectory("emoji-service"), interceptor);
@@ -234,6 +316,41 @@ public class EmojiSyncServiceTest
 		Response.Builder builder = new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
 			.code(code).message("fixture")
 			.body(ResponseBody.create(MediaType.parse(type), body));
+		if (etag != null) builder.header("ETag", etag);
+		return builder.build();
+	}
+
+	private static Response blockingResponse(Request request, String type, byte[] body, String etag,
+		CountDownLatch entered, CountDownLatch release)
+	{
+		ResponseBody responseBody = new ResponseBody()
+		{
+			private final BufferedSource source = Okio.buffer(new Source()
+			{
+				private boolean sent;
+				@Override public long read(Buffer sink, long count) throws IOException
+				{
+					if (sent) return -1;
+					entered.countDown();
+					try { release.await(3, TimeUnit.SECONDS); }
+					catch (InterruptedException error)
+					{
+						Thread.currentThread().interrupt();
+						throw new IOException("cancelled", error);
+					}
+					sink.write(body);
+					sent = true;
+					return body.length;
+				}
+				@Override public Timeout timeout() { return Timeout.NONE; }
+				@Override public void close() { }
+			});
+			@Override public MediaType contentType() { return MediaType.parse(type); }
+			@Override public long contentLength() { return -1; }
+			@Override public BufferedSource source() { return source; }
+		};
+		Response.Builder builder = new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+			.code(200).message("fixture").body(responseBody);
 		if (etag != null) builder.header("ETag", etag);
 		return builder.build();
 	}
