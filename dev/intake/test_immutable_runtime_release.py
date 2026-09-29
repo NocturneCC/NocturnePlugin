@@ -162,18 +162,96 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         self.assertIn("venvs/"+runtime.EMOJI_VENV_NAME,text)
         self.assertNotIn('target="$root/venvs/'+runtime.LEGACY_VENV_NAME+'"',text)
 
-    def test_service_state_verifier_requires_exact_inactive_systemd_evidence(self):
-        def runner(args,**_kwargs):
-            name=args[2]
-            return SimpleNamespace(stdout=(f"Id={name}\nLoadState=loaded\n"
-                "ActiveState=inactive\nSubState=dead\nMainPID=0\n"))
-        self.assertEqual(set(runtime.SERVICE_UNITS),set(runtime.verify_inactive_services(runner)))
-        def active(args,**_kwargs):
-            name=args[2]
-            return SimpleNamespace(stdout=(f"Id={name}\nLoadState=loaded\n"
-                "ActiveState=active\nSubState=running\nMainPID=123\n"))
-        with self.assertRaisesRegex(ValueError,"not inactive"):
-            runtime.verify_inactive_services(active)
+    def systemd_runner(self, evidence):
+        def runner(args, **_kwargs):
+            value = evidence[args[2]]
+            if isinstance(value, str):
+                return SimpleNamespace(stdout=value)
+            return SimpleNamespace(stdout="".join(
+                f"{key}={item}\n" for key, item in value.items()))
+        return runner
+
+    def inactive_systemd_evidence(self):
+        return {name: {"Id": name, "LoadState": "loaded",
+                       "ActiveState": "inactive", "SubState": "dead",
+                       "MainPID": "0"} for name in runtime.SERVICE_UNITS}
+
+    def test_service_state_verifier_accepts_production_shaped_absent_timer(self):
+        evidence = self.inactive_systemd_evidence()
+        evidence["nocturne-plugin-emoji-sync.service"]["LoadState"] = "not-found"
+        timer = evidence["nocturne-plugin-emoji-sync.timer"]
+        timer["LoadState"] = "not-found"
+        timer.pop("MainPID")
+        result = runtime.verify_inactive_services(self.systemd_runner(evidence))
+        self.assertEqual(set(runtime.SERVICE_UNITS), set(result))
+        self.assertNotIn("MainPID", result["nocturne-plugin-emoji-sync.timer"])
+
+    def test_service_state_verifier_accepts_installed_inactive_timer(self):
+        evidence = self.inactive_systemd_evidence()
+        evidence["nocturne-plugin-emoji-sync.timer"].pop("MainPID")
+        result = runtime.verify_inactive_services(self.systemd_runner(evidence))
+        self.assertEqual("loaded",
+            result["nocturne-plugin-emoji-sync.timer"]["LoadState"])
+
+    def test_service_state_verifier_accepts_zero_timer_and_service_pids(self):
+        evidence = self.inactive_systemd_evidence()
+        result = runtime.verify_inactive_services(self.systemd_runner(evidence))
+        self.assertEqual("0", result["nocturne-plugin-dev.service"]["MainPID"])
+        self.assertEqual("0", result["nocturne-plugin-emoji-sync.timer"]["MainPID"])
+
+    def test_service_state_verifier_rejects_invalid_timer_pid(self):
+        for pid in ("123", "invalid", "", "-1"):
+            with self.subTest(pid=pid):
+                evidence = self.inactive_systemd_evidence()
+                evidence["nocturne-plugin-emoji-sync.timer"]["MainPID"] = pid
+                with self.assertRaisesRegex(ValueError, "not inactive"):
+                    runtime.verify_inactive_services(self.systemd_runner(evidence))
+
+    def test_service_state_verifier_rejects_unsafe_timer_states(self):
+        states = (
+            ("active", "running"), ("activating", "start"),
+            ("deactivating", "stop"), ("failed", "failed"),
+            ("inactive", "exited"),
+        )
+        for active, substate in states:
+            with self.subTest(active=active, substate=substate):
+                evidence = self.inactive_systemd_evidence()
+                timer = evidence["nocturne-plugin-emoji-sync.timer"]
+                timer["ActiveState"] = active
+                timer["SubState"] = substate
+                with self.assertRaisesRegex(ValueError, "not inactive"):
+                    runtime.verify_inactive_services(self.systemd_runner(evidence))
+
+    def test_service_state_verifier_requires_valid_service_pid(self):
+        service = "nocturne-plugin-dev.service"
+        evidence = self.inactive_systemd_evidence()
+        evidence[service].pop("MainPID")
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            runtime.verify_inactive_services(self.systemd_runner(evidence))
+        for pid in ("1", "invalid", "", "-1"):
+            with self.subTest(pid=pid):
+                evidence = self.inactive_systemd_evidence()
+                evidence[service]["MainPID"] = pid
+                with self.assertRaisesRegex(ValueError, "not inactive"):
+                    runtime.verify_inactive_services(self.systemd_runner(evidence))
+
+    def test_service_state_verifier_rejects_missing_duplicate_or_extra_properties(self):
+        timer = "nocturne-plugin-emoji-sync.timer"
+        for output in (
+            "Id=nocturne-plugin-emoji-sync.timer\nLoadState=not-found\n"
+            "ActiveState=inactive\n",
+            "Id=nocturne-plugin-emoji-sync.timer\nLoadState=not-found\n"
+            "ActiveState=inactive\nSubState=dead\nSubState=dead\n",
+            "Id=nocturne-plugin-emoji-sync.timer\nLoadState=not-found\n"
+            "ActiveState=inactive\nSubState=dead\nUnexpected=value\n",
+            "Id=nocturne-plugin-emoji-sync.timer\nLoadState=not-found\n"
+            "ActiveState=inactive\nSubState=dead\nmalformed\n",
+        ):
+            with self.subTest(output=output):
+                evidence = self.inactive_systemd_evidence()
+                evidence[timer] = output
+                with self.assertRaises(ValueError):
+                    runtime.verify_inactive_services(self.systemd_runner(evidence))
 
     def venv_inputs(self):
         release=self.runtime/"releases"/("f"*40); (release/"dev/intake").mkdir(parents=True)
@@ -442,6 +520,29 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
             return runtime.activate(self.runtime,self.systemd,commit,apply=True,fail=fail,
                                     confirmed_services_stopped=True,
                                     expected_prestate_sha256=dry["prestate_sha256"],**kwargs)
+
+    def test_activation_dry_run_accepts_production_shaped_systemd_evidence(self):
+        second = self.two_releases()
+        evidence = self.inactive_systemd_evidence()
+        evidence["nocturne-plugin-emoji-sync.service"]["LoadState"] = "not-found"
+        timer = evidence["nocturne-plugin-emoji-sync.timer"]
+        timer["LoadState"] = "not-found"
+        timer.pop("MainPID")
+        verifier = lambda: runtime.verify_inactive_services(
+            self.systemd_runner(evidence))
+        with patch.object(runtime, "validate_venv",
+                          return_value=self.core_runtime_record(second)), \
+                patch("emoji_runtime_release.validate_runtime",
+                      return_value=self.emoji_runtime_record(second)):
+            result = runtime.activate(
+                self.runtime, self.systemd, second, nginx_target=self.nginx,
+                unit_uid=os.getuid(), unit_gid=os.getgid(),
+                service_state_verifier=verifier)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(second, result["commit"])
+        self.assertEqual(self.first, result["previous_commit"])
+        self.assertEqual(len(runtime.UNITS), result["units"])
+        self.assertRegex(result["prestate_sha256"], r"^[0-9a-f]{64}$")
 
     def test_activation_failure_restores_symlink_and_units(self):
         phases=("after_activation_record","before_activation","after_symlink",

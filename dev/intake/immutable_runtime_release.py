@@ -116,12 +116,22 @@ def verify_inactive_services(run=command):
             if key in fields:
                 raise ValueError("systemd service-state output has duplicate fields")
             fields[key] = value
-        if set(fields) != {"Id", "LoadState", "ActiveState", "SubState", "MainPID"}:
-            raise ValueError("systemd service-state output is incomplete")
+        base_fields = {"Id", "LoadState", "ActiveState", "SubState"}
+        observed_fields = set(fields)
+        if name.endswith(".service"):
+            required_fields = base_fields | {"MainPID"}
+            if observed_fields != required_fields:
+                raise ValueError("systemd service-state output is incomplete")
+        elif name.endswith(".timer"):
+            if (not base_fields <= observed_fields
+                    or not observed_fields <= base_fields | {"MainPID"}):
+                raise ValueError("systemd service-state output is incomplete")
+        else:
+            raise ValueError(f"unsupported systemd unit type: {name}")
         allowed_load = {"loaded"} if name in CORE_UNITS else {"loaded", "not-found"}
         if (fields["Id"] != name or fields["LoadState"] not in allowed_load
                 or fields["ActiveState"] != "inactive" or fields["SubState"] != "dead"
-                or fields["MainPID"] != "0"):
+                or ("MainPID" in fields and fields["MainPID"] != "0")):
             raise ValueError(f"required unit is not inactive: {name}")
         evidence[name] = fields
     return evidence
