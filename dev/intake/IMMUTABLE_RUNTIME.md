@@ -65,6 +65,18 @@ Both installers use no index, required hashes, binary-only inputs and exact
 versioned single-wheel directories. Missing, extra, linked, mounted, writable,
 incorrectly owned or ACL-extended inputs fail closed.
 
+Runtime and commit-scoped staging directories are created with an explicit
+mode-0755 operation that is independent of the invoking shell's umask. A
+pre-existing directory is reused only when its exact ownership, mode, node
+type, mount status and basic ACL pass validation; an entry that appears during
+creation is not adopted. Runtime-root mode 0755 is also a validation invariant
+because the generated DynamicUser services must be able to traverse the
+versioned environment. The immutable release copies of both requirements locks
+are root-owned, single-link mode-0444 inputs. Once a target release exists, the
+readiness checker uses those copies rather than imposing immutable-runtime
+metadata on the mutable development checkout. Before release creation, the
+exact clean commit contents bind prepositioned wheel validation.
+
 `prepare_immutable_runtime.sh` is the root-only preparation entry point. It is
 read-only with `--check`; `--prepare` builds the release, builds or validates
 both exact versioned environments, and stages all four units and the emoji route

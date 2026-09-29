@@ -113,6 +113,20 @@ def _regular_input(report, phase, path, expected, validator):
     return True
 
 
+def _validate_checkout_bound_wheel(lock, wheel, *, expected_lock,
+                                   expected_name, expected_sha256,
+                                   expected_directory, uid, gid, run):
+    """Validate a prepositioned wheel before its immutable release exists."""
+    lock = Path(lock)
+    metadata = lock.lstat()
+    if (lock.is_symlink() or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1 or lock.read_text() != expected_lock):
+        raise ValueError("committed requirements lock is missing or changed")
+    return runtime.validate_runtime_wheel(
+        wheel, expected_name=expected_name, expected_sha256=expected_sha256,
+        expected_directory=expected_directory, uid=uid, gid=gid, run=run)
+
+
 def _incomplete_entries(report, parent, pattern, phase):
     parent = Path(parent)
     if not parent.exists() or parent.is_symlink() or not parent.is_dir():
@@ -177,31 +191,50 @@ def inspect(repo, runtime_root, commit, *, python=Path("/usr/bin/python3.14"),
         _unsafe(report, "host_runtime", python,
                 "CPython 3.14 cpython-314-x86_64-linux-gnu with glibc >= 2.27", error)
 
-    gunicorn_lock = repo / "dev/intake/runtime-requirements.lock"
+    release = root / "releases" / commit
+    release_available = release.is_dir() and not release.is_symlink()
+    gunicorn_lock = ((release / "dev/intake/runtime-requirements.lock")
+                     if release_available else
+                     (repo / "dev/intake/runtime-requirements.lock"))
     gunicorn_wheel = (root / "wheelhouse" / runtime.VENV_NAME /
                        runtime.GUNICORN_WHEEL_NAME)
     if container_safe["wheelhouse"] is not False:
         _regular_input(
             report, "gunicorn_wheel", gunicorn_wheel,
             f"root-owned mode-0444 single-link wheel sha256={runtime.GUNICORN_WHEEL_SHA256}",
-            lambda: runtime.validate_locked_wheel(
+            lambda: (runtime.validate_locked_wheel(
                 gunicorn_lock, gunicorn_wheel,
                 expected_lock=runtime.GUNICORN_LOCK_TEXT,
                 expected_name=runtime.GUNICORN_WHEEL_NAME,
                 expected_sha256=runtime.GUNICORN_WHEEL_SHA256,
-                expected_directory=runtime.VENV_NAME, uid=uid, gid=gid, run=run))
+                expected_directory=runtime.VENV_NAME, uid=uid, gid=gid, run=run)
+                if release_available else _validate_checkout_bound_wheel(
+                    gunicorn_lock, gunicorn_wheel,
+                    expected_lock=runtime.GUNICORN_LOCK_TEXT,
+                    expected_name=runtime.GUNICORN_WHEEL_NAME,
+                    expected_sha256=runtime.GUNICORN_WHEEL_SHA256,
+                    expected_directory=runtime.VENV_NAME,
+                    uid=uid, gid=gid, run=run)))
 
-    emoji_lock = repo / "dev/intake/emoji-sync-requirements.txt"
+    emoji_lock = ((release / "dev/intake/emoji-sync-requirements.txt")
+                  if release_available else
+                  (repo / "dev/intake/emoji-sync-requirements.txt"))
     emoji_wheel = (root / "wheelhouse" / emoji_runtime.TARGET_NAME /
                    emoji_runtime.WHEEL_NAME)
     if container_safe["wheelhouse"] is not False:
         _regular_input(
             report, "pillow_wheel", emoji_wheel,
             f"root-owned mode-0444 single-link wheel sha256={emoji_runtime.WHEEL_SHA256}",
-            lambda: emoji_runtime.validate_inputs(
-                emoji_lock, emoji_wheel, uid=uid, gid=gid, run=run))
+            lambda: (emoji_runtime.validate_inputs(
+                emoji_lock, emoji_wheel, uid=uid, gid=gid, run=run)
+                if release_available else _validate_checkout_bound_wheel(
+                    emoji_lock, emoji_wheel,
+                    expected_lock=emoji_runtime.REQUIREMENTS_TEXT,
+                    expected_name=emoji_runtime.WHEEL_NAME,
+                    expected_sha256=emoji_runtime.WHEEL_SHA256,
+                    expected_directory=emoji_runtime.TARGET_NAME,
+                    uid=uid, gid=gid, run=run)))
 
-    release = root / "releases" / commit
     release_ready = False
     if container_safe["releases"] is False:
         pass

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import unittest
@@ -75,14 +76,27 @@ class EmojiRuntimeReleaseTest(unittest.TestCase):
 
     def test_final_path_hash_locked_prepare_check_and_idempotency(self):
         run,calls=self.runner()
-        result=self.prepare(run,apply=True)
+        previous=os.umask(0o077)
+        try:
+            result=self.prepare(run,apply=True)
+        finally:
+            os.umask(previous)
         self.assertEqual("prepared",result["state"])
+        self.assertEqual(0o755,stat.S_IMODE(self.target.stat().st_mode))
         self.assertFalse((self.target/runtime.MARKER).exists())
         self.assertTrue((self.target/runtime.MANIFEST).is_file())
         install=[args for args in calls if "install" in args]
         self.assertEqual(1,len(install)); self.assertIn("--require-hashes",install[0])
         self.assertIn("--only-binary=:all:",install[0]); self.assertIn("--no-index",install[0])
         self.assertFalse(any(".venv-" in value for args in calls for value in args))
+        self.target.chmod(0o700)
+        with self.assertRaisesRegex(ValueError,"root mode"):
+            runtime.validate_runtime(self.target,uid=os.getuid(),gid=os.getgid(),
+                                     approved_python={self.python},run=run)
+        runtime.validate_runtime(self.target,uid=os.getuid(),gid=os.getgid(),
+                                 approved_python={self.python},run=run,
+                                 root_modes=frozenset({0o700}))
+        self.target.chmod(0o755)
         self.assertEqual("already_prepared",self.prepare(run,apply=True)["state"])
 
     def test_interrupted_runtime_requires_exact_quarantine(self):

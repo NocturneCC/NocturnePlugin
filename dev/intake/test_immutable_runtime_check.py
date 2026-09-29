@@ -245,6 +245,7 @@ class ImmutableRuntimeCheckTest(unittest.TestCase):
         for wheel in (gunicorn_wheel, emoji_wheel):
             wheel.parent.mkdir(parents=True, exist_ok=True)
             wheel.write_bytes(b"wheel")
+        (self.root / "wheelhouse").chmod(0o755)
         release = self.root / "releases" / COMMIT
         (release / "dev/intake").mkdir(parents=True)
         (release / "dev/intake/runtime-requirements.lock").write_text(
@@ -259,8 +260,8 @@ class ImmutableRuntimeCheckTest(unittest.TestCase):
                 patch("immutable_runtime_check.runtime._safe_directory_node"), \
                 patch("immutable_runtime_check.emoji_runtime.validate_host",
                       return_value={"version": [3, 14]}), \
-                patch("immutable_runtime_check.runtime.validate_locked_wheel"), \
-                patch("immutable_runtime_check.emoji_runtime.validate_inputs"), \
+                patch("immutable_runtime_check.runtime.validate_locked_wheel") as core_wheel, \
+                patch("immutable_runtime_check.emoji_runtime.validate_inputs") as emoji_wheel_check, \
                 patch("immutable_runtime_check.runtime.verify_release"), \
                 patch("immutable_runtime_check.runtime.verify_release_ownership"), \
                 patch("immutable_runtime_check.runtime.validate_venv",
@@ -273,9 +274,34 @@ class ImmutableRuntimeCheckTest(unittest.TestCase):
                 patch("immutable_runtime_check.runtime.verify_staged_deployment"):
             report = check.inspect(self.repo, self.root, COMMIT,
                                    uid=os.getuid(), gid=os.getgid(), run=self.command_run)
+        self.assertEqual(release / "dev/intake/runtime-requirements.lock",
+                         core_wheel.call_args.args[0])
+        self.assertEqual(release / "dev/intake/emoji-sync-requirements.txt",
+                         emoji_wheel_check.call_args.args[0])
         self.assertEqual("prepared", report.state)
         self.assertIn("status=prepared", report.render())
         self.assertIn("operator_action=none", report.render())
+
+    def test_prepositioned_wheels_use_commit_content_before_release_exists(self):
+        gunicorn_wheel = (self.root / "wheelhouse" / runtime.VENV_NAME /
+                           runtime.GUNICORN_WHEEL_NAME)
+        emoji_wheel = (self.root / "wheelhouse" / emoji_runtime.TARGET_NAME /
+                       emoji_runtime.WHEEL_NAME)
+        for wheel in (gunicorn_wheel, emoji_wheel):
+            wheel.parent.mkdir(parents=True, exist_ok=True)
+            wheel.write_bytes(b"wheel")
+        (self.root / "wheelhouse").chmod(0o755)
+        with patch("immutable_runtime_check.verify_checkout"), \
+                patch("immutable_runtime_check.emoji_runtime.validate_host",
+                      return_value={"version": [3, 14]}), \
+                patch("immutable_runtime_check.runtime.validate_runtime_wheel") as validate_wheel:
+            report = check.inspect(self.repo, self.root, COMMIT,
+                                   uid=os.getuid(), gid=os.getgid(), run=self.command_run)
+        self.assertEqual(2,validate_wheel.call_count)
+        phases={item["phase"]:item for item in report.diagnostics}
+        self.assertNotIn("gunicorn_wheel",phases)
+        self.assertNotIn("pillow_wheel",phases)
+        self.assertEqual("not_prepared",report.state)
 
     def test_quarantine_is_reported_without_becoming_a_failure(self):
         quarantine = self.root / "quarantine/incomplete-venvs/item/runtime"

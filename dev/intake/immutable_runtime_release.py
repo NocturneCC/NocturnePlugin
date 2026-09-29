@@ -20,7 +20,7 @@ from runtime_identity import (
     GUNICORN_LOCK_SHA256, GUNICORN_LOCK_TEXT, GUNICORN_RUNTIME_NAME,
     GUNICORN_VERSION, GUNICORN_WHEEL_NAME, GUNICORN_WHEEL_SHA256,
     LEGACY_GUNICORN_LOCK_SHA256, LEGACY_GUNICORN_RUNTIME_NAME,
-    PILLOW_LOCK_SHA256, PILLOW_RUNTIME_NAME,
+    PILLOW_LOCK_SHA256, PILLOW_LOCK_TEXT, PILLOW_RUNTIME_NAME,
     PILLOW_VERSION, PILLOW_WHEEL_SHA256, PYTHON_MACHINE, PYTHON_SOABI,
     PYTHON_VERSION,
 )
@@ -155,10 +155,9 @@ def _safe_input_file(path, description, uid, gid):
         raise ValueError(f"unsafe {description} metadata")
 
 
-def validate_locked_wheel(requirements, wheel, *, expected_lock, expected_name,
-                          expected_sha256, expected_directory, uid=0, gid=0,
-                          run=command):
-    requirements, wheel = Path(requirements), Path(wheel)
+def validate_requirements_lock(requirements, *, expected_lock, uid=0, gid=0,
+                               run=command):
+    requirements = Path(requirements)
     _safe_input_file(requirements, "requirements lock", uid, gid)
     lock_metadata = requirements.stat()
     if lock_metadata.st_nlink != 1 or stat.S_IMODE(lock_metadata.st_mode) != 0o444:
@@ -166,6 +165,12 @@ def validate_locked_wheel(requirements, wheel, *, expected_lock, expected_name,
     _safe_acl(requirements, run)
     if requirements.read_text() != expected_lock:
         raise ValueError("requirements lock content mismatch")
+    return requirements
+
+
+def validate_runtime_wheel(wheel, *, expected_name, expected_sha256,
+                           expected_directory, uid=0, gid=0, run=command):
+    wheel = Path(wheel)
     parent = wheel.parent
     if parent.name != expected_directory:
         raise ValueError("wheel is not in its exact versioned wheelhouse")
@@ -182,6 +187,17 @@ def validate_locked_wheel(requirements, wheel, *, expected_lock, expected_name,
     _safe_acl(wheel, run)
     if digest(wheel) != expected_sha256:
         raise ValueError("runtime wheel digest mismatch")
+    return wheel
+
+
+def validate_locked_wheel(requirements, wheel, *, expected_lock, expected_name,
+                          expected_sha256, expected_directory, uid=0, gid=0,
+                          run=command):
+    requirements = validate_requirements_lock(
+        requirements, expected_lock=expected_lock, uid=uid, gid=gid, run=run)
+    wheel = validate_runtime_wheel(
+        wheel, expected_name=expected_name, expected_sha256=expected_sha256,
+        expected_directory=expected_directory, uid=uid, gid=gid, run=run)
     return requirements, wheel
 
 
@@ -222,13 +238,39 @@ def _safe_directory_node(path, modes, uid, gid, run=command):
         raise ValueError("runtime directory node has unsafe ACLs")
 
 
-def _validate_venv_tree(venv, *, uid=0, gid=0, approved_python=None, run=command):
+def _create_runtime_directory(path, mode, uid, gid, *, run=command,
+                              allow_existing=False):
+    """Create one approved runtime directory independent of the caller umask."""
+    path = Path(path)
+    if path.exists() or path.is_symlink():
+        if not allow_existing:
+            raise ValueError("runtime directory target unexpectedly exists")
+        _safe_directory_node(path, {mode}, uid, gid, run)
+        return False
+    old_umask = os.umask(0)
+    try:
+        try:
+            path.mkdir(mode=mode)
+        except FileExistsError as error:
+            raise ValueError("runtime directory appeared during creation") from error
+    finally:
+        os.umask(old_umask)
+    os.chown(path, uid, gid)
+    os.chmod(path, mode)
+    _safe_directory_node(path, {mode}, uid, gid, run)
+    _fsync_directory(path.parent)
+    return True
+
+
+def _validate_venv_tree(venv, *, uid=0, gid=0, approved_python=None, run=command,
+                        root_modes=frozenset({0o755})):
     venv = Path(venv)
     metadata = venv.lstat()
     if not stat.S_ISDIR(metadata.st_mode) or venv.is_symlink():
         raise ValueError("runtime venv target is not a regular directory")
-    if (metadata.st_uid, metadata.st_gid) != (uid, gid):
-        raise ValueError("runtime venv ownership mismatch")
+    if ((metadata.st_uid, metadata.st_gid) != (uid, gid)
+            or stat.S_IMODE(metadata.st_mode) not in set(root_modes)):
+        raise ValueError("runtime venv ownership or root mode mismatch")
     if os.path.ismount(venv) or metadata.st_dev != venv.parent.stat().st_dev:
         raise ValueError("runtime venv target is a mount")
     _safe_acl(venv, run)
@@ -330,10 +372,12 @@ def _venv_manifest(venv, python, lock, wheel, probe):
 
 
 def _validate_venv_runtime(venv, release, python, lock, wheel, *, uid=0, gid=0,
-                           run=command, allow_incomplete=False):
+                           run=command, allow_incomplete=False,
+                           root_modes=frozenset({0o755})):
     venv, release = Path(venv), Path(release)
     approved_python = {Path(python).resolve(strict=True)}
-    _validate_venv_tree(venv, uid=uid, gid=gid, approved_python=approved_python, run=run)
+    _validate_venv_tree(venv, uid=uid, gid=gid, approved_python=approved_python,
+                        run=run, root_modes=root_modes)
     interpreter = venv / "bin/python"
     if not interpreter.exists() or not os.access(interpreter, os.X_OK):
         raise ValueError("runtime venv interpreter is missing")
@@ -388,11 +432,10 @@ def prepare_venv(runtime_root, release, python, lock, wheel, *, apply=False,
     if not apply:
         return report
     parent = target.parent
-    parent.mkdir(parents=True, mode=0o755, exist_ok=True)
     _safe_owned_directory(runtime_root, 0o755, uid, gid, run)
-    _safe_owned_directory(parent, 0o755, uid, gid, run)
-    target.mkdir(mode=0o755)
-    os.chown(target, uid, gid)
+    _create_runtime_directory(parent, 0o755, uid, gid, run=run,
+                              allow_existing=True)
+    _create_runtime_directory(target, 0o755, uid, gid, run=run)
     marker = target / VENV_MARKER
     _write_json_fsync(marker, {"purpose": VENV_PURPOSE, "target": str(target)},
                       0o600, uid, gid)
@@ -652,8 +695,7 @@ def verify_staged_deployment(runtime_root, commit):
 def _stage_directory(parent, target, artifacts, manifest_name, manifest, uid, gid):
     if target.exists() or target.is_symlink():
         return False
-    parent.mkdir(parents=True, mode=0o755, exist_ok=True)
-    _safe_directory_node(parent, {0o755}, uid, gid)
+    _create_runtime_directory(parent, 0o755, uid, gid, allow_existing=True)
     temporary = Path(tempfile.mkdtemp(prefix=".stage-", dir=parent))
     try:
         for name, source in artifacts.items():
@@ -800,13 +842,18 @@ def prepare(repo, runtime_root, revision="HEAD", *, apply=False, uid=0, gid=0, r
               "venv": str(runtime_root / "venvs" / VENV_NAME)}
     if release.exists():
         verify_release(release, commit); verify_release_ownership(release, uid, gid)
+        validate_requirements_lock(
+            release / "dev/intake/runtime-requirements.lock",
+            expected_lock=GUNICORN_LOCK_TEXT, uid=uid, gid=gid, run=run)
+        validate_requirements_lock(
+            release / "dev/intake/emoji-sync-requirements.txt",
+            expected_lock=PILLOW_LOCK_TEXT, uid=uid, gid=gid, run=run)
         return {**report, "state": "already_prepared"}
     if not apply: return {**report, "state": "not_prepared"}
     _safe_owned_directory(runtime_root, 0o755, uid, gid, run)
     releases = runtime_root / "releases"
-    if not releases.exists():
-        releases.mkdir(mode=0o755); os.chown(releases, uid, gid)
-    _safe_owned_directory(releases, 0o755, uid, gid, run)
+    _create_runtime_directory(releases, 0o755, uid, gid, run=run,
+                              allow_existing=True)
     staging = Path(tempfile.mkdtemp(prefix=".release-", dir=releases)); archive = staging.parent / (staging.name + ".tar")
     try:
         run(["git", "-C", str(repo), "archive", "--format=tar", "--output", str(archive), commit])
@@ -822,6 +869,12 @@ def prepare(repo, runtime_root, revision="HEAD", *, apply=False, uid=0, gid=0, r
         if fail: fail("after_manifest")
         verify_release(staging, commit)
         _make_read_only(staging, uid, gid)
+        validate_requirements_lock(
+            staging / "dev/intake/runtime-requirements.lock",
+            expected_lock=GUNICORN_LOCK_TEXT, uid=uid, gid=gid, run=run)
+        validate_requirements_lock(
+            staging / "dev/intake/emoji-sync-requirements.txt",
+            expected_lock=PILLOW_LOCK_TEXT, uid=uid, gid=gid, run=run)
         if fail: fail("before_release_activation")
         os.replace(staging, release)
         _fsync_directory(releases)
@@ -833,12 +886,14 @@ def prepare(repo, runtime_root, revision="HEAD", *, apply=False, uid=0, gid=0, r
         _discard_staging(staging)
 
 
-def validate_venv(venv, run=command, *, uid=0, gid=0):
+def validate_venv(venv, run=command, *, uid=0, gid=0,
+                  root_modes=frozenset({0o755})):
     venv = Path(venv)
     if venv.name != VENV_NAME:
         raise ValueError("runtime venv does not match the requested lock identity")
     _validate_venv_tree(venv, uid=uid, gid=gid,
-                        approved_python={Path("/usr/bin/python3.14")}, run=run)
+                        approved_python={Path("/usr/bin/python3.14")}, run=run,
+                        root_modes=root_modes)
     if (venv / VENV_MARKER).exists() or (venv / VENV_MARKER).is_symlink():
         raise ValueError("runtime venv preparation is incomplete")
     python = venv / "bin/python"

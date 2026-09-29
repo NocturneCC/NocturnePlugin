@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -228,16 +229,27 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         selector.symlink_to(Path("venvs")/runtime.LEGACY_VENV_NAME)
         original_selector=selector.readlink()
         run,calls=self.fake_venv_runner(target,python)
-        with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
-            result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
-                                        uid=os.getuid(),gid=os.getgid(),run=run)
+        previous=os.umask(0o077)
+        try:
+            with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
+                result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
+                                            uid=os.getuid(),gid=os.getgid(),run=run)
+        finally:
+            os.umask(previous)
         self.assertEqual("prepared",result["state"])
+        self.assertEqual(0o755,stat.S_IMODE(target.stat().st_mode))
         self.assertFalse((target/runtime.VENV_MARKER).exists())
         self.assertTrue((target/runtime.VENV_MANIFEST).is_file())
         self.assertEqual(f"#!{target}/bin/python",(target/"bin/gunicorn").read_text().splitlines()[0])
         venv_calls=[call for call in calls if "venv" in call]
         self.assertEqual(str(target),venv_calls[0][-1])
         self.assertFalse(any(".venv-" in part for call in calls for part in call))
+        target.chmod(0o700)
+        with self.assertRaisesRegex(ValueError,"root mode"):
+            runtime.validate_venv(target,uid=os.getuid(),gid=os.getgid(),run=run)
+        runtime.validate_venv(target,uid=os.getuid(),gid=os.getgid(),run=run,
+                              root_modes=frozenset({0o700}))
+        target.chmod(0o755)
         with self.wheel_digest(wheel),patch.object(runtime,"_system_python",return_value=python.resolve()):
             result=runtime.prepare_venv(self.runtime,release,python,lock,wheel,apply=True,
                                         uid=os.getuid(),gid=os.getgid(),run=run)
@@ -346,6 +358,39 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
                 self.assertFalse((self.runtime/"releases"/self.first).exists())
         self.assertEqual("prepared",self.prepare(apply=True)["state"])
         self.assertEqual("already_prepared",self.prepare(apply=True)["state"])
+
+    def test_restrictive_umask_cannot_change_release_locks_or_staging_containers(self):
+        previous=os.umask(0o077)
+        try:
+            prepared=self.prepare(apply=True)
+            runtime.stage_deployment(self.runtime,self.first,apply=True,
+                                     uid=os.getuid(),gid=os.getgid())
+        finally:
+            os.umask(previous)
+        release=Path(prepared["release"])
+        for container in (self.runtime/"releases",self.runtime/"staged-units",
+                          self.runtime/"staged-nginx"):
+            self.assertEqual(0o755,stat.S_IMODE(container.stat().st_mode))
+        for lock in (release/"dev/intake/runtime-requirements.lock",
+                     release/"dev/intake/emoji-sync-requirements.txt"):
+            metadata=lock.stat()
+            self.assertEqual((os.getuid(),os.getgid(),0o444,1),
+                             (metadata.st_uid,metadata.st_gid,
+                              stat.S_IMODE(metadata.st_mode),metadata.st_nlink))
+        runtime.verify_staged_deployment(self.runtime,self.first)
+
+    def test_foreign_or_ambiguous_staging_container_is_not_adopted(self):
+        self.prepare(apply=True)
+        unsafe=self.runtime/"staged-nginx"
+        unsafe.mkdir(mode=0o700)
+        before=unsafe.stat()
+        with self.assertRaisesRegex(ValueError,"unsafe runtime directory node"):
+            runtime.stage_deployment(self.runtime,self.first,apply=True,
+                                     uid=os.getuid(),gid=os.getgid())
+        after=unsafe.stat()
+        self.assertEqual((before.st_ino,stat.S_IMODE(before.st_mode)),
+                         (after.st_ino,stat.S_IMODE(after.st_mode)))
+        self.assertEqual([],list(unsafe.iterdir()))
 
     def two_releases(self):
         self.prepare(apply=True)

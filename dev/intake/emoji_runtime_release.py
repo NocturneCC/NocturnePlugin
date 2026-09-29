@@ -10,7 +10,7 @@ import stat
 import subprocess
 from uuid import uuid4
 
-from immutable_runtime_release import (_safe_acl, _safe_directory_node,
+from immutable_runtime_release import (_create_runtime_directory, _safe_acl, _safe_directory_node,
                                        _safe_owned_directory, _system_python,
                                        _validate_venv_tree, _write_json_fsync,
                                        command, digest, validate_locked_wheel)
@@ -104,10 +104,12 @@ def _runtime_probe(target, run=command):
 
 
 def validate_runtime(target, *, uid=0, gid=0, approved_python=None, run=command,
-                     allow_incomplete=False, expected_record=None):
+                     allow_incomplete=False, expected_record=None,
+                     root_modes=frozenset({0o755})):
     target = Path(target)
     approved = approved_python or {Path("/usr/bin/python3.14")}
-    _validate_venv_tree(target, uid=uid, gid=gid, approved_python=approved, run=run)
+    _validate_venv_tree(target, uid=uid, gid=gid, approved_python=approved,
+                        run=run, root_modes=root_modes)
     marker = target / MARKER
     if not allow_incomplete and (marker.exists() or marker.is_symlink()):
         raise ValueError("emoji runtime preparation is incomplete")
@@ -186,10 +188,9 @@ def prepare(runtime_root, python, requirements, wheel, *, apply=False,
     if os.geteuid() != 0 and uid == 0:
         raise PermissionError("emoji runtime preparation requires root")
     parent = runtime_root / "venvs"
-    if not parent.exists():
-        parent.mkdir(mode=0o755); os.chown(parent, uid, gid)
-    _safe_owned_directory(parent, 0o755, uid, gid, run)
-    target.mkdir(mode=0o755); os.chown(target, uid, gid)
+    _create_runtime_directory(parent, 0o755, uid, gid, run=run,
+                              allow_existing=True)
+    _create_runtime_directory(target, 0o755, uid, gid, run=run)
     marker = target / MARKER
     _write_json_fsync(marker, {"purpose": PURPOSE, "target": str(target)}, 0o600, uid, gid)
     if fail: fail("after_incomplete_marker")
