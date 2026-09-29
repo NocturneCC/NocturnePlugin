@@ -28,7 +28,7 @@ class EmojiRouteSupportTest(unittest.TestCase):
     proxy_pass_header Cache-Control;
     proxy_pass http://127.0.0.1:5072;
 }
-location ~ ^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$ {
+location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
     limit_except GET { deny all; }
     proxy_pass http://127.0.0.1:5072;
 }
@@ -50,7 +50,7 @@ location ~ ^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$ {
         candidate = candidate_site(self.active, self.announcement, self.emoji)
         self.assertEqual(1, candidate.count("location = /api/plugin/v1/emojis"))
         self.assertEqual(1, candidate.count("/api/plugin/v1/emojis/assets/"))
-        self.assertIn("[0-9a-f]{64}\\.png$", candidate)
+        self.assertIn('"^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$"', candidate)
         self.assertEqual(3, candidate.count("limit_except GET"))
         self.assertIn('if ($content_length !~ "^$|^0$")', candidate)
         self.assertIn("proxy_pass_header ETag", candidate)
