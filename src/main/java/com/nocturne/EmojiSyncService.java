@@ -48,6 +48,7 @@ final class EmojiSyncService implements AutoCloseable
 	private final long pollIntervalMillis;
 	private final long jitterMillis;
 	private final Set<Call> assetCalls = Collections.newSetFromMap(new ConcurrentHashMap<>());
+	private final Set<CompletableFuture<?>> assetFutures = Collections.newSetFromMap(new ConcurrentHashMap<>());
 	private ScheduledFuture<?> scheduled;
 	private Call manifestCall;
 	private EmojiCacheStore.Loaded current;
@@ -164,11 +165,19 @@ final class EmojiSyncService implements AutoCloseable
 				}
 				catch (IOException ignored) { }
 			}
-			downloads.add(CompletableFuture.runAsync(() ->
+			CompletableFuture<Void> download;
+			synchronized (this)
 			{
-				try { rawAssets.put(entry.digest, download(entry)); }
-				catch (IOException error) { throw new java.util.concurrent.CompletionException(error); }
-			}, worker));
+				if (closed) throw new IOException("emoji synchronization stopped");
+				download = CompletableFuture.runAsync(() ->
+				{
+					try { rawAssets.put(entry.digest, download(entry)); }
+					catch (IOException error) { throw new java.util.concurrent.CompletionException(error); }
+				}, worker);
+				assetFutures.add(download);
+			}
+			download.whenComplete((ignored, error) -> assetFutures.remove(download));
+			downloads.add(download);
 		}
 		try { CompletableFuture.allOf(downloads.toArray(new CompletableFuture[0])).join(); }
 		catch (RuntimeException error) { throw new IOException("emoji generation unavailable", error); }
@@ -250,7 +259,9 @@ final class EmojiSyncService implements AutoCloseable
 		if (scheduled != null) scheduled.cancel(true);
 		if (manifestCall != null) manifestCall.cancel();
 		for (Call call : assetCalls) call.cancel();
+		for (CompletableFuture<?> future : assetFutures) future.cancel(true);
 		assetCalls.clear();
+		assetFutures.clear();
 		http.dispatcher().cancelAll();
 		http.connectionPool().evictAll();
 		if (ownsWorker) worker.shutdownNow();
@@ -259,5 +270,6 @@ final class EmojiSyncService implements AutoCloseable
 
 	void pollForTest() { poll(); }
 	synchronized boolean inFlightForTest() { return manifestCall != null; }
+	int assetFutureCountForTest() { return assetFutures.size(); }
 	OkHttpClient httpForTest() { return http; }
 }

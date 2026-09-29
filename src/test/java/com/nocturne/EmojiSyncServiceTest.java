@@ -181,6 +181,37 @@ public class EmojiSyncServiceTest
 		service.close();
 	}
 
+	@Test public void shutdownCancelsQueuedAndActiveAssetWorkWithoutCallback() throws Exception
+	{
+		byte[] image = EmojiTestFixtures.png(0xff224466);
+		List<EmojiTestFixtures.FixtureEntry> entries = new ArrayList<>();
+		for (int index = 0; index < 12; index++)
+			entries.add(new EmojiTestFixtures.FixtureEntry("emoji_" + index, image));
+		entries.sort(java.util.Comparator.comparing(entry -> entry.name));
+		byte[] manifest = EmojiTestFixtures.manifest(gson, entries);
+		CountDownLatch assetEntered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		Harness harness = harness(chain ->
+		{
+			if (!chain.request().url().encodedPath().endsWith(".png"))
+				return response(chain.request(), 200, "application/json", manifest, etag(manifest));
+			assetEntered.countDown();
+			try { release.await(3, TimeUnit.SECONDS); }
+			catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IOException(error); }
+			return response(chain.request(), 200, "image/png", image, null);
+		});
+		Thread poll = new Thread(harness.service::pollForTest);
+		poll.start();
+		assertTrue(assetEntered.await(1, TimeUnit.SECONDS));
+		assertTrue(harness.service.assetFutureCountForTest() > 0);
+		harness.service.close();
+		poll.join(2_000);
+		assertFalse(poll.isAlive());
+		release.countDown();
+		assertTrue(harness.updates.isEmpty());
+		harness.close();
+	}
+
 	private Harness harness(Interceptor interceptor) throws Exception
 	{
 		return harness(Files.createTempDirectory("emoji-service"), interceptor);
