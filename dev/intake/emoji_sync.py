@@ -334,11 +334,11 @@ def _write(path, raw, mode=0o644):
         os.fsync(output.fileno())
 
 
-def _installed_private_file_metadata(value, maximum):
+def _installed_private_file_metadata(path, value, maximum):
     return (stat.S_ISREG(value.st_mode) and value.st_nlink == 1
             and value.st_uid in {0, os.geteuid()}
             and not stat.S_IMODE(value.st_mode) & 0o077
-            and 1 <= value.st_size <= maximum)
+            and 1 <= value.st_size <= maximum and _acl_free(path))
 
 
 def _systemd_credential_parent(path, value, maximum):
@@ -351,7 +351,7 @@ def _systemd_credential_parent(path, value, maximum):
             or path.parent != directory or path.name in {"", ".", ".."}
             or not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
             or (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, 0, 0o440)
-            or not 1 <= value.st_size <= maximum or not _acl_free(path)):
+            or not 1 <= value.st_size <= maximum):
         return None
     try:
         metadata = directory.lstat()
@@ -363,7 +363,7 @@ def _systemd_credential_parent(path, value, maximum):
             or not stat.S_ISDIR(metadata.st_mode)
             or (metadata.st_uid, metadata.st_gid,
                 stat.S_IMODE(metadata.st_mode)) != (0, 0, 0o550)
-            or not _acl_free(directory) or not os.path.ismount(directory)):
+            or not os.path.ismount(directory)):
         return None
     return metadata.st_dev, metadata.st_ino
 
@@ -374,7 +374,7 @@ def _safe_private_file(path, maximum):
         named = path.lstat()
     except OSError as error:
         raise ValueError("invalid private file") from error
-    installed = _installed_private_file_metadata(named, maximum)
+    installed = _installed_private_file_metadata(path, named, maximum)
     credential_parent = _systemd_credential_parent(path, named, maximum)
     if not installed and credential_parent is None:
         raise ValueError("unsafe private file")
@@ -386,7 +386,8 @@ def _safe_private_file(path, maximum):
     try:
         opened = os.fstat(descriptor)
         if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
-                or (installed and not _installed_private_file_metadata(opened, maximum))
+                or (installed
+                    and not _installed_private_file_metadata(path, opened, maximum))
                 or (credential_parent is not None
                     and _systemd_credential_parent(path, opened, maximum)
                     != credential_parent)):
@@ -404,7 +405,8 @@ def _safe_private_file(path, maximum):
         current = path.lstat()
         if (not 1 <= len(raw) <= maximum or len(raw) != verified.st_size
                 or (verified.st_dev, verified.st_ino) != (current.st_dev, current.st_ino)
-                or (installed and not _installed_private_file_metadata(verified, maximum))
+                or (installed
+                    and not _installed_private_file_metadata(path, verified, maximum))
                 or (credential_parent is not None
                     and _systemd_credential_parent(path, current, maximum)
                     != credential_parent)):

@@ -908,9 +908,18 @@ class EmojiSynchronizerTest(unittest.TestCase):
                              side_effect=credential_lstat), \
                 patch("emoji_sync.os.fstat", side_effect=credential_fstat), \
                 patch("emoji_sync.os.path.ismount",
-                      side_effect=lambda path: Path(path) == directory):
+                      side_effect=lambda path: Path(path) == directory), \
+                patch("emoji_sync._acl_free", return_value=False):
             self.assertEqual(("123", frozenset({"blocked"})), _read_config(config))
             self.assertEqual("fixture-token", _read_credential(token))
+
+    def test_ordinary_private_files_with_acls_remain_rejected(self):
+        token = self.root / "ordinary-private-token"
+        token.write_text("fixture-token\n")
+        token.chmod(0o600)
+        with patch("emoji_sync._acl_free", return_value=False), \
+                self.assertRaisesRegex(ValueError, "unsafe private file"):
+            _read_credential(token)
 
     def test_systemd_load_credential_metadata_remains_fail_closed(self):
         directory = self.root / "credential-cases"
@@ -923,9 +932,10 @@ class EmojiSynchronizerTest(unittest.TestCase):
         real_fstat = os.fstat
 
         def run_case(*, environment=None, mounted=True, parent_changes=None,
-                     file_changes=None, unsafe_acl_path=None, path=token):
+                     file_changes=None, opened_changes=None, path=token):
             parent_changes = {} if parent_changes is None else parent_changes
             file_changes = {} if file_changes is None else file_changes
+            opened_changes = {} if opened_changes is None else opened_changes
 
             def credential_lstat(candidate):
                 value = real_lstat(candidate)
@@ -943,7 +953,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
                 return changed_stat(real_fstat(descriptor),
                                     **{"st_mode": stat.S_IFREG | 0o440,
                                        "st_uid": 0, "st_gid": 0,
-                                       **file_changes})
+                                       **file_changes, **opened_changes})
 
             credentials = (str(directory) if environment is None else environment)
             with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": credentials},
@@ -953,10 +963,7 @@ class EmojiSynchronizerTest(unittest.TestCase):
                     patch("emoji_sync.os.fstat", side_effect=credential_fstat), \
                     patch("emoji_sync.os.path.ismount",
                           side_effect=lambda candidate: mounted
-                          and Path(candidate) == directory), \
-                    patch("emoji_sync._acl_free",
-                          side_effect=lambda candidate: Path(candidate)
-                          != unsafe_acl_path):
+                          and Path(candidate) == directory):
                 with self.assertRaisesRegex(ValueError, "unsafe private file"):
                     _read_credential(path)
 
@@ -968,11 +975,11 @@ class EmojiSynchronizerTest(unittest.TestCase):
             "unmounted_parent": {"mounted": False},
             "parent_mode": {"parent_changes": {"st_mode": stat.S_IFDIR | 0o750}},
             "parent_owner": {"parent_changes": {"st_uid": 1}},
-            "parent_acl": {"unsafe_acl_path": directory},
-            "file_acl": {"unsafe_acl_path": token},
             "file_mode": {"file_changes": {"st_mode": stat.S_IFREG | 0o444}},
             "file_owner": {"file_changes": {"st_uid": 1}},
             "file_link": {"file_changes": {"st_nlink": 2}},
+            "opened_identity": {
+                "opened_changes": {"st_ino": token.lstat().st_ino + 1}},
             "relative_environment": {"environment": "relative/credentials"},
             "spoofed_environment": {
                 "environment": str(directory.parent / "other" / ".." / directory.name)},
