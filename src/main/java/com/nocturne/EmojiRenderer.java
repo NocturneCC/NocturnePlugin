@@ -2,8 +2,10 @@ package com.nocturne;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import net.runelite.api.ChatMessageType;
@@ -118,6 +120,7 @@ final class EmojiRenderer
 		int supplied = assets.size();
 		int reserved = 0;
 		int updated = 0;
+		int ordinal = 0;
 		if (assets.isEmpty())
 		{
 			active = Map.of();
@@ -126,6 +129,7 @@ final class EmojiRenderer
 		}
 		for (EmojiAsset asset : assets.values())
 		{
+			ordinal++;
 			Integer icon = iconByDigest.get(asset.digest);
 			if (icon == null)
 			{
@@ -146,12 +150,14 @@ final class EmojiRenderer
 			}
 			try
 			{
-				icons.update(icon, asset.image);
+				java.awt.image.BufferedImage displayImage = runeLiteIconImage(asset.image);
+				icons.update(icon, displayImage);
 				updated++;
 			}
 			catch (RuntimeException error)
 			{
-				return RegistrationResult.failed(supplied, reserved, updated, next.size(), "icon_update_failed");
+				return RegistrationResult.updateFailed(supplied, reserved, updated, next.size(),
+					ordinal, icon, asset.image, error, "icon_update_failed");
 			}
 			int chatIndex;
 			try { chatIndex = icons.chatIndex(icon); }
@@ -168,6 +174,55 @@ final class EmojiRenderer
 		return RegistrationResult.succeeded(supplied, reserved, updated, next.size());
 	}
 
+	/** RuneLite's indexed chat sprite reserves palette entry zero for transparency and accepts 255 opaque colors. */
+	static java.awt.image.BufferedImage runeLiteIconImage(java.awt.image.BufferedImage source)
+	{
+		if (source == null || source.getWidth() != EmojiManifest.DIMENSION
+			|| source.getHeight() != EmojiManifest.DIMENSION)
+			throw new IllegalArgumentException("invalid verified emoji dimensions");
+		int width = source.getWidth();
+		int height = source.getHeight();
+		int[] pixels = source.getRGB(0, 0, width, height, null, 0, width);
+		java.awt.image.BufferedImage canonical = new java.awt.image.BufferedImage(width, height,
+			java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		if (!paletteOverflow(pixels))
+		{
+			canonical.setRGB(0, 0, width, height, pixels, 0, width);
+			return canonical;
+		}
+		for (int index = 0; index < pixels.length; index++)
+		{
+			int pixel = pixels[index];
+			if ((pixel >>> 24) != 255) continue;
+			int red = (pixel >>> 16) & 0xe0;
+			int green = (pixel >>> 8) & 0xe0;
+			int blue = pixel & 0xc0;
+			int rgb = (red << 16) | (green << 8) | blue;
+			// ImageUtil uses palette value zero for transparent pixels, even for opaque black.
+			// Move that one bucket to the adjacent blue level; this also bounds the
+			// non-transparent palette to at most 255 entries.
+			if (rgb == 0) rgb = 0x40;
+			pixels[index] = (pixel & 0xff000000) | rgb;
+		}
+		canonical.setRGB(0, 0, width, height, pixels, 0, width);
+		return canonical;
+	}
+
+	private static boolean paletteOverflow(int[] pixels)
+	{
+		Set<Integer> opaqueColors = new HashSet<>();
+		for (int pixel : pixels)
+		{
+			int rgb = pixel & 0x00ffffff;
+			if ((pixel >>> 24) == 255 && rgb != 0)
+			{
+				opaqueColors.add(rgb);
+				if (opaqueColors.size() > 255) return true;
+			}
+		}
+		return false;
+	}
+
 	static final class RegistrationResult
 	{
 		final int assetCount;
@@ -177,9 +232,18 @@ final class EmojiRenderer
 		final int usableMappings;
 		final String failureCategory;
 		final boolean success;
+		final int failedAssetOrdinal;
+		final int reservedSlot;
+		final int imageWidth;
+		final int imageHeight;
+		final int imageType;
+		final String colorModelClass;
+		final String exceptionClass;
 
 		private RegistrationResult(int assetCount, boolean clientThreadTaskEntered, int slotsReserved,
-			int iconsUpdated, int usableMappings, String failureCategory, boolean success)
+			int iconsUpdated, int usableMappings, String failureCategory, boolean success,
+			int failedAssetOrdinal, int reservedSlot, int imageWidth, int imageHeight, int imageType,
+			String colorModelClass, String exceptionClass)
 		{
 			this.assetCount = assetCount;
 			this.clientThreadTaskEntered = clientThreadTaskEntered;
@@ -188,21 +252,39 @@ final class EmojiRenderer
 			this.usableMappings = usableMappings;
 			this.failureCategory = failureCategory;
 			this.success = success;
+			this.failedAssetOrdinal = failedAssetOrdinal;
+			this.reservedSlot = reservedSlot;
+			this.imageWidth = imageWidth;
+			this.imageHeight = imageHeight;
+			this.imageType = imageType;
+			this.colorModelClass = colorModelClass;
+			this.exceptionClass = exceptionClass;
 		}
 
 		static RegistrationResult succeeded(int assets, int slots, int updated, int mappings)
 		{
-			return new RegistrationResult(assets, true, slots, updated, mappings, "none", true);
+			return new RegistrationResult(assets, true, slots, updated, mappings, "none", true,
+				0, -1, 0, 0, 0, "none", "none");
 		}
 
 		static RegistrationResult failed(int assets, int slots, int updated, int mappings, String category)
 		{
-			return new RegistrationResult(assets, true, slots, updated, mappings, category, false);
+			return new RegistrationResult(assets, true, slots, updated, mappings, category, false,
+				0, -1, 0, 0, 0, "none", "none");
+		}
+
+		static RegistrationResult updateFailed(int assets, int slots, int updated, int mappings,
+			int ordinal, int icon, java.awt.image.BufferedImage image, RuntimeException error, String category)
+		{
+			return new RegistrationResult(assets, true, slots, updated, mappings, category, false,
+				ordinal, icon, image.getWidth(), image.getHeight(), image.getType(),
+				image.getColorModel().getClass().getName(), error.getClass().getName());
 		}
 
 		static RegistrationResult notEntered(int assets, String category)
 		{
-			return new RegistrationResult(assets, false, 0, 0, 0, category, false);
+			return new RegistrationResult(assets, false, 0, 0, 0, category, false,
+				0, -1, 0, 0, 0, "none", "none");
 		}
 	}
 

@@ -6,9 +6,12 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.IndexedSprite;
 import net.runelite.api.MessageNode;
 import net.runelite.api.Node;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.client.util.ImageUtil;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -118,6 +121,92 @@ public class EmojiRendererTest
 		assertEquals(0, renderer.activeTriggerCountForTest());
 	}
 
+	@Test public void runelitePaletteOverflowIsReproducedAndAllManifestAssetsRegisterAfterNormalization()
+	{
+		BufferedImage highColor = highColorImage();
+		try
+		{
+			ImageUtil.getImageIndexedSprite(highColor, spriteClient());
+			fail("RuneLite must reject 256 opaque colors plus its transparent palette entry");
+		}
+		catch (RuntimeException error)
+		{
+			assertEquals(RuntimeException.class, error.getClass());
+			assertEquals("Passed in image had 256 different colors, exceeding the max of 255.",
+				error.getMessage());
+		}
+
+		AtomicInteger registered = new AtomicInteger();
+		AtomicInteger nextIcon = new AtomicInteger();
+		EmojiRenderer.IconRegistrar runeliteSpriteConversion = new EmojiRenderer.IconRegistrar()
+		{
+			@Override public int reserve() { return nextIcon.getAndIncrement(); }
+			@Override public void update(int icon, BufferedImage image)
+			{
+				assertEquals(BufferedImage.TYPE_INT_ARGB, image.getType());
+				ImageUtil.getImageIndexedSprite(image, spriteClient());
+				registered.incrementAndGet();
+			}
+			@Override public int chatIndex(int icon) { return icon + 100; }
+		};
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, runeliteSpriteConversion);
+		Map<String, EmojiAsset> assets = new LinkedHashMap<>();
+		for (int index = 0; index < 251; index++)
+		{
+			String name = index == 5 ? "abyssaldagger" : "emoji_" + index;
+			BufferedImage image = index == 5 ? highColor : asset(name, String.format("%064x", index + 1)).image;
+			assets.put(name, new EmojiAsset(name, String.format("%064x", index + 1), image));
+		}
+		EmojiRenderer.RegistrationResult result = renderer.update(assets);
+		assertTrue(result.success);
+		assertEquals(251, result.assetCount);
+		assertEquals(251, result.slotsReserved);
+		assertEquals(251, result.iconsUpdated);
+		assertEquals(251, result.usableMappings);
+		assertEquals(251, registered.get());
+		assertEquals("<img=105>", EmojiRenderer.format(":abyssaldagger:",
+			Map.of("abyssaldagger", 105)));
+		assertEquals(251, renderer.activeTriggerCountForTest());
+	}
+
+	@Test public void updateFailureMetadataIsBoundedAndPartialMapIsNeverPublished()
+	{
+		AtomicInteger updates = new AtomicInteger();
+		EmojiRenderer.IconRegistrar failing = new EmojiRenderer.IconRegistrar()
+		{
+			@Override public int reserve() { return updates.get(); }
+			@Override public void update(int icon, BufferedImage image)
+			{
+				if (updates.incrementAndGet() == 6) throw new IllegalStateException("do not retain this message");
+			}
+			@Override public int chatIndex(int icon) { return icon + 200; }
+		};
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, failing);
+		Map<String, EmojiAsset> assets = new LinkedHashMap<>();
+		for (int index = 0; index < 8; index++)
+		{
+			String name = "item_" + index;
+			BufferedImage image = index == 5 ? highColorImage() : asset(name,
+				String.format("%064x", index + 1)).image;
+			assets.put(name, new EmojiAsset(name, String.format("%064x", index + 1), image));
+		}
+		EmojiRenderer.RegistrationResult result = renderer.update(assets);
+		assertFalse(result.success);
+		assertEquals(8, result.assetCount);
+		assertEquals(6, result.slotsReserved);
+		assertEquals(5, result.iconsUpdated);
+		assertEquals(5, result.usableMappings);
+		assertEquals("icon_update_failed", result.failureCategory);
+		assertEquals(6, result.failedAssetOrdinal);
+		assertEquals(5, result.reservedSlot);
+		assertEquals(20, result.imageWidth);
+		assertEquals(20, result.imageHeight);
+		assertEquals(BufferedImage.TYPE_3BYTE_BGR, result.imageType);
+		assertTrue(result.colorModelClass.endsWith("ComponentColorModel"));
+		assertEquals(IllegalStateException.class.getName(), result.exceptionClass);
+		assertEquals(0, renderer.activeTriggerCountForTest());
+	}
+
 	@Test public void abyssalDiagnosticIsOneTimeAndContainsOnlyClassifications()
 	{
 		AtomicInteger refreshes = new AtomicInteger();
@@ -194,6 +283,32 @@ public class EmojiRendererTest
 	private static EmojiAsset asset(String name, String digest)
 	{
 		return new EmojiAsset(name, digest, new BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB));
+	}
+
+	private static BufferedImage highColorImage()
+	{
+		BufferedImage image = new BufferedImage(20, 20, BufferedImage.TYPE_3BYTE_BGR);
+		for (int index = 0; index < 256; index++)
+			image.setRGB(index % 20, index / 20, 0xff010000 | (index + 1));
+		return image;
+	}
+
+	private static Client spriteClient()
+	{
+		return (Client) java.lang.reflect.Proxy.newProxyInstance(Client.class.getClassLoader(),
+			new Class<?>[]{Client.class}, (proxy, method, args) ->
+			{
+				if (method.getName().equals("createIndexedSprite"))
+					return java.lang.reflect.Proxy.newProxyInstance(IndexedSprite.class.getClassLoader(),
+						new Class<?>[]{IndexedSprite.class}, (sprite, setter, values) -> null);
+				Class<?> type = method.getReturnType();
+				if (type == boolean.class) return false;
+				if (type == int.class) return 0;
+				if (type == long.class) return 0L;
+				if (type == float.class) return 0f;
+				if (type == double.class) return 0d;
+				return null;
+			});
 	}
 
 	private static ChatMessage event(ChatMessageType type, MessageNode node)

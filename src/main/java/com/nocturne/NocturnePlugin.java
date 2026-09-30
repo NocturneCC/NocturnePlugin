@@ -134,9 +134,12 @@ public class NocturnePlugin extends Plugin
 					result ->
 					{
 						if (emojiRegistrationDiagnosticLogged.compareAndSet(false, true))
-							log.debug("Nocturne emoji asset activation asset_count={} client_thread_registration_task_entered={} slots_reserved={} icons_updated={} usable_mappings={} registration_failure_category={}",
+							log.debug("Nocturne emoji asset activation asset_count={} client_thread_registration_task_entered={} slots_reserved={} icons_updated={} usable_mappings={} registration_failure_category={} failed_asset_ordinal={} reserved_slot={} image_width={} image_height={} image_type={} color_model_class={} exception_class={}",
 								result.assetCount, result.clientThreadTaskEntered, result.slotsReserved,
-								result.iconsUpdated, result.usableMappings, result.failureCategory);
+								result.iconsUpdated, result.usableMappings, result.failureCategory,
+								result.failedAssetOrdinal, result.reservedSlot, result.imageWidth,
+								result.imageHeight, result.imageType, result.colorModelClass,
+								result.exceptionClass);
 					}),
 				succeeded -> log.debug(succeeded
 					? "Public Nocturne emoji manifest synchronized"
