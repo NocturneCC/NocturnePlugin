@@ -20,6 +20,9 @@ MAX_EMOJIS = 256
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_ASSET_BYTES = 8 * 1024
 MAX_TOTAL_BYTES = MAX_EMOJIS * MAX_ASSET_BYTES
+SYSTEMD_PUBLIC_ALIAS = Path("/var/lib/nocturne-plugin-emoji-public")
+SYSTEMD_PUBLIC_BACKING = Path("/var/lib/private/nocturne-plugin-emoji-public")
+SYSTEMD_PUBLIC_TARGET = "private/nocturne-plugin-emoji-public"
 
 
 def _acl_free(path):
@@ -58,8 +61,28 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
 
-def _generation(root):
+def _public_root(root):
+    requested = os.fspath(root)
     root = Path(root)
+    if root != SYSTEMD_PUBLIC_ALIAS:
+        return root
+    if requested != os.fspath(SYSTEMD_PUBLIC_ALIAS):
+        raise ValueError("ambiguous emoji public root")
+    try:
+        metadata = root.lstat()
+        target = os.readlink(root)
+        resolved = root.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError("unsafe emoji public root") from error
+    if (not stat.S_ISLNK(metadata.st_mode)
+            or (metadata.st_uid, metadata.st_gid, metadata.st_nlink) != (0, 0, 1)
+            or target != SYSTEMD_PUBLIC_TARGET or resolved != SYSTEMD_PUBLIC_BACKING):
+        raise ValueError("unsafe emoji public root")
+    return SYSTEMD_PUBLIC_BACKING
+
+
+def _generation(root):
+    root = _public_root(root)
     current = root / "current"
     if not current.is_symlink():
         raise ValueError("emoji generation unavailable")

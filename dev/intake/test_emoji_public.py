@@ -1,13 +1,16 @@
 from io import BytesIO
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
-from emoji_public import MANIFEST_PATH, public_wsgi
+from emoji_public import MANIFEST_PATH, load_manifest, public_wsgi
 from emoji_sync import EmojiSynchronizer, SyncFailure
 from intake import create_app
 
@@ -16,6 +19,17 @@ def png():
     output = BytesIO()
     Image.new("RGBA", (10, 12), (20, 80, 160, 200)).save(output, "PNG")
     return output.getvalue()
+
+
+def changed_stat(value, **changes):
+    return os.stat_result((changes.get("st_mode", value.st_mode),
+                           changes.get("st_ino", value.st_ino),
+                           changes.get("st_dev", value.st_dev),
+                           changes.get("st_nlink", value.st_nlink),
+                           changes.get("st_uid", value.st_uid),
+                           changes.get("st_gid", value.st_gid),
+                           changes.get("st_size", value.st_size),
+                           value.st_atime, value.st_mtime, value.st_ctime))
 
 
 class FixtureTransport:
@@ -52,6 +66,82 @@ class EmojiPublicTest(unittest.TestCase):
         EmojiSynchronizer(self.state, self.root, FixtureTransport()).synchronize(
             "123", "fixture-token")
         self.app = lambda env, start: public_wsgi(self.root, env, start)
+
+    def test_exact_systemd_public_alias_uses_verified_backing(self):
+        parent = self.base / "systemd-var-lib"
+        backing = parent / "private" / "nocturne-plugin-emoji-public"
+        backing.parent.mkdir(parents=True, mode=0o700)
+        EmojiSynchronizer(self.base / "alias-private", backing,
+                          FixtureTransport()).synchronize("123", "fixture-token")
+        alias = parent / "nocturne-plugin-emoji-public"
+        alias.symlink_to("private/nocturne-plugin-emoji-public")
+        real_lstat = Path.lstat
+
+        def systemd_lstat(path):
+            value = real_lstat(path)
+            return changed_stat(value, st_uid=0, st_gid=0, st_nlink=1) \
+                if path == alias else value
+
+        with patch("emoji_public.SYSTEMD_PUBLIC_ALIAS", alias), \
+                patch("emoji_public.SYSTEMD_PUBLIC_BACKING", backing), \
+                patch.object(Path, "lstat", autospec=True,
+                             side_effect=systemd_lstat):
+            generation, value, _raw, _digests, _root_stat = load_manifest(alias)
+        self.assertEqual(backing, generation.parents[1])
+        self.assertEqual(1, len(value["emojis"]))
+
+    def test_systemd_public_alias_shape_remains_fail_closed(self):
+        for case in ("wrong_target", "not_symlink", "wrong_owner", "wrong_group",
+                     "extra_link", "unexpected_resolved", "ambiguous_request"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as name:
+                parent = Path(name) / "var" / "lib"
+                private = parent / "private"
+                private.mkdir(parents=True)
+                alias = parent / "nocturne-plugin-emoji-public"
+                backing = private / "nocturne-plugin-emoji-public"
+                if case == "unexpected_resolved":
+                    other = Path(name) / "other"
+                    other.mkdir()
+                    backing.symlink_to(other)
+                    alias.symlink_to("private/nocturne-plugin-emoji-public")
+                elif case == "wrong_target":
+                    wrong = private / "wrong"
+                    wrong.mkdir()
+                    backing.mkdir()
+                    alias.symlink_to("private/wrong")
+                elif case == "not_symlink":
+                    backing.mkdir()
+                    alias.mkdir()
+                else:
+                    backing.mkdir()
+                    alias.symlink_to("private/nocturne-plugin-emoji-public")
+                real_lstat = Path.lstat
+
+                def systemd_lstat(path):
+                    value = real_lstat(path)
+                    if path != alias:
+                        return value
+                    if case == "wrong_owner":
+                        return changed_stat(value, st_uid=1, st_gid=0, st_nlink=1)
+                    if case == "wrong_group":
+                        return changed_stat(value, st_uid=0, st_gid=1, st_nlink=1)
+                    if case == "extra_link":
+                        return changed_stat(value, st_uid=0, st_gid=0, st_nlink=2)
+                    return changed_stat(value, st_uid=0, st_gid=0, st_nlink=1)
+
+                requested = (f"{alias.parent}/./{alias.name}"
+                             if case == "ambiguous_request" else alias)
+                with patch("emoji_public.SYSTEMD_PUBLIC_ALIAS", alias), \
+                        patch("emoji_public.SYSTEMD_PUBLIC_BACKING", backing), \
+                        patch.object(Path, "lstat", autospec=True,
+                                     side_effect=systemd_lstat), \
+                        self.assertRaisesRegex(ValueError, "emoji public root"):
+                    load_manifest(requested)
+
+    def test_direct_public_root_behavior_is_unchanged(self):
+        generation, value, _raw, _digests, _root_stat = load_manifest(self.root)
+        self.assertEqual(self.root, generation.parents[1])
+        self.assertEqual(1, len(value["emojis"]))
 
     def test_manifest_get_head_etag_304_and_deterministic_body(self):
         first = request(self.app)
