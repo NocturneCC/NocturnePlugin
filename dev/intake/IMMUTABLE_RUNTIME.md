@@ -39,6 +39,23 @@ routes or declaring rollback restored. The helper requires Nginx to remain
 active with the same master PID and requires complete bounded replacement of
 the pre-reload worker generation.
 
+Public-route validation in activation and recovery wrappers must use the
+committed `operator_http_probe.py` helper for every request that passes through
+Nginx. The current strictest per-IP route limit is 2 requests/second; the
+helper enforces a minimum 0.65-second gap across separate invocations by
+sharing one root-owned `http-probe-state.json` inside the wrapper's private
+mode-0700 temporary directory. Keep that state path unchanged for the full
+forward or rollback verification sequence. For each expected response, invoke
+`/usr/bin/python3.14 -I -B "$RELEASE/dev/intake/operator_http_probe.py"
+--state "$probe_state" --expect <status> -- /usr/bin/curl ...
+-w '%{http_code}'`, with `probe_state="$work/http-probe-state.json"`; use
+curl `--output`/`--dump-header` files for response validation, never stdout or
+logs. Only HTTP 429 is retried, at the same bounded pace; other unexpected
+statuses fail immediately, and persistent 429 fails after the bounded retry
+count/timeout. Do not weaken Nginx limits or bypass the helper for rollback or
+post-recovery public HTTP probes. Local direct-to-intake readiness probes are
+not routed through Nginx and do not consume this per-IP bucket.
+
 The intake unit has no ordering or requirement dependency on emoji
 synchronization. Its private StateDirectory denial is optional only with
 respect to a missing path; whenever that path exists it remains inaccessible.
