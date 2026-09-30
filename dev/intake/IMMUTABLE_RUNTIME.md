@@ -30,6 +30,15 @@ reinstates the verified applied set. Fsynced `prepared` and
 `rollback_prepared` records support explicit recovery after process or host
 failure. Neither staging nor activation reloads a daemon or controls a service.
 
+Nginx reload remains an operator-wrapper action. Before every forward or
+rollback reload, capture the current worker generation with
+`nginx_reload_convergence.py --capture` into a root-owned mode-0600 temporary
+file. After `systemctl reload nginx.service`, run the same helper with
+`--wait --before <file> --timeout 10 --interval 0.25` before probing public
+routes or declaring rollback restored. The helper requires Nginx to remain
+active with the same master PID and requires complete bounded replacement of
+the pre-reload worker generation.
+
 The intake unit has no ordering or requirement dependency on emoji
 synchronization. Its private StateDirectory denial is optional only with
 respect to a missing path; whenever that path exists it remains inaccessible.
