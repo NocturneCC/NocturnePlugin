@@ -82,11 +82,21 @@ public class EmojiSyncServiceTest
 		Path cachePath = parent.resolve("nocturne").resolve("emoji-cache-v1");
 		CountDownLatch published = new CountDownLatch(1);
 		AtomicInteger icon = new AtomicInteger(10);
+		AtomicInteger registered = new AtomicInteger();
+		AtomicReference<Thread> registrationThread = new AtomicReference<>();
+		AtomicReference<Runnable> clientTask = new AtomicReference<>();
 		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new EmojiRenderer.IconRegistrar()
 		{
-			@Override public int register(java.awt.image.BufferedImage image) { return icon.getAndIncrement(); }
+			@Override public int reserve() { return icon.getAndIncrement(); }
+			@Override public void update(int value, java.awt.image.BufferedImage image)
+			{
+				registered.incrementAndGet();
+				registrationThread.set(Thread.currentThread());
+			}
 			@Override public int chatIndex(int value) { return value; }
 		});
+		java.util.function.Consumer<Map<String, EmojiAsset>> publish = EmojiRenderer.clientThreadPublisher(
+			task -> clientTask.set(task), () -> true, renderer);
 		AtomicInteger manifestRequests = new AtomicInteger();
 		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(chain ->
 		{
@@ -99,7 +109,7 @@ public class EmojiSyncServiceTest
 		}).build();
 		EmojiSyncService service = new EmojiSyncService(base, gson, cachePath, assets ->
 		{
-			renderer.update(assets);
+			publish.accept(assets);
 			published.countDown();
 		});
 		try
@@ -108,7 +118,15 @@ public class EmojiSyncServiceTest
 			assertTrue("initial synchronization did not publish before timeout",
 				published.await(3, TimeUnit.SECONDS));
 			assertEquals(1, manifestRequests.get());
+			assertEquals("worker must not register chat icons", 0, registered.get());
+			clientTask.get().run();
+			assertEquals(1, registered.get());
+			assertSame(Thread.currentThread(), registrationThread.get());
 			assertEquals(1, renderer.activeTriggerCountForTest());
+			EmojiRendererTest.TestNode node = new EmojiRendererTest.TestNode(":wave:");
+			assertTrue(renderer.onChatMessage(new net.runelite.api.events.ChatMessage(node,
+				net.runelite.api.ChatMessageType.PUBLICCHAT, "name", node.getValue(), "sender", 1)));
+			assertEquals("<img=10>", node.getRuneLiteFormatMessage());
 			EmojiCacheStore.Loaded cached = new EmojiCacheStore(cachePath, gson).load();
 			assertNotNull(cached);
 			assertTrue(cached.assets.containsKey("wave"));

@@ -4,6 +4,7 @@ import java.awt.image.BufferedImage;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.MessageNode;
 import net.runelite.api.Node;
@@ -56,7 +57,9 @@ public class EmojiRendererTest
 			TestNode node = new TestNode(":wave:");
 			boolean replaced = renderer.onChatMessage(event(type, node));
 			assertEquals(type.name(), supported.contains(type), replaced);
-			assertEquals(type.name(), supported.contains(type) ? "<img=100>" : ":wave:", node.getValue());
+			assertEquals(type.name(), ":wave:", node.getValue());
+			assertEquals(type.name(), supported.contains(type) ? "<img=100>" : null,
+				node.getRuneLiteFormatMessage());
 		}
 	}
 
@@ -68,8 +71,67 @@ public class EmojiRendererTest
 		TestNode outgoingLocalEcho = new TestNode(":wave:");
 		assertTrue(renderer.onChatMessage(event(ChatMessageType.PRIVATECHAT, incoming)));
 		assertTrue(renderer.onChatMessage(event(ChatMessageType.PRIVATECHATOUT, outgoingLocalEcho)));
-		assertEquals("<img=100>", incoming.getValue());
-		assertEquals("<img=100>", outgoingLocalEcho.getValue());
+		assertEquals(":wave:", incoming.getValue());
+		assertEquals("<img=100>", incoming.getRuneLiteFormatMessage());
+		assertEquals("<img=100>", outgoingLocalEcho.getRuneLiteFormatMessage());
+	}
+
+	@Test public void rendererRegistrationFromWorkerIsDeferredToClientThread()
+		throws InterruptedException
+	{
+		AtomicInteger refreshes = new AtomicInteger();
+		AtomicReference<Runnable> clientQueue = new AtomicReference<>();
+		AtomicReference<Thread> clientThread = new AtomicReference<>();
+		FakeIcons icons = new FakeIcons();
+		EmojiRenderer renderer = new EmojiRenderer(refreshes::incrementAndGet, icons);
+		java.util.function.Consumer<Map<String, EmojiAsset>> publish = EmojiRenderer.clientThreadPublisher(
+			task -> clientQueue.set(task), () -> true, renderer);
+		Thread worker = new Thread(() -> publish.accept(Map.of("abyssaldagger",
+			asset("abyssaldagger", "b".repeat(64)))), "nocturne-emojis-test");
+		worker.start();
+		worker.join();
+		assertEquals(0, icons.registrations.get());
+		clientThread.set(Thread.currentThread());
+		clientQueue.get().run();
+		assertEquals(1, icons.registrations.get());
+		assertSame(clientThread.get(), icons.registrationThread.get());
+		assertEquals(1, renderer.activeTriggerCountForTest());
+	}
+
+	@Test public void abyssalDiagnosticIsOneTimeAndContainsOnlyClassifications()
+	{
+		AtomicInteger refreshes = new AtomicInteger();
+		AtomicInteger diagnostics = new AtomicInteger();
+		AtomicReference<EmojiRenderer.RenderDiagnostic> result = new AtomicReference<>();
+		EmojiRenderer renderer = new EmojiRenderer(refreshes::incrementAndGet, new FakeIcons(), value ->
+		{
+			diagnostics.incrementAndGet();
+			result.set(value);
+		});
+		renderer.update(Map.of("abyssaldagger", asset("abyssaldagger", "c".repeat(64))));
+		TestNode node = new TestNode(":abyssaldagger:");
+		assertTrue(renderer.onChatMessage(event(ChatMessageType.PUBLICCHAT, node)));
+		assertEquals("<img=100>", node.getRuneLiteFormatMessage());
+		assertTrue(renderer.onChatMessage(event(ChatMessageType.PUBLICCHAT, new TestNode(":abyssaldagger:"))));
+		assertEquals(1, diagnostics.get());
+		assertTrue(result.get().supportedMessageType);
+		assertTrue(result.get().tokenMatched);
+		assertTrue(result.get().iconRegistered);
+		assertTrue(result.get().nodeRewritten);
+		assertTrue(result.get().refreshRequested);
+	}
+
+	@Test public void runeLiteFormatOverrideSurvivesLaterCoreEmojiValueUpdate()
+	{
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new FakeIcons());
+		renderer.update(Map.of("wave", asset("wave", "d".repeat(64))));
+		TestNode node = new TestNode(":wave:");
+		assertTrue(renderer.onChatMessage(event(ChatMessageType.PUBLICCHAT, node)));
+		// RuneLite's built-in EmojiPlugin uses MessageNode.setValue(). The
+		// display override consumed by ChatMessageManager remains authoritative.
+		node.setValue("<img=55>");
+		assertEquals("<img=55>", node.getValue());
+		assertEquals("<img=100>", node.getRuneLiteFormatMessage());
 	}
 
 	@Test public void addRenameDeleteDuplicateUpdatesAndSessionCapAreBounded()
@@ -122,13 +184,21 @@ public class EmojiRendererTest
 	private static final class FakeIcons implements EmojiRenderer.IconRegistrar
 	{
 		int next;
-		@Override public int register(BufferedImage image) { return next++; }
+		final AtomicInteger registrations = new AtomicInteger();
+		final AtomicReference<Thread> registrationThread = new AtomicReference<>();
+		@Override public int reserve() { return next++; }
+		@Override public void update(int icon, BufferedImage image)
+		{
+			registrations.incrementAndGet();
+			registrationThread.set(Thread.currentThread());
+		}
 		@Override public int chatIndex(int icon) { return icon + 100; }
 	}
 
-	private static final class TestNode implements MessageNode
+	static final class TestNode implements MessageNode
 	{
 		private String value;
+		private String runeLiteFormatMessage;
 		TestNode(String value) { this.value = value; }
 		@Override public int getId() { return 1; }
 		@Override public ChatMessageType getType() { return ChatMessageType.CLAN_CHAT; }
@@ -138,8 +208,8 @@ public class EmojiRendererTest
 		@Override public void setSender(String sender) { }
 		@Override public String getValue() { return value; }
 		@Override public void setValue(String value) { this.value = value; }
-		@Override public String getRuneLiteFormatMessage() { return null; }
-		@Override public void setRuneLiteFormatMessage(String message) { }
+		@Override public String getRuneLiteFormatMessage() { return runeLiteFormatMessage; }
+		@Override public void setRuneLiteFormatMessage(String message) { runeLiteFormatMessage = message; }
 		@Override public int getTimestamp() { return 1; }
 		@Override public void setTimestamp(int timestamp) { }
 		@Override public Node getNext() { return null; }

@@ -4,10 +4,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.MessageNode;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ChatIconManager;
 
 /** Client-thread-only received Clan Chat formatter. No message text is retained. */
@@ -19,28 +22,59 @@ final class EmojiRenderer
 
 	interface IconRegistrar
 	{
-		int register(java.awt.image.BufferedImage image);
+		int reserve();
+		void update(int icon, java.awt.image.BufferedImage image);
 		int chatIndex(int icon);
 	}
 
+	interface ClientThreadDispatcher { void invoke(Runnable task); }
+
 	private final Runnable refresh;
 	private final IconRegistrar icons;
+	private final Consumer<RenderDiagnostic> diagnostic;
+	private final AtomicBoolean abyssalDiagnosticReported = new AtomicBoolean();
 	private final Map<String, Integer> iconByDigest = new HashMap<>();
 	private Map<String, Integer> active = Map.of();
 
 	EmojiRenderer(Client client, ChatIconManager icons)
 	{
+		this(client, icons, ignored -> { });
+	}
+
+	EmojiRenderer(Client client, ChatIconManager icons, Consumer<RenderDiagnostic> diagnostic)
+	{
 		this(client::refreshChat, new IconRegistrar()
 		{
-			@Override public int register(java.awt.image.BufferedImage image) { return icons.registerChatIcon(image); }
+			@Override public int reserve() { return icons.reserveChatIcon(); }
+			@Override public void update(int icon, java.awt.image.BufferedImage image) { icons.updateChatIcon(icon, image); }
 			@Override public int chatIndex(int icon) { return icons.chatIconIndex(icon); }
-		});
+		}, diagnostic);
 	}
 
 	EmojiRenderer(Runnable refresh, IconRegistrar icons)
 	{
+		this(refresh, icons, ignored -> { });
+	}
+
+	EmojiRenderer(Runnable refresh, IconRegistrar icons, Consumer<RenderDiagnostic> diagnostic)
+	{
 		this.refresh = refresh;
 		this.icons = icons;
+		this.diagnostic = diagnostic;
+	}
+
+	static ClientThreadDispatcher clientThreadDispatcher(ClientThread clientThread)
+	{
+		return task -> clientThread.invoke(task);
+	}
+
+	static Consumer<Map<String, EmojiAsset>> clientThreadPublisher(ClientThreadDispatcher dispatcher,
+		java.util.function.BooleanSupplier isCurrent, EmojiRenderer renderer)
+	{
+		return assets -> dispatcher.invoke(() ->
+		{
+			if (isCurrent.getAsBoolean()) renderer.update(assets);
+		});
 	}
 
 	void update(Map<String, EmojiAsset> assets)
@@ -52,10 +86,15 @@ final class EmojiRenderer
 			if (icon == null)
 			{
 				if (iconByDigest.size() >= MAX_SESSION_ICONS) continue;
-				icon = icons.register(asset.image);
+				// ChatIconManager.registerChatIcon defers slot installation via
+				// invokeLater, so chatIconIndex() would still be -1 here. The built-in
+				// EmojiPlugin reserves the slot on the client thread and then updates it.
+				icon = icons.reserve();
+				icons.update(icon, asset.image);
 				iconByDigest.put(asset.digest, icon);
 			}
-			next.put(asset.name, icons.chatIndex(icon));
+			int chatIndex = icons.chatIndex(icon);
+			if (chatIndex >= 0) next.put(asset.name, chatIndex);
 		}
 		active = Collections.unmodifiableMap(next);
 		refresh.run();
@@ -71,17 +110,52 @@ final class EmojiRenderer
 
 	boolean onChatMessage(ChatMessage event)
 	{
-		if (event == null || !supports(event.getType())) return false;
-		MessageNode node = event.getMessageNode();
-		if (node == null) return false;
-		String value = node.getValue();
-		String formatted = format(value, active);
-		if (formatted == null) return false;
-		// Read the node's current value and update only this event. We never retain a
-		// historical copy that could overwrite a later formatter's changes.
-		node.setValue(formatted);
-		refresh.run();
-		return true;
+		boolean supported = event != null && supports(event.getType());
+		MessageNode node = event == null ? null : event.getMessageNode();
+		String value = node == null ? null : node.getRuneLiteFormatMessage();
+		if (value == null && node != null) value = node.getValue();
+		boolean targetToken = value != null && value.length() <= MAX_MESSAGE_CHARS
+			&& value.contains(":abyssaldagger:");
+		boolean registered = active.containsKey("abyssaldagger")
+			&& active.get("abyssaldagger") >= 0;
+		boolean rewritten = false;
+		boolean refreshed = false;
+		if (supported && node != null)
+		{
+			String formatted = format(value, active);
+			if (formatted != null)
+			{
+				// RuneLite processes this override after chat-message subscribers and
+				// keeps the original node value intact. Later plugins can still build
+				// on the current override rather than a stale copy.
+				node.setRuneLiteFormatMessage(formatted);
+				rewritten = true;
+				refresh.run();
+				refreshed = true;
+			}
+		}
+		if (targetToken && abyssalDiagnosticReported.compareAndSet(false, true))
+			diagnostic.accept(new RenderDiagnostic(supported, true, registered, rewritten, refreshed));
+		return rewritten;
+	}
+
+	static final class RenderDiagnostic
+	{
+		final boolean supportedMessageType;
+		final boolean tokenMatched;
+		final boolean iconRegistered;
+		final boolean nodeRewritten;
+		final boolean refreshRequested;
+
+		RenderDiagnostic(boolean supportedMessageType, boolean tokenMatched, boolean iconRegistered,
+			boolean nodeRewritten, boolean refreshRequested)
+		{
+			this.supportedMessageType = supportedMessageType;
+			this.tokenMatched = tokenMatched;
+			this.iconRegistered = iconRegistered;
+			this.nodeRewritten = nodeRewritten;
+			this.refreshRequested = refreshRequested;
+		}
 	}
 
 	static boolean supports(ChatMessageType type)

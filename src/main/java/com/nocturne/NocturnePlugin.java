@@ -118,17 +118,18 @@ public class NocturnePlugin extends Plugin
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
 		raidPresence = new RaidPresenceService(http, gson);
-		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager);
+		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager, result ->
+			log.debug("Nocturne emoji render diagnostic supported_message_type={} token_matched={} icon_registered={} node_rewritten={} refresh_requested={}",
+				result.supportedMessageType, result.tokenMatched, result.iconRegistered,
+				result.nodeRewritten, result.refreshRequested));
 		emojiRenderer = createdEmojiRenderer;
 		try
 		{
 			EmojiSyncService emojis = new EmojiSyncService(http, gson,
 				RuneLite.RUNELITE_DIR.toPath().resolve("nocturne").resolve("emoji-cache-v1"),
-				assets -> clientThread.invoke(() ->
-				{
-					if (lifecycle == token && emojiRenderer == createdEmojiRenderer)
-						createdEmojiRenderer.update(assets);
-				}), succeeded -> log.debug(succeeded
+				EmojiRenderer.clientThreadPublisher(EmojiRenderer.clientThreadDispatcher(clientThread),
+					() -> lifecycle == token && emojiRenderer == createdEmojiRenderer, createdEmojiRenderer),
+				succeeded -> log.debug(succeeded
 					? "Public Nocturne emoji manifest synchronized"
 					: "Unable to synchronize public Nocturne emoji manifest"));
 			emojiSyncService = emojis;
