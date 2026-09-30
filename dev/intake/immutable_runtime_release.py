@@ -43,6 +43,7 @@ UNIT_STAGE_PURPOSE = "nocturne-commit-scoped-units-v1"
 ROUTE_STAGE_PURPOSE = "nocturne-commit-scoped-emoji-route-v1"
 EMOJI_VENV_NAME = PILLOW_RUNTIME_NAME
 EMOJI_WHEEL_SHA256 = PILLOW_WHEEL_SHA256
+ANNOUNCEMENT_ROUTE = "nginx-announcements-location.conf"
 EMOJI_ROUTE = "nginx-emojis-location.conf"
 ACTIVATION_CONFIRMATION = (
     "intake, writer, emoji synchronizer, emoji timer, and Nginx reload activity "
@@ -829,7 +830,17 @@ def stage_deployment(runtime_root, commit, *, apply=False, uid=0, gid=0):
     verify_release(release, commit)
     verify_release_ownership(release, uid, gid)
     unit_artifacts = {name: release / "deployment-units" / name for name in UNITS}
-    route_artifacts = {EMOJI_ROUTE: release / "dev/intake" / EMOJI_ROUTE}
+    route_artifacts = {
+        ANNOUNCEMENT_ROUTE: release / "dev/intake" / ANNOUNCEMENT_ROUTE,
+        EMOJI_ROUTE: release / "dev/intake" / EMOJI_ROUTE,
+    }
+    announcement_text = route_artifacts[ANNOUNCEMENT_ROUTE].read_text()
+    if (announcement_text.count("location = /api/plugin/v1/announcements") != 1
+            or "limit_except GET" not in announcement_text
+            or "proxy_pass_header ETag" not in announcement_text
+            or "proxy_pass_header Cache-Control" not in announcement_text
+            or "proxy_pass http://127.0.0.1:5072" not in announcement_text):
+        raise ValueError("announcement route does not identify the bounded intake endpoint")
     route_text = route_artifacts[EMOJI_ROUTE].read_text()
     if (route_text.count("/var/lib/nocturne-plugin-emoji-public") != 1
             or "/var/lib/nocturne-plugin-emojis" in route_text):
@@ -1354,10 +1365,11 @@ def activate(runtime_root, systemd, commit, *, nginx_target=None, apply=False,
             if (not target.is_file() or target.is_symlink() or target.stat().st_nlink != 1
                     or digest(target) != digest(units_dir / name)):
                 raise ValueError("already-active release has mismatched units")
-        emoji_route = "\n".join(
+        staged_routes = ["\n".join(
             "    " + line if line else ""
-            for line in (route_dir / EMOJI_ROUTE).read_text().strip().splitlines()) + "\n"
-        if nginx_before.decode().count(emoji_route) != 1:
+            for line in (route_dir / name).read_text().strip().splitlines()) + "\n"
+            for name in (ANNOUNCEMENT_ROUTE, EMOJI_ROUTE)]
+        if any(nginx_before.decode().count(route) != 1 for route in staged_routes):
             raise ValueError("already-active release has mismatched Nginx route")
         services = service_state_verifier()
         return {"dry_run": not apply, "state": "already_active", "commit": commit,
@@ -1366,7 +1378,7 @@ def activate(runtime_root, systemd, commit, *, nginx_target=None, apply=False,
                 "nginx_reload_required": False}
     nginx_after = _candidate_nginx_site(
         nginx_before,
-        (release / "dev/intake/nginx-announcements-location.conf").read_text(),
+        (route_dir / ANNOUNCEMENT_ROUTE).read_text(),
         (route_dir / EMOJI_ROUTE).read_text())
     previous_release = runtime_root / "releases" / previous
     verify_release(previous_release, previous)

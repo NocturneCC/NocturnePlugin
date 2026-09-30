@@ -51,26 +51,26 @@ def install(target=Path("/etc/nginx/sites-enabled/nocturne"),
         raise ValueError("exact staged release commit is required")
     if activation_record is None:
         raise ValueError("matching applied activation record is required")
-    from immutable_runtime_release import (EMOJI_ROUTE, ROUTE_MANIFEST, digest,
+    from immutable_runtime_release import (ANNOUNCEMENT_ROUTE, EMOJI_ROUTE,
+                                           ROUTE_MANIFEST, digest,
                                            verify_applied_activation,
                                            verify_staged_deployment)
     verify_staged_deployment(runtime_root, commit)
     verify_applied_activation(activation_record, runtime_root,
                               systemd_dir, commit,
                               allow_nginx_drift=True, nginx_target=target)
-    release_dir = runtime_root / "releases" / commit / "dev/intake"
     source_dir = runtime_root / "staged-nginx" / commit
     backup_root = Path(backup_root)
     current = runtime_root / "current"
     if not current.is_symlink() or current.resolve().name != commit:
         raise ValueError("active release does not match staged emoji route")
-    for path in (target, release_dir / "nginx-announcements-location.conf",
+    for path in (target, source_dir / ANNOUNCEMENT_ROUTE,
                  source_dir / EMOJI_ROUTE, backup_root):
         if not path.exists() or path.is_symlink():
             raise ValueError(f"missing or unsafe route source/target: {path}")
     if not target.is_file() or not backup_root.is_dir():
         raise ValueError("emoji route target paths have unexpected types")
-    for path in (target, release_dir / "nginx-announcements-location.conf",
+    for path in (target, source_dir / ANNOUNCEMENT_ROUTE,
                  source_dir / EMOJI_ROUTE):
         if path.stat().st_nlink != 1:
             raise ValueError(f"hard-linked route source/target is unsafe: {path}")
@@ -81,7 +81,7 @@ def install(target=Path("/etc/nginx/sites-enabled/nocturne"),
         return {"dry_run": not apply, "state": "already_applied", "target": str(target),
                 "sha256": _digest(original)}
     candidate = candidate_site(original.decode(),
-        (release_dir / "nginx-announcements-location.conf").read_text(),
+        (source_dir / ANNOUNCEMENT_ROUTE).read_text(),
         (source_dir / EMOJI_ROUTE).read_text()).encode()
     result = {"dry_run": not apply, "state": "not_applied", "target": str(target),
               "before_sha256": _digest(original), "after_sha256": _digest(candidate)}

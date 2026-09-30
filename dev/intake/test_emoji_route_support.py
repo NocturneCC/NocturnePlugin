@@ -42,6 +42,7 @@ location ~ "^/api/plugin/v1/emojis/assets/[0-9a-f]{64}\\.png$" {
         self.active = "server {\n    # Nocturne plugin development intake\n" + indented + "}\n"
         self.target.write_text(self.active)
         (self.release_source / "nginx-announcements-location.conf").write_text(self.announcement)
+        (self.source / "nginx-announcements-location.conf").write_text(self.announcement)
         (self.source / "nginx-emojis-location.conf").write_text(self.emoji)
         (self.source / "STAGED-NGINX-MANIFEST.json").write_text("{}\n")
         self.metadata = {"uid": 0, "gid": 0, "mode": 0o640,

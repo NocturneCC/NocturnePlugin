@@ -120,6 +120,32 @@ class ImmutableRuntimeReleaseTest(unittest.TestCase):
         self.assertIn("/var/lib/nocturne-plugin-emoji-public", route)
         self.assertNotIn("/var/lib/nocturne-plugin-emojis", route)
 
+    def test_staged_nginx_contains_bounded_announcement_and_emoji_routes(self):
+        self.prepare(apply=True)
+        runtime.stage_deployment(self.runtime, self.first, apply=True,
+                                 uid=os.getuid(), gid=os.getgid())
+        staged = self.runtime / "staged-nginx" / self.first
+        manifest = json.loads((staged / runtime.ROUTE_MANIFEST).read_text())
+        self.assertEqual({runtime.ANNOUNCEMENT_ROUTE, runtime.EMOJI_ROUTE},
+                         set(manifest["artifacts"]))
+        announcement = (staged / runtime.ANNOUNCEMENT_ROUTE).read_text()
+        self.assertEqual(
+            (self.repo / "dev/intake" / runtime.ANNOUNCEMENT_ROUTE).read_text(),
+            announcement)
+        self.assertEqual(1, announcement.count(
+            "location = /api/plugin/v1/announcements"))
+        self.assertIn("limit_except GET", announcement)
+        self.assertIn("proxy_pass_header ETag", announcement)
+        self.assertIn("proxy_pass_header Cache-Control", announcement)
+        self.assertIn("proxy_pass http://127.0.0.1:5072", announcement)
+        candidate = runtime._candidate_nginx_site(
+            b"server {\n    # Nocturne plugin development intake\n}\n",
+            announcement, (staged / runtime.EMOJI_ROUTE).read_text()).decode()
+        self.assertEqual(1, candidate.count(
+            "location = /api/plugin/v1/announcements"))
+        self.assertEqual(1, candidate.count(
+            "location = /api/plugin/v1/emojis"))
+
     def test_dependency_lock_changes_create_distinct_runtime_identities(self):
         source=Path(__file__).parent
         self.assertEqual(runtime.GUNICORN_LOCK_TEXT,
