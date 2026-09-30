@@ -169,6 +169,87 @@ public class EmojiRendererTest
 		assertEquals(251, renderer.activeTriggerCountForTest());
 	}
 
+	@Test public void chatSpriteResizeImprovesColorErrorAndFitsRuneLiteChatLine()
+	{
+		BufferedImage detailed = opaqueGradient(20, 20);
+		BufferedImage oldReduced = legacy332(detailed);
+		BufferedImage oldChatSprite = EmojiRenderer.fitToChatCanvas(oldReduced);
+		BufferedImage newChatSprite = EmojiRenderer.runeLiteIconImage(detailed);
+		assertEquals(20, oldReduced.getWidth());
+		assertEquals(EmojiRenderer.CHAT_ICON_CANVAS_SIZE, newChatSprite.getWidth());
+		assertEquals(EmojiRenderer.CHAT_ICON_CANVAS_SIZE, newChatSprite.getHeight());
+		assertEquals(13, oldChatSprite.getWidth());
+		assertTrue("new MSE=" + rgbMeanSquaredError(newChatSprite, referenceResize(detailed))
+			+ " old MSE=" + rgbMeanSquaredError(oldChatSprite, referenceResize(detailed)),
+			rgbMeanSquaredError(newChatSprite, referenceResize(detailed))
+				< rgbMeanSquaredError(oldChatSprite, referenceResize(detailed)));
+		assertTrue(opaqueColorCount(newChatSprite) <= 255);
+		try
+		{
+			ImageUtil.getImageIndexedSprite(newChatSprite, spriteClient());
+		}
+		catch (RuntimeException failure)
+		{
+			fail("13x13 chat sprite must fit RuneLite's indexed palette");
+		}
+	}
+
+	@Test public void chatSpriteCanvasPreservesAspectCentersNarrowImagesAndNeverUpscales()
+	{
+		assertFit(20, 10, 13, 7, 0, 3);
+		assertFit(10, 20, 7, 13, 3, 0);
+		assertFit(20, 20, 13, 13, 0, 0);
+		assertFit(7, 5, 7, 5, 3, 4);
+	}
+
+	@Test public void lanczosKeepsTransparentPaddingAndLowColorPixels()
+	{
+		BufferedImage transparent = new BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB);
+		BufferedImage transparentFit = EmojiRenderer.runeLiteIconImage(transparent);
+		for (int y = 0; y < transparentFit.getHeight(); y++)
+			for (int x = 0; x < transparentFit.getWidth(); x++)
+				assertEquals(0, transparentFit.getRGB(x, y) >>> 24);
+
+		BufferedImage small = new BufferedImage(13, 13, BufferedImage.TYPE_INT_ARGB);
+		for (int y = 2; y < 11; y++)
+			for (int x = 3; x < 10; x++) small.setRGB(x, y, 0xff3377aa);
+		assertArrayEquals(small.getRGB(0, 0, 13, 13, null, 0, 13),
+			EmojiRenderer.fitToChatCanvas(small).getRGB(0, 0, 13, 13, null, 0, 13));
+
+		BufferedImage alphaGradient = new BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB);
+		for (int y = 0; y < 20; y++)
+			for (int x = 0; x < 20; x++)
+				alphaGradient.setRGB(x, y, (x * 255 / 19) << 24 | (x * 10 << 16) | (y * 9 << 8) | 0x40);
+		BufferedImage gradientFit = EmojiRenderer.runeLiteIconImage(alphaGradient);
+		assertEquals(0, gradientFit.getRGB(0, 6) >>> 24);
+		assertEquals(255, gradientFit.getRGB(12, 6) >>> 24);
+		assertTrue(opaqueColorCount(gradientFit) <= 255);
+
+		BufferedImage curved = new BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB);
+		for (int y = 0; y < 20; y++)
+		{
+			for (int x = 0; x < 20; x++)
+			{
+				double distance = Math.hypot(x - 9.5, y - 9.5);
+				int alpha = (int) Math.max(0, Math.min(255, (10.0 - distance) * 255));
+				curved.setRGB(x, y, alpha << 24 | 0x00e05090);
+			}
+		}
+		BufferedImage curvedFit = EmojiRenderer.runeLiteIconImage(curved);
+		assertEquals(0, curvedFit.getRGB(0, 0) >>> 24);
+		assertEquals(255, curvedFit.getRGB(6, 6) >>> 24);
+		assertTrue(opaqueColorCount(curvedFit) <= 255);
+	}
+
+	@Test public void detailedAssetConversionIsDeterministic()
+	{
+		BufferedImage source = highColorImage();
+		BufferedImage first = EmojiRenderer.runeLiteIconImage(source);
+		BufferedImage second = EmojiRenderer.runeLiteIconImage(source);
+		assertArrayEquals(first.getRGB(0, 0, 13, 13, null, 0, 13),
+			second.getRGB(0, 0, 13, 13, null, 0, 13));
+	}
+
 	@Test public void updateFailureMetadataIsBoundedAndPartialMapIsNeverPublished()
 	{
 		AtomicInteger updates = new AtomicInteger();
@@ -291,6 +372,99 @@ public class EmojiRendererTest
 		for (int index = 0; index < 256; index++)
 			image.setRGB(index % 20, index / 20, 0xff010000 | (index + 1));
 		return image;
+	}
+
+	private static void assertFit(int sourceWidth, int sourceHeight, int contentWidth, int contentHeight,
+		int left, int top)
+	{
+		BufferedImage source = new BufferedImage(sourceWidth, sourceHeight, BufferedImage.TYPE_INT_ARGB);
+		java.awt.Graphics2D graphics = source.createGraphics();
+		try { graphics.setColor(new java.awt.Color(0x4488cc)); graphics.fillRect(0, 0, sourceWidth, sourceHeight); }
+		finally { graphics.dispose(); }
+		BufferedImage result = EmojiRenderer.fitToChatCanvas(source);
+		assertEquals(EmojiRenderer.CHAT_ICON_CANVAS_SIZE, result.getWidth());
+		assertEquals(EmojiRenderer.CHAT_ICON_CANVAS_SIZE, result.getHeight());
+		int minX = result.getWidth(), minY = result.getHeight(), maxX = -1, maxY = -1;
+		for (int y = 0; y < result.getHeight(); y++)
+			for (int x = 0; x < result.getWidth(); x++)
+				if ((result.getRGB(x, y) >>> 24) == 255)
+				{
+					minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+					minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+				}
+		assertEquals(left, minX);
+		assertEquals(top, minY);
+		assertEquals(contentWidth - 1, maxX - minX);
+		assertEquals(contentHeight - 1, maxY - minY);
+		assertTrue(maxX < result.getWidth() && maxY < result.getHeight());
+	}
+
+	private static BufferedImage opaqueGradient(int width, int height)
+	{
+		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		for (int y = 0; y < height; y++)
+			for (int x = 0; x < width; x++)
+			{
+				int red = 24 + x * 10;
+				int green = 32 + y * 9;
+				int blue = 28 + (x * 7 + y * 5) % 200;
+				image.setRGB(x, y, 0xff000000 | red << 16 | green << 8 | blue);
+			}
+		return image;
+	}
+
+	private static BufferedImage legacy332(BufferedImage source)
+	{
+		BufferedImage reduced = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+		for (int y = 0; y < source.getHeight(); y++)
+			for (int x = 0; x < source.getWidth(); x++)
+			{
+				int pixel = source.getRGB(x, y);
+				if ((pixel >>> 24) != 255) continue;
+				int rgb = (((pixel >>> 16) & 0xe0) << 16) | (((pixel >>> 8) & 0xe0) << 8) | (pixel & 0xc0);
+				if (rgb == 0) rgb = 1;
+				reduced.setRGB(x, y, 0xff000000 | rgb);
+			}
+		return reduced;
+	}
+
+	private static BufferedImage referenceResize(BufferedImage source)
+	{
+		// The new renderer retains every filtered color: this opaque reference is
+		// therefore the ideal target for measuring error introduced by old 3-3-2.
+		return EmojiRenderer.fitToChatCanvas(source);
+	}
+
+	private static double rgbMeanSquaredError(BufferedImage actual, BufferedImage reference)
+	{
+		long error = 0;
+		int count = 0;
+		for (int y = 0; y < reference.getHeight(); y++)
+			for (int x = 0; x < reference.getWidth(); x++)
+			{
+				int expected = reference.getRGB(x, y);
+				if ((expected >>> 24) != 255) continue;
+				int observed = actual.getRGB(x, y);
+				for (int shift : new int[]{16, 8, 0})
+				{
+					int delta = ((expected >>> shift) & 0xff) - ((observed >>> shift) & 0xff);
+					error += delta * delta;
+					count++;
+				}
+			}
+		return count == 0 ? 0 : (double) error / count;
+	}
+
+	private static int opaqueColorCount(BufferedImage image)
+	{
+		java.util.Set<Integer> colors = new java.util.HashSet<>();
+		for (int y = 0; y < image.getHeight(); y++)
+			for (int x = 0; x < image.getWidth(); x++)
+			{
+				int pixel = image.getRGB(x, y);
+				if ((pixel >>> 24) == 255) colors.add(pixel & 0x00ffffff);
+			}
+		return colors.size();
 	}
 
 	private static Client spriteClient()
