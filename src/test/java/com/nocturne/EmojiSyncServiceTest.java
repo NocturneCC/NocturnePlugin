@@ -81,6 +81,8 @@ public class EmojiSyncServiceTest
 		Path parent = Files.createTempDirectory("emoji-startup");
 		Path cachePath = parent.resolve("nocturne").resolve("emoji-cache-v1");
 		CountDownLatch published = new CountDownLatch(1);
+		CountDownLatch completed = new CountDownLatch(1);
+		List<Boolean> outcomes = new CopyOnWriteArrayList<>();
 		AtomicInteger icon = new AtomicInteger(10);
 		AtomicInteger registered = new AtomicInteger();
 		AtomicReference<Thread> registrationThread = new AtomicReference<>();
@@ -95,8 +97,8 @@ public class EmojiSyncServiceTest
 			}
 			@Override public int chatIndex(int value) { return value; }
 		});
-		java.util.function.Consumer<Map<String, EmojiAsset>> publish = EmojiRenderer.clientThreadPublisher(
-			task -> clientTask.set(task), () -> true, renderer);
+		EmojiSyncService.AssetListener publish = EmojiRenderer.clientThreadPublisher(
+			task -> clientTask.set(task), () -> true, renderer, ignored -> { });
 		AtomicInteger manifestRequests = new AtomicInteger();
 		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(chain ->
 		{
@@ -107,11 +109,16 @@ public class EmojiSyncServiceTest
 			}
 			return response(chain.request(), 200, "image/png", image, null);
 		}).build();
-		EmojiSyncService service = new EmojiSyncService(base, gson, cachePath, assets ->
-		{
-			publish.accept(assets);
-			published.countDown();
-		});
+		EmojiSyncService service = new EmojiSyncService(base, gson, cachePath,
+			(assets, completion) ->
+			{
+				publish.publish(assets, completion);
+				published.countDown();
+			}, succeeded ->
+			{
+				outcomes.add(succeeded);
+				completed.countDown();
+			});
 		try
 		{
 			service.start();
@@ -119,7 +126,10 @@ public class EmojiSyncServiceTest
 				published.await(3, TimeUnit.SECONDS));
 			assertEquals(1, manifestRequests.get());
 			assertEquals("worker must not register chat icons", 0, registered.get());
+			assertTrue("sync success must wait for client-thread publication", outcomes.isEmpty());
 			clientTask.get().run();
+			assertTrue("success not reported after publication", completed.await(3, TimeUnit.SECONDS));
+			assertEquals(List.of(true), outcomes);
 			assertEquals(1, registered.get());
 			assertSame(Thread.currentThread(), registrationThread.get());
 			assertEquals(1, renderer.activeTriggerCountForTest());
@@ -137,6 +147,41 @@ public class EmojiSyncServiceTest
 			base.dispatcher().executorService().shutdownNow();
 			base.connectionPool().evictAll();
 			Harness.delete(parent);
+		}
+	}
+
+	@Test public void emptyRendererPublicationDoesNotReportSynchronizationSuccess() throws Exception
+	{
+		byte[] manifest = EmojiTestFixtures.manifest(gson, List.of());
+		Path cachePath = Files.createTempDirectory("emoji-empty-publication").resolve("cache");
+		CountDownLatch finished = new CountDownLatch(1);
+		List<Boolean> outcomes = new CopyOnWriteArrayList<>();
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new EmojiRenderer.IconRegistrar()
+		{
+			@Override public int reserve() { return 1; }
+			@Override public void update(int value, java.awt.image.BufferedImage image) { }
+			@Override public int chatIndex(int value) { return value; }
+		});
+		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(chain ->
+			response(chain.request(), 200, "application/json", manifest, etag(manifest))).build();
+		EmojiSyncService.AssetListener publisher = EmojiRenderer.clientThreadPublisher(
+			task -> task.run(), () -> true, renderer, ignored -> { });
+		EmojiSyncService service = new EmojiSyncService(base, gson, cachePath, publisher, outcome ->
+		{
+			outcomes.add(outcome);
+			finished.countDown();
+		});
+		try
+		{
+			service.start();
+			assertTrue(finished.await(3, TimeUnit.SECONDS));
+			assertEquals(List.of(false), outcomes);
+			assertEquals(0, renderer.activeTriggerCountForTest());
+		}
+		finally
+		{
+			service.close();
+			base.dispatcher().executorService().shutdownNow();
 		}
 	}
 

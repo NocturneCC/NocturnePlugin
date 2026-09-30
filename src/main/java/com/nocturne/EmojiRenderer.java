@@ -45,10 +45,19 @@ final class EmojiRenderer
 	{
 		this(client::refreshChat, new IconRegistrar()
 		{
-			@Override public int reserve() { return icons.reserveChatIcon(); }
-			@Override public void update(int icon, java.awt.image.BufferedImage image) { icons.updateChatIcon(icon, image); }
-			@Override public int chatIndex(int icon) { return icons.chatIconIndex(icon); }
+			@Override public int reserve() { requireClientThread(client); return icons.reserveChatIcon(); }
+			@Override public void update(int icon, java.awt.image.BufferedImage image)
+			{
+				requireClientThread(client);
+				icons.updateChatIcon(icon, image);
+			}
+			@Override public int chatIndex(int icon) { requireClientThread(client); return icons.chatIconIndex(icon); }
 		}, diagnostic);
+	}
+
+	private static void requireClientThread(Client client)
+	{
+		if (!client.isClientThread()) throw new IllegalStateException("emoji icon operation outside client thread");
 	}
 
 	EmojiRenderer(Runnable refresh, IconRegistrar icons)
@@ -68,36 +77,133 @@ final class EmojiRenderer
 		return task -> clientThread.invoke(task);
 	}
 
-	static Consumer<Map<String, EmojiAsset>> clientThreadPublisher(ClientThreadDispatcher dispatcher,
-		java.util.function.BooleanSupplier isCurrent, EmojiRenderer renderer)
+	static EmojiSyncService.AssetListener clientThreadPublisher(ClientThreadDispatcher dispatcher,
+		java.util.function.BooleanSupplier isCurrent, EmojiRenderer renderer,
+		Consumer<RegistrationResult> registrationDiagnostic)
 	{
-		return assets -> dispatcher.invoke(() ->
+		return (assets, complete) ->
 		{
-			if (isCurrent.getAsBoolean()) renderer.update(assets);
-		});
+			try
+			{
+				dispatcher.invoke(() ->
+				{
+					RegistrationResult result;
+					if (!isCurrent.getAsBoolean())
+						result = RegistrationResult.failed(assets.size(), 0, 0, 0, "lifecycle_stale");
+					else
+					{
+						try { result = renderer.update(assets); }
+						catch (RuntimeException error)
+						{
+							result = RegistrationResult.failed(assets.size(), 0, 0, 0, "registration_exception");
+						}
+					}
+					try { registrationDiagnostic.accept(result); }
+					finally { complete.accept(result.success); }
+				});
+			}
+			catch (RuntimeException error)
+			{
+				RegistrationResult result = RegistrationResult.notEntered(assets.size(),
+					"client_thread_dispatch_failed");
+				try { registrationDiagnostic.accept(result); }
+				finally { complete.accept(false); }
+			}
+		};
 	}
 
-	void update(Map<String, EmojiAsset> assets)
+	RegistrationResult update(Map<String, EmojiAsset> assets)
 	{
 		Map<String, Integer> next = new LinkedHashMap<>();
+		int supplied = assets.size();
+		int reserved = 0;
+		int updated = 0;
+		if (assets.isEmpty())
+		{
+			active = Map.of();
+			refresh.run();
+			return RegistrationResult.failed(0, 0, 0, 0, "no_usable_mappings");
+		}
 		for (EmojiAsset asset : assets.values())
 		{
 			Integer icon = iconByDigest.get(asset.digest);
 			if (icon == null)
 			{
-				if (iconByDigest.size() >= MAX_SESSION_ICONS) continue;
+				if (iconByDigest.size() >= MAX_SESSION_ICONS)
+					return RegistrationResult.failed(supplied, reserved, updated, next.size(), "session_icon_capacity");
 				// ChatIconManager.registerChatIcon defers slot installation via
 				// invokeLater, so chatIconIndex() would still be -1 here. The built-in
 				// EmojiPlugin reserves the slot on the client thread and then updates it.
-				icon = icons.reserve();
-				icons.update(icon, asset.image);
+				try { icon = icons.reserve(); }
+				catch (RuntimeException error)
+				{
+					return RegistrationResult.failed(supplied, reserved, updated, next.size(), "slot_reservation_failed");
+				}
+				reserved++;
+				if (icon < 0)
+					return RegistrationResult.failed(supplied, reserved, updated, next.size(), "invalid_reserved_slot");
 				iconByDigest.put(asset.digest, icon);
 			}
-			int chatIndex = icons.chatIndex(icon);
-			if (chatIndex >= 0) next.put(asset.name, chatIndex);
+			try
+			{
+				icons.update(icon, asset.image);
+				updated++;
+			}
+			catch (RuntimeException error)
+			{
+				return RegistrationResult.failed(supplied, reserved, updated, next.size(), "icon_update_failed");
+			}
+			int chatIndex;
+			try { chatIndex = icons.chatIndex(icon); }
+			catch (RuntimeException error)
+			{
+				return RegistrationResult.failed(supplied, reserved, updated, next.size(), "chat_index_lookup_failed");
+			}
+			if (chatIndex < 0)
+				return RegistrationResult.failed(supplied, reserved, updated, next.size(), "invalid_chat_index");
+			next.put(asset.name, chatIndex);
 		}
 		active = Collections.unmodifiableMap(next);
 		refresh.run();
+		return RegistrationResult.succeeded(supplied, reserved, updated, next.size());
+	}
+
+	static final class RegistrationResult
+	{
+		final int assetCount;
+		final boolean clientThreadTaskEntered;
+		final int slotsReserved;
+		final int iconsUpdated;
+		final int usableMappings;
+		final String failureCategory;
+		final boolean success;
+
+		private RegistrationResult(int assetCount, boolean clientThreadTaskEntered, int slotsReserved,
+			int iconsUpdated, int usableMappings, String failureCategory, boolean success)
+		{
+			this.assetCount = assetCount;
+			this.clientThreadTaskEntered = clientThreadTaskEntered;
+			this.slotsReserved = slotsReserved;
+			this.iconsUpdated = iconsUpdated;
+			this.usableMappings = usableMappings;
+			this.failureCategory = failureCategory;
+			this.success = success;
+		}
+
+		static RegistrationResult succeeded(int assets, int slots, int updated, int mappings)
+		{
+			return new RegistrationResult(assets, true, slots, updated, mappings, "none", true);
+		}
+
+		static RegistrationResult failed(int assets, int slots, int updated, int mappings, String category)
+		{
+			return new RegistrationResult(assets, true, slots, updated, mappings, category, false);
+		}
+
+		static RegistrationResult notEntered(int assets, String category)
+		{
+			return new RegistrationResult(assets, false, 0, 0, 0, category, false);
+		}
 	}
 
 	void clear()

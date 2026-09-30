@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
@@ -98,6 +99,7 @@ public class NocturnePlugin extends Plugin
 	private String activeRsn;
 	private volatile String historyRsn;
 	private volatile long historyGeneration;
+	private final AtomicBoolean emojiRegistrationDiagnosticLogged = new AtomicBoolean();
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -128,7 +130,14 @@ public class NocturnePlugin extends Plugin
 			EmojiSyncService emojis = new EmojiSyncService(http, gson,
 				RuneLite.RUNELITE_DIR.toPath().resolve("nocturne").resolve("emoji-cache-v1"),
 				EmojiRenderer.clientThreadPublisher(EmojiRenderer.clientThreadDispatcher(clientThread),
-					() -> lifecycle == token && emojiRenderer == createdEmojiRenderer, createdEmojiRenderer),
+					() -> lifecycle == token && emojiRenderer == createdEmojiRenderer, createdEmojiRenderer,
+					result ->
+					{
+						if (emojiRegistrationDiagnosticLogged.compareAndSet(false, true))
+							log.debug("Nocturne emoji asset activation asset_count={} client_thread_registration_task_entered={} slots_reserved={} icons_updated={} usable_mappings={} registration_failure_category={}",
+								result.assetCount, result.clientThreadTaskEntered, result.slotsReserved,
+								result.iconsUpdated, result.usableMappings, result.failureCategory);
+					}),
 				succeeded -> log.debug(succeeded
 					? "Public Nocturne emoji manifest synchronized"
 					: "Unable to synchronize public Nocturne emoji manifest"));

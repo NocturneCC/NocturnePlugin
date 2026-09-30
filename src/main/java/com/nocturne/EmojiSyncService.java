@@ -31,6 +31,11 @@ import okhttp3.Response;
 /** Isolated, fail-open synchronization of public emoji assets. */
 final class EmojiSyncService implements AutoCloseable
 {
+	interface AssetListener
+	{
+		void publish(Map<String, EmojiAsset> assets, Consumer<Boolean> completion);
+	}
+
 	static final String ORIGIN = "https://nocturne.events";
 	static final String ENDPOINT = ORIGIN + "/api/plugin/v1/emojis";
 	static final long STARTUP_DELAY_MILLIS = 0;
@@ -43,7 +48,7 @@ final class EmojiSyncService implements AutoCloseable
 	private final OkHttpClient http;
 	private final Gson gson;
 	private final EmojiCacheStore cache;
-	private final Consumer<Map<String, EmojiAsset>> listener;
+	private final AssetListener listener;
 	private final Consumer<Boolean> outcomeListener;
 	private final AtomicBoolean successReported = new AtomicBoolean();
 	private final AtomicBoolean failureReported = new AtomicBoolean();
@@ -62,6 +67,7 @@ final class EmojiSyncService implements AutoCloseable
 	private ScheduledFuture<?> scheduled;
 	private Call manifestCall;
 	private EmojiCacheStore.Loaded current;
+	private CompletableFuture<Boolean> latestPublication;
 	private boolean loaded;
 	private boolean started;
 	private volatile boolean closed;
@@ -69,13 +75,21 @@ final class EmojiSyncService implements AutoCloseable
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
 		Consumer<Map<String, EmojiAsset>> listener)
 	{
-		this(base, gson, cachePath, listener, ignored -> { }, newWorker(), true, System::nanoTime,
+		this(base, gson, cachePath, adapt(listener), ignored -> { }, newWorker(), true, System::nanoTime,
 			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS,
 			MIN_REQUEST_SPACING_MILLIS);
 	}
 
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
 		Consumer<Map<String, EmojiAsset>> listener, Consumer<Boolean> outcomeListener)
+	{
+		this(base, gson, cachePath, adapt(listener), outcomeListener, newWorker(), true, System::nanoTime,
+			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS,
+			MIN_REQUEST_SPACING_MILLIS);
+	}
+
+	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
+		AssetListener listener, Consumer<Boolean> outcomeListener)
 	{
 		this(base, gson, cachePath, listener, outcomeListener, newWorker(), true, System::nanoTime,
 			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS,
@@ -87,7 +101,7 @@ final class EmojiSyncService implements AutoCloseable
 		boolean ownsWorker, LongSupplier jitterSource, long startupDelayMillis,
 		long pollIntervalMillis, long jitterMillis)
 	{
-		this(base, gson, cachePath, listener, ignored -> { }, worker, ownsWorker,
+		this(base, gson, cachePath, adapt(listener), ignored -> { }, worker, ownsWorker,
 			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis, 0);
 	}
 
@@ -96,7 +110,7 @@ final class EmojiSyncService implements AutoCloseable
 		ScheduledExecutorService worker, boolean ownsWorker, LongSupplier jitterSource,
 		long startupDelayMillis, long pollIntervalMillis, long jitterMillis)
 	{
-		this(base, gson, cachePath, listener, outcomeListener, worker, ownsWorker,
+		this(base, gson, cachePath, adapt(listener), outcomeListener, worker, ownsWorker,
 			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis, 0);
 	}
 
@@ -105,6 +119,15 @@ final class EmojiSyncService implements AutoCloseable
 		ScheduledExecutorService worker, boolean ownsWorker, LongSupplier jitterSource,
 		long startupDelayMillis, long pollIntervalMillis, long jitterMillis,
 		long requestSpacingMillis)
+	{
+		this(base, gson, cachePath, adapt(listener), outcomeListener, worker, ownsWorker,
+			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis, requestSpacingMillis);
+	}
+
+	private EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
+		AssetListener listener, Consumer<Boolean> outcomeListener, ScheduledExecutorService worker,
+		boolean ownsWorker, LongSupplier jitterSource, long startupDelayMillis, long pollIntervalMillis,
+		long jitterMillis, long requestSpacingMillis)
 	{
 		if (requestSpacingMillis < 0) throw new IllegalArgumentException("invalid request pacing");
 		this.gson = gson;
@@ -131,6 +154,19 @@ final class EmojiSyncService implements AutoCloseable
 			.build();
 	}
 
+	private static AssetListener adapt(Consumer<Map<String, EmojiAsset>> listener)
+	{
+		return (assets, completion) ->
+		{
+			try
+			{
+				listener.accept(assets);
+				completion.accept(true);
+			}
+			catch (RuntimeException error) { completion.accept(false); }
+		};
+	}
+
 	private static ScheduledExecutorService newWorker()
 	{
 		ThreadFactory factory = runnable ->
@@ -152,6 +188,7 @@ final class EmojiSyncService implements AutoCloseable
 
 	private void poll()
 	{
+		CompletableFuture<Boolean> cachePublication = null;
 		synchronized (this)
 		{
 			if (closed || manifestCall != null) return;
@@ -159,7 +196,7 @@ final class EmojiSyncService implements AutoCloseable
 			{
 				loaded = true;
 				current = cache.load();
-				if (current != null) notifyListener(current.assets);
+				if (current != null) cachePublication = notifyListener(current.assets);
 			}
 			Request.Builder request = new Request.Builder().url(ENDPOINT).get();
 			if (current != null && current.etag != null) request.header("If-None-Match", current.etag);
@@ -174,7 +211,10 @@ final class EmojiSyncService implements AutoCloseable
 			{
 				if (response.code() == 304)
 				{
-					reportOutcome(true);
+					CompletableFuture<Boolean> publication = cachePublication != null
+						? cachePublication : latestPublication;
+					if (publication == null) reportOutcome(false);
+					else reportAfterPublication(publication);
 					return;
 				}
 				if (response.code() != 200 || response.body() == null
@@ -191,8 +231,7 @@ final class EmojiSyncService implements AutoCloseable
 					return;
 				}
 				EmojiManifest manifest = EmojiManifest.parse(raw, gson);
-				activate(manifest, etag);
-				reportOutcome(true);
+				reportAfterPublication(activate(manifest, etag));
 			}
 		}
 		catch (IOException | RuntimeException ignored) { reportOutcome(false); }
@@ -237,7 +276,7 @@ final class EmojiSyncService implements AutoCloseable
 		catch (RuntimeException ignored) { }
 	}
 
-	private void activate(EmojiManifest manifest, String etag) throws IOException
+	private CompletableFuture<Boolean> activate(EmojiManifest manifest, String etag) throws IOException
 	{
 		Map<String, byte[]> rawAssets = new ConcurrentHashMap<>();
 		List<CompletableFuture<Void>> downloads = new ArrayList<>();
@@ -270,17 +309,17 @@ final class EmojiSyncService implements AutoCloseable
 		}
 		try { CompletableFuture.allOf(downloads.toArray(new CompletableFuture[0])).join(); }
 		catch (RuntimeException error) { throw new IOException("emoji generation unavailable", error); }
-		if (isClosed()) return;
+		if (isClosed()) return CompletableFuture.completedFuture(false);
 		cache.save(manifest, rawAssets, etag);
 		EmojiCacheStore.Loaded loadedGeneration = cache.load();
 		if (loadedGeneration == null || !manifest.revision.equals(loadedGeneration.manifest.revision))
 			throw new IOException("emoji cache verification failed");
 		synchronized (this)
 		{
-			if (closed) return;
+			if (closed) return CompletableFuture.completedFuture(false);
 			current = loadedGeneration;
 		}
-		notifyListener(loadedGeneration.assets);
+		return notifyListener(loadedGeneration.assets);
 	}
 
 	private byte[] download(EmojiManifest.Entry entry) throws IOException
@@ -326,11 +365,28 @@ final class EmojiSyncService implements AutoCloseable
 		return type != null && "application".equals(type.type()) && "json".equals(type.subtype());
 	}
 
-	private void notifyListener(Map<String, EmojiAsset> assets)
+	private CompletableFuture<Boolean> notifyListener(Map<String, EmojiAsset> assets)
 	{
-		if (isClosed()) return;
-		try { listener.accept(Collections.unmodifiableMap(new LinkedHashMap<>(assets))); }
-		catch (RuntimeException ignored) { }
+		CompletableFuture<Boolean> publication = new CompletableFuture<>();
+		latestPublication = publication;
+		if (isClosed())
+		{
+			publication.complete(false);
+			return publication;
+		}
+		try
+		{
+			listener.publish(Collections.unmodifiableMap(new LinkedHashMap<>(assets)),
+				published -> publication.complete(Boolean.TRUE.equals(published)));
+		}
+		catch (RuntimeException ignored) { publication.complete(false); }
+		return publication;
+	}
+
+	private void reportAfterPublication(CompletableFuture<Boolean> publication)
+	{
+		publication.whenComplete((published, failure) ->
+			reportOutcome(failure == null && Boolean.TRUE.equals(published)));
 	}
 
 	private synchronized boolean isClosed() { return closed; }

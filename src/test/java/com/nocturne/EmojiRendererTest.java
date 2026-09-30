@@ -81,21 +81,41 @@ public class EmojiRendererTest
 	{
 		AtomicInteger refreshes = new AtomicInteger();
 		AtomicReference<Runnable> clientQueue = new AtomicReference<>();
+		AtomicReference<Boolean> completion = new AtomicReference<>();
+		AtomicReference<EmojiRenderer.RegistrationResult> registration = new AtomicReference<>();
 		AtomicReference<Thread> clientThread = new AtomicReference<>();
 		FakeIcons icons = new FakeIcons();
 		EmojiRenderer renderer = new EmojiRenderer(refreshes::incrementAndGet, icons);
-		java.util.function.Consumer<Map<String, EmojiAsset>> publish = EmojiRenderer.clientThreadPublisher(
-			task -> clientQueue.set(task), () -> true, renderer);
-		Thread worker = new Thread(() -> publish.accept(Map.of("abyssaldagger",
-			asset("abyssaldagger", "b".repeat(64)))), "nocturne-emojis-test");
+		EmojiSyncService.AssetListener publish = EmojiRenderer.clientThreadPublisher(
+			task -> clientQueue.set(task), () -> true, renderer, registration::set);
+		Thread worker = new Thread(() -> publish.publish(Map.of("abyssaldagger",
+			asset("abyssaldagger", "b".repeat(64))), completion::set), "nocturne-emojis-test");
 		worker.start();
 		worker.join();
 		assertEquals(0, icons.registrations.get());
 		clientThread.set(Thread.currentThread());
 		clientQueue.get().run();
+		assertEquals(Boolean.TRUE, completion.get());
+		assertEquals(1, registration.get().assetCount);
+		assertTrue(registration.get().clientThreadTaskEntered);
+		assertEquals(1, registration.get().slotsReserved);
+		assertEquals(1, registration.get().iconsUpdated);
+		assertEquals(1, registration.get().usableMappings);
+		assertEquals("none", registration.get().failureCategory);
 		assertEquals(1, icons.registrations.get());
 		assertSame(clientThread.get(), icons.registrationThread.get());
 		assertEquals(1, renderer.activeTriggerCountForTest());
+	}
+
+	@Test public void zeroUsableMappingPublicationClearsTriggersWithoutReportingSuccess()
+	{
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new FakeIcons());
+		renderer.update(Map.of("wave", asset("wave", "e".repeat(64))));
+		EmojiRenderer.RegistrationResult result = renderer.update(Map.of());
+		assertFalse(result.success);
+		assertEquals(0, result.usableMappings);
+		assertEquals("no_usable_mappings", result.failureCategory);
+		assertEquals(0, renderer.activeTriggerCountForTest());
 	}
 
 	@Test public void abyssalDiagnosticIsOneTimeAndContainsOnlyClassifications()
