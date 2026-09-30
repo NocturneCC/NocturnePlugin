@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nocturne Announcement Manager</title>
+  <link rel="icon" type="image/gif" href="/media/nocturne_logo.gif">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/nocturne-theme.css">
+  <style>
+    :root{--bg:#070610;--panel:#121020;--panel2:#171427;--text:#f4f0ff;--muted:#c7bff0;--border:rgba(255,255,255,.13);--accent:#8b5cf6;--danger:#ff5c8a;--good:#34d399}
+    body{color:var(--text);min-height:100vh}.wrap{max-width:1180px;margin:0 auto;padding:32px 20px 72px}
+    .top,.row,.actions,.nav{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+    h1{margin:0;font-size:clamp(25px,4vw,36px);letter-spacing:.03em}.muted,.hint{color:var(--muted)}
+    .panel,.item,.preview{background:linear-gradient(180deg,rgba(23,20,39,.96),rgba(18,16,32,.96));border:1px solid var(--border);border-radius:14px;padding:18px;margin-top:18px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.wide{grid-column:1/-1}
+    label{display:block;font-weight:700;font-size:13px;margin-bottom:6px}input,textarea,select{box-sizing:border-box;width:100%;background:#090814;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font:inherit}
+    textarea{min-height:104px;resize:vertical}.btn{border:1px solid var(--border);background:#211b38;color:var(--text);border-radius:9px;padding:9px 13px;font-weight:750;cursor:pointer}.btn:hover{border-color:var(--accent)}.danger{color:#ffd7e2}.status{min-height:1.5em;color:var(--muted)}.status.error{color:#ff9ab6}.status.ok{color:#71e5ba}
+    .items{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:12px}.item h3{margin:0 0 8px}.item p{white-space:pre-wrap;overflow-wrap:anywhere}.tag{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:3px 8px;font-size:12px;color:#ddd6fe}
+    .chat-preview{font-family:monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#090814;padding:12px;border-radius:8px}.sidebar-preview{border-left:3px solid var(--accent);padding:8px 12px;background:#090814;white-space:pre-wrap;overflow-wrap:anywhere}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}a{color:#c4b5fd}
+    @media(max-width:680px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.wrap{padding:22px 13px 48px}.panel{padding:14px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div><h1>Clan Announcements</h1><p class="muted">Draft, preview, and deliberately publish messages shown by Nocturne.</p></div>
+    <nav class="nav"><a href="/admin.html">Admin home</a><a href="/event-board.html">Event board</a></nav>
+  </header>
+  <div id="status" class="status" role="status" aria-live="polite">Checking your admin access…</div>
+  <section class="panel" aria-labelledby="editor-heading">
+    <div class="row"><h2 id="editor-heading">New draft</h2><button class="btn" id="newButton" type="button">New draft</button></div>
+    <form id="editor" class="grid">
+      <div><label for="title">Title (optional, 80 characters)</label><input id="title" maxlength="80" autocomplete="off"></div>
+      <div><label for="severity">Severity</label><select id="severity"><option>info</option><option>notice</option><option>warning</option><option>urgent</option></select></div>
+      <div class="wide"><label for="message">Message (500 characters, up to four lines)</label><textarea id="message" maxlength="500" required></textarea></div>
+      <div><label for="starts">Starts (local time)</label><input id="starts" type="datetime-local" required></div>
+      <div><label for="expires">Expires (local time)</label><input id="expires" type="datetime-local" required></div>
+      <div><label for="linkLabel">Link label (optional, 48 characters)</label><input id="linkLabel" maxlength="48" autocomplete="off"></div>
+      <div><label for="linkUrl">Approved link</label><select id="linkUrl"><option value="">No link</option><option value="https://nocturne.events/">Nocturne home</option><option value="https://nocturne.events/event-board.html">Event board</option></select></div>
+      <div class="wide hint">Links are structured buttons in the sidebar; they are never embedded as chat markup. The server remains authoritative for all validation.</div>
+      <div class="wide actions"><button class="btn" type="submit">Save draft</button><button class="btn" id="previewButton" type="button">Update preview</button></div>
+    </form>
+    <div id="preview" class="preview" aria-label="RuneLite preview">
+      <h3>Chat preview</h3><div id="chatPreview" class="chat-preview"></div>
+      <h3>Sidebar preview</h3><div class="sidebar-preview"><strong id="sideTitle"></strong><p id="sideMessage"></p><button id="sideLink" class="btn" type="button" disabled hidden></button></div>
+    </div>
+  </section>
+  <section class="panel"><div class="row"><h2>Announcements</h2><button class="btn" id="refresh" type="button">Refresh</button></div><div id="announcements" class="items"></div></section>
+  <section class="panel"><h2>Recent audit actions</h2><div style="overflow-x:auto"><table><thead><tr><th>Time</th><th>Operator</th><th>Action</th><th>Announcement</th><th>Revision</th></tr></thead><tbody id="audit"></tbody></table></div></section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const endpoint='/admin/api/nocturne/plugin-announcements';
+  const byId=id=>document.getElementById(id);
+  const status=byId('status');
+  let editing=null;
+  let records=[];
+  function message(text,kind=''){status.textContent=text;status.className='status '+kind;}
+  async function api(path='',options={}){
+    const response=await fetch(endpoint+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});
+    let data={};try{data=await response.json();}catch(_ignored){}
+    if(!response.ok)throw new Error(data.error||`Request failed (${response.status})`);
+    return data;
+  }
+  function safeText(value){return typeof value==='string'?value:'';}
+  function unsafePlain(value,allowLineBreaks=false){for(const character of value){if(allowLineBreaks&&character==='\n')continue;if(character==='<'||character==='>'||/\p{C}/u.test(character))return true;}return false;}
+  function stateLabel(item){
+    if(item.state==='draft'||item.state==='withdrawn'||item.state==='expired')return item.state;
+    const now=Date.now(),start=Date.parse(item.starts_at),end=Date.parse(item.expires_at);
+    if(!Number.isFinite(start)||!Number.isFinite(end))return 'invalid schedule';
+    if(now<start)return 'scheduled';if(now>=end)return 'expired';return 'published';
+  }
+  function addText(parent,tag,text,className){const el=document.createElement(tag);if(className)el.className=className;el.textContent=safeText(text);parent.append(el);return el;}
+  function render(){
+    const host=byId('announcements');host.replaceChildren();
+    if(!records.length)addText(host,'p','No announcements or drafts yet.','muted');
+    for(const item of records){
+      const card=document.createElement('article');card.className='item';
+      addText(card,'span',stateLabel(item),'tag');addText(card,'h3',item.title||item.severity);
+      addText(card,'p',item.message);addText(card,'small',`Revision ${item.revision} · modified ${item.updated_at} · starts ${item.starts_at} · expires ${item.expires_at}`,'muted');
+      const controls=document.createElement('div');controls.className='actions';
+      if(item.state==='draft'){
+        const edit=document.createElement('button');edit.type='button';edit.className='btn';edit.textContent='Edit draft';edit.addEventListener('click',()=>loadDraft(item));controls.append(edit);
+        const publish=document.createElement('button');publish.type='button';publish.className='btn';publish.textContent='Publish / schedule';publish.addEventListener('click',()=>transition(item,'publish','Publish this announcement? RuneLite clients may display it while it is active.'));controls.append(publish);
+      }else if(item.state==='published'){
+        const withdraw=document.createElement('button');withdraw.type='button';withdraw.className='btn danger';withdraw.textContent='Unpublish';withdraw.addEventListener('click',()=>transition(item,'withdraw','Withdraw this announcement from RuneLite clients?'));controls.append(withdraw);
+      }
+      if(item.link)addText(card,'small',`Sidebar link: ${item.link.label} (${item.link.url})`,'muted');card.append(controls);host.append(card);
+    }
+  }
+  function loadDraft(item){editing=item;byId('editor-heading').textContent='Edit draft';byId('title').value=item.title||'';byId('message').value=item.message;byId('severity').value=item.severity;byId('starts').value=toLocal(item.starts_at);byId('expires').value=toLocal(item.expires_at);byId('linkLabel').value=item.link?.label||'';byId('linkUrl').value=item.link?.url||'';preview();window.scrollTo({top:0,behavior:'smooth'});}
+  function toLocal(value){const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';const local=new Date(date.getTime()-date.getTimezoneOffset()*60000);return local.toISOString().slice(0,16);}
+  function formValue(){
+    const title=byId('title').value.trim(),body=byId('message').value.trim(),severity=byId('severity').value;
+    const lines=body.split(/\r\n|\r|\n/);
+    if(title.length>80||body.length<1||body.length>500||lines.length>4||unsafePlain(title)||unsafePlain(body,true))throw new Error('Use plain text only; message limit is 500 characters and four lines.');
+    if(!['info','notice','warning','urgent'].includes(severity))throw new Error('Choose a supported severity.');
+    const starts=new Date(byId('starts').value),expires=new Date(byId('expires').value);
+    if(!Number.isFinite(starts.getTime())||!Number.isFinite(expires.getTime())||starts>=expires)throw new Error('Choose valid start and expiry times, with expiry after start.');
+    const linkUrl=byId('linkUrl').value,linkLabel=byId('linkLabel').value.trim();
+    if(linkLabel.length>48||unsafePlain(linkLabel))throw new Error('Use a plain-text link label up to 48 characters.');
+    if(Boolean(linkUrl)!==Boolean(linkLabel))throw new Error('Provide both an approved link and label, or neither.');
+    if(linkUrl&&!['https://nocturne.events/','https://nocturne.events/event-board.html'].includes(linkUrl))throw new Error('Choose an approved link.');
+    return {title:title||null,message:body,severity,starts_at:starts.toISOString(),expires_at:expires.toISOString(),link:linkUrl?{label:linkLabel,url:linkUrl}:null};
+  }
+  function preview(){try{const value=formValue();byId('chatPreview').textContent=`[Nocturne Announcement] ${value.title?value.title+': ':''}${value.message}`;byId('sideTitle').textContent=value.title||value.severity.toUpperCase();byId('sideMessage').textContent=value.message;byId('sideLink').textContent=value.link?value.link.label:'';byId('sideLink').hidden=!value.link;}catch(error){byId('chatPreview').textContent=`[Nocturne Announcement] ${byId('title').value.trim()}${byId('title').value.trim()?': ':''}${byId('message').value}`;byId('sideTitle').textContent=byId('title').value.trim()||byId('severity').value.toUpperCase();byId('sideMessage').textContent=byId('message').value;byId('sideLink').textContent='';byId('sideLink').hidden=true;}}
+  async function refresh(){try{const data=await api();records=data.announcements;render();const body=byId('audit');body.replaceChildren();for(const row of data.audit.slice(0,100)){const tr=document.createElement('tr');for(const value of [row.occurred_at,row.actor,row.action,row.announcement_id,row.announcement_revision])addText(tr,'td',String(value));body.append(tr);}message('Announcement administration is ready.','ok');}catch(error){message(error.message==='Failed to fetch'?'Admin API unavailable.':error.message,'error');}}
+  async function transition(item,action,question){if(!window.confirm(question))return;try{const result=await api(`/${encodeURIComponent(item.announcement_id)}/state`,{method:'POST',body:JSON.stringify({action,expected_revision:item.revision})});message(`Saved ${result.announcement.state} state.`,'ok');await refresh();}catch(error){message(error.message,'error');}}
+  byId('editor').addEventListener('submit',async event=>{event.preventDefault();try{const announcement=formValue();const result=editing?await api(`/${encodeURIComponent(editing.announcement_id)}`,{method:'PUT',body:JSON.stringify({announcement,expected_revision:editing.revision})}):await api('',{method:'POST',body:JSON.stringify({announcement})});editing=result.announcement;byId('editor-heading').textContent='Edit draft';message('Draft saved. Publishing is a separate confirmation step.','ok');await refresh();}catch(error){message(error.message,'error');}});
+  byId('newButton').addEventListener('click',()=>{editing=null;byId('editor').reset();byId('editor-heading').textContent='New draft';preview();});byId('refresh').addEventListener('click',refresh);byId('previewButton').addEventListener('click',preview);
+  for(const id of ['title','message','severity','starts','expires','linkLabel','linkUrl'])byId(id).addEventListener('input',preview);
+  preview();refresh();
+})();
+</script>
+</body>
+</html>

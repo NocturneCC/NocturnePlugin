@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import socket
+import struct
 import tempfile
 import unicodedata
 from urllib.parse import urlsplit
@@ -23,6 +25,7 @@ MAX_RESPONSE_BYTES = 16 * 1024
 MAX_ID_CHARS = 64
 MAX_SNAPSHOT_ANNOUNCEMENTS = 64
 MAX_SNAPSHOT_BYTES = 128 * 1024
+SNAPSHOT_WRITER_SOCKET = "/run/nocturne-announcement-snapshot-writer/publish.sock"
 DEFAULT_PUBLIC_SNAPSHOT = "/srv/projects/nocturne-plugin-announcements-public/announcements-v1.json"
 SEVERITIES = frozenset({"info", "notice", "warning", "urgent"})
 STATES = frozenset({"draft", "published", "withdrawn", "expired"})
@@ -36,6 +39,10 @@ _ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 
 class RevisionConflict(ValueError):
     """The administrator acted on a revision that is no longer current."""
+
+
+class SnapshotPublisherError(OSError):
+    """The isolated snapshot publisher did not accept a validated snapshot."""
 
 
 def _strict_object(pairs):
@@ -224,10 +231,24 @@ _SELECT = ("SELECT announcement_id,revision,state,title,message,severity,starts_
 
 
 class AnnouncementStore:
-    def __init__(self, database, clock=None, public_snapshot=None):
+    def __init__(self, database, clock=None, public_snapshot=None, snapshot_publisher=None):
+        if public_snapshot is not None and snapshot_publisher is not None:
+            raise ValueError("choose a direct snapshot or isolated publisher")
         self.database = str(database)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.public_snapshot = public_snapshot
+        self.snapshot_publisher = snapshot_publisher
+
+    def _publish(self, db=None, now=None):
+        if self.snapshot_publisher is not None:
+            raw = (_snapshot_payload(db, now or self.clock()) if db is not None
+                   else snapshot_payload(self.database, now or self.clock()))
+            self.snapshot_publisher(raw)
+        elif self.public_snapshot is not None:
+            if db is not None:
+                write_public_snapshot_from_connection(db, self.public_snapshot, now or self.clock())
+            else:
+                write_public_snapshot(self.database, self.public_snapshot, now or self.clock())
 
     def _now(self):
         value = self.clock()
@@ -301,8 +322,9 @@ class AnnouncementStore:
             # the old global revision is still current. If this process dies
             # before commit or final publication, the public side can omit an
             # announcement but can never continue disclosing a withdrawn one.
-            if self.public_snapshot is not None and action in {"withdraw", "expire"}:
-                write_public_snapshot_from_connection(db, self.public_snapshot, _utc(now))
+            if ((self.public_snapshot is not None or self.snapshot_publisher is not None)
+                    and action in {"withdraw", "expire"}):
+                self._publish(db, _utc(now))
             db.execute("UPDATE plugin_announcement_meta SET global_revision=?,generated_at=? WHERE singleton=1",
                        (global_revision, now))
             db.execute("""INSERT INTO plugin_announcement_audit
@@ -312,8 +334,8 @@ class AnnouncementStore:
                  None if before is None else json.dumps(before, sort_keys=True, separators=(",", ":")),
                  json.dumps(after, sort_keys=True, separators=(",", ":"))))
             db.commit()
-        if self.public_snapshot is not None:
-            write_public_snapshot(self.database, self.public_snapshot, self.clock())
+        if self.public_snapshot is not None or self.snapshot_publisher is not None:
+            self._publish(now=self.clock())
         return after
 
     def create_draft(self, fields, actor):
@@ -391,6 +413,75 @@ def snapshot_payload(database, now=None):
     with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
         db.execute("PRAGMA query_only=ON")
         return _snapshot_payload(db, now or datetime.now(timezone.utc))
+
+
+def validate_snapshot_bytes(raw):
+    """Validate the exact server-generated root snapshot before publication."""
+    if not isinstance(raw, bytes) or not 1 <= len(raw) <= MAX_SNAPSHOT_BYTES:
+        raise ValueError("invalid announcement snapshot size")
+    source = strict_json(raw.decode("utf-8", errors="strict"))
+    if not isinstance(source, dict) or set(source) != {
+            "schema_version", "revision", "generated_at", "announcements"}:
+        raise ValueError("invalid announcement snapshot fields")
+    if type(source["schema_version"]) is not int or source["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("unsupported announcement snapshot schema")
+    if type(source["revision"]) is not int or not 0 <= source["revision"] <= 2 ** 63 - 1:
+        raise ValueError("invalid global revision")
+    _utc(source["generated_at"])
+    values = source["announcements"]
+    if not isinstance(values, list) or len(values) > MAX_SNAPSHOT_ANNOUNCEMENTS:
+        raise ValueError("invalid announcement snapshot count")
+    ids = set()
+    for value in values:
+        if not isinstance(value, dict) or set(value) != {
+                "announcement_id", "revision", "title", "message", "severity",
+                "starts_at", "expires_at", "link"}:
+            raise ValueError("invalid announcement snapshot item")
+        announcement_id, revision = value["announcement_id"], value["revision"]
+        if (not isinstance(announcement_id, str) or not _ID.fullmatch(announcement_id)
+                or announcement_id in ids or type(revision) is not int
+                or not 1 <= revision <= 2 ** 31 - 1):
+            raise ValueError("invalid announcement identity")
+        ids.add(announcement_id)
+        fields = {key: value[key] for key in
+                  ("title", "message", "severity", "starts_at", "expires_at", "link")}
+        validate_fields(fields)
+    return source
+
+
+def _recv_exact(connection, length):
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = connection.recv(length - len(chunks))
+        if not chunk:
+            raise SnapshotPublisherError("incomplete publisher response")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def publish_snapshot_over_socket(raw, socket_path=SNAPSHOT_WRITER_SOCKET, timeout=2.0):
+    """Send only bounded validated snapshot bytes to the isolated filesystem writer."""
+    validate_snapshot_bytes(raw)
+    if socket_path != SNAPSHOT_WRITER_SOCKET:
+        raise ValueError("unexpected announcement publisher socket")
+    if not isinstance(timeout, (int, float)) or timeout <= 0 or timeout > 5:
+        raise ValueError("invalid announcement publisher timeout")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout)
+            connection.connect(socket_path)
+            connection.sendall(struct.pack("!I", len(raw)) + raw)
+            connection.shutdown(socket.SHUT_WR)
+            size = struct.unpack("!I", _recv_exact(connection, 4))[0]
+            if size > 512:
+                raise SnapshotPublisherError("publisher response exceeded limit")
+            response = strict_json(_recv_exact(connection, size).decode("utf-8", errors="strict"))
+    except (OSError, UnicodeError, ValueError, struct.error) as error:
+        raise SnapshotPublisherError("announcement snapshot publisher unavailable") from error
+    if not isinstance(response, dict) or set(response) != {"ok", "revision"} \
+            or response["ok"] is not True or type(response["revision"]) is not int:
+        raise SnapshotPublisherError("announcement snapshot publisher rejected the snapshot")
+    return response["revision"]
 
 
 def _write_public_snapshot(raw, snapshot):
@@ -498,15 +589,30 @@ def public_wsgi(snapshot, environ, start_response, now=None):
 
 
 def create_admin_blueprint(database, require_auth, authorized, actor_name,
-                           public_snapshot=DEFAULT_PUBLIC_SNAPSHOT):
+                           public_snapshot=None, snapshot_publisher=None):
     """Flask adapter for the active admin boundary; imported only by that service."""
     from flask import Blueprint, jsonify, request
 
     blueprint = Blueprint("nocturne_plugin_announcements", __name__)
-    store = AnnouncementStore(database, public_snapshot=public_snapshot)
+    if public_snapshot is None and snapshot_publisher is None:
+        snapshot_publisher = publish_snapshot_over_socket
+    store = AnnouncementStore(database, public_snapshot=public_snapshot,
+                              snapshot_publisher=snapshot_publisher)
+
+    allowed_origins = frozenset({"https://nocturne.events", "https://www.nocturne.events"})
+
+    def origin_rejection(*, mutation=False):
+        origin = request.headers.get("Origin")
+        if origin is not None and origin not in allowed_origins:
+            return jsonify({"ok": False, "error": "Cross-origin request rejected."}), 403
+        if mutation and origin not in allowed_origins:
+            return jsonify({"ok": False, "error": "Same-origin request required."}), 403
+        if request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+            return jsonify({"ok": False, "error": "Cross-origin request rejected."}), 403
+        return None
 
     def publish_snapshot():
-        write_public_snapshot(database, public_snapshot, store.clock())
+        store._publish(now=store.clock())
 
     def denied():
         if authorized():
@@ -531,22 +637,35 @@ def create_admin_blueprint(database, require_auth, authorized, actor_name,
     def failure(error):
         if isinstance(error, KeyError):
             return jsonify({"ok": False, "error": "Announcement not found."}), 404
-        code = 403 if isinstance(error, PermissionError) else (409 if isinstance(error, RevisionConflict) else 400)
-        return jsonify({"ok": False, "error": str(error)}), code
+        code = (503 if isinstance(error, SnapshotPublisherError) else
+                403 if isinstance(error, PermissionError) else
+                409 if isinstance(error, RevisionConflict) else 400)
+        message = ("Announcement publication is temporarily unavailable." if code == 503
+                   else str(error))
+        return jsonify({"ok": False, "error": message}), code
 
     @blueprint.route("/admin/api/nocturne/plugin-announcements", methods=["GET"])
     @require_auth
     def list_announcements():
+        rejected = origin_rejection()
+        if rejected:
+            return rejected
         rejection = denied()
         if rejection:
             return rejection
-        publish_snapshot()
-        return jsonify({"ok": True, "schema_version": SCHEMA_VERSION,
-                        "announcements": store.list_all(), "audit": store.list_audit()})
+        try:
+            publish_snapshot()
+            return jsonify({"ok": True, "schema_version": SCHEMA_VERSION,
+                            "announcements": store.list_all(), "audit": store.list_audit()})
+        except SnapshotPublisherError as error:
+            return failure(error)
 
     @blueprint.route("/admin/api/nocturne/plugin-announcements", methods=["POST"])
     @require_auth
     def create_announcement():
+        rejected = origin_rejection(mutation=True)
+        if rejected:
+            return rejected
         rejection = denied()
         if rejection:
             return rejection
@@ -554,12 +673,15 @@ def create_admin_blueprint(database, require_auth, authorized, actor_name,
             value = body({"announcement"})
             created = store.create_draft(value["announcement"], actor())
             return jsonify({"ok": True, "announcement": created}), 201
-        except (ValueError, KeyError, PermissionError, sqlite3.Error) as error:
+        except (ValueError, KeyError, PermissionError, sqlite3.Error, SnapshotPublisherError) as error:
             return failure(error)
 
     @blueprint.route("/admin/api/nocturne/plugin-announcements/<announcement_id>", methods=["PUT"])
     @require_auth
     def edit_announcement(announcement_id):
+        rejected = origin_rejection(mutation=True)
+        if rejected:
+            return rejected
         rejection = denied()
         if rejection:
             return rejection
@@ -568,12 +690,15 @@ def create_admin_blueprint(database, require_auth, authorized, actor_name,
             edited = store.edit_draft(announcement_id, value["announcement"], actor(),
                                       value["expected_revision"])
             return jsonify({"ok": True, "announcement": edited})
-        except (ValueError, KeyError, PermissionError, sqlite3.Error) as error:
+        except (ValueError, KeyError, PermissionError, sqlite3.Error, SnapshotPublisherError) as error:
             return failure(error)
 
     @blueprint.route("/admin/api/nocturne/plugin-announcements/<announcement_id>/state", methods=["POST"])
     @require_auth
     def change_announcement(announcement_id):
+        rejected = origin_rejection(mutation=True)
+        if rejected:
+            return rejected
         rejection = denied()
         if rejection:
             return rejection
@@ -582,7 +707,7 @@ def create_admin_blueprint(database, require_auth, authorized, actor_name,
             changed = store.transition(announcement_id, value["action"], actor(),
                                        value["expected_revision"])
             return jsonify({"ok": True, "announcement": changed})
-        except (ValueError, KeyError, PermissionError, sqlite3.Error) as error:
+        except (ValueError, KeyError, PermissionError, sqlite3.Error, SnapshotPublisherError) as error:
             return failure(error)
 
     return blueprint

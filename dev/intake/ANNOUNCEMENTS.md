@@ -66,6 +66,113 @@ concurrent administrators cannot silently overwrite one another. Listing
 includes current/historical announcements and their audit entries. State changes
 are transactional. The tool never restarts a service.
 
+The source tree now also contains `plugin-announcements-admin.html`, a small
+responsive authoring page linked into the existing Event Admin Tools navigation
+by `announcement_admin_ui_support.py`. The page uses the existing authenticated
+announcement API; it adds no login/session scheme. Mutating requests require an
+exact first-party HTTPS `Origin` and reject cross-site Fetch Metadata. The page
+uses DOM `textContent` for announcement content and offers a separate confirm
+step before publish/schedule or withdrawal. The API is the final authority for
+all validation.
+
+The supported editor schema is exactly six fields:
+
+| Field | Accepted values |
+|---|---|
+| `title` | optional plain text, at most 80 characters and one line |
+| `message` | required plain text, at most 500 characters and four lines |
+| `severity` | `info`, `notice`, `warning`, or `urgent` |
+| `starts_at`, `expires_at` | timezone-aware ISO-8601 timestamps, normalized to UTC seconds; start must precede expiry |
+| `link` | `null`, or exactly `{label,url}`; label at most 48 plain-text characters and URL at most 256 characters |
+
+The only link destinations are `https://nocturne.events/` and
+`https://nocturne.events/event-board.html`. The API also accepts no arbitrary
+JSON fields, duplicate keys, HTML/RuneLite markup, control characters, or
+stale edit revisions. IDs are server-generated 32-character UUID hex values;
+announcement revisions and the global revision are server-managed integers.
+The public snapshot root remains exactly `schema_version`, `revision`,
+`generated_at`, and `announcements`; the public route further filters to at
+most three active items and returns a valid empty list when none are active.
+
+### Isolated snapshot publication
+
+The admin API process cannot safely write the public snapshot directory. The
+blueprint therefore sends only the bounded, server-generated snapshot document
+to a fixed Unix socket; it never sends browser JSON to that socket. The
+`announcement_snapshot_writer.py` daemon authenticates the peer UID, validates
+the exact versioned schema again, and can write only the one fixed snapshot in
+`/srv/projects/nocturne-plugin-announcements-public/`. It has no database,
+Discord, or network access. A systemd socket is group-accessible to `www-data`,
+while the daemon additionally requires peer UID `randal`; the snapshot remains
+owned by `nobody:nogroup`, mode 0644. Atomic publication uses a same-directory
+temporary file, file and directory fsync, atomic rename, and a strict read-back.
+No `sudo` is invoked by the web application.
+
+The code and units are prepared by `announcement_publication_support.py` (dry
+run by default). Its apply operation requires root, the exact clean source
+commit, explicit maintenance confirmation, and confirmation that
+`osrs-drops-admin.service`, `nocturne-announcement-snapshot-writer.service`, and
+`nocturne-announcement-snapshot-writer.socket` are inactive. It preserves a
+verified backup and does not reload systemd or control services. After an approved install, the operator
+must run `systemctl daemon-reload`, start/enable
+`nocturne-announcement-snapshot-writer.socket`, verify its socket permissions,
+and then start the admin service. Rollback is explicit and restores only the
+verified files; it requires the same three stopped-unit confirmations and likewise
+does not reload or control services. The guarded commands are:
+
+```sh
+python3 -B dev/intake/announcement_publication_support.py --commit <full-sha>
+sudo python3 -B dev/intake/announcement_publication_support.py --commit <full-sha> \
+  --expected-module-sha256 <sha256-reported-by-dry-run> \
+  --apply --maintenance-confirmed \
+  --stopped-service osrs-drops-admin.service \
+  --stopped-service nocturne-announcement-snapshot-writer.service \
+  --stopped-service nocturne-announcement-snapshot-writer.socket
+sudo systemctl daemon-reload
+sudo systemctl enable --now nocturne-announcement-snapshot-writer.socket
+```
+
+Rollback uses only the exact backup reported by apply:
+
+```sh
+sudo python3 -B dev/intake/announcement_publication_support.py --commit <full-sha> \
+  --rollback-backup /exact/verified/backup --maintenance-confirmed \
+  --stopped-service osrs-drops-admin.service \
+  --stopped-service nocturne-announcement-snapshot-writer.service \
+  --stopped-service nocturne-announcement-snapshot-writer.socket
+```
+
+The website page/navigation are installed separately by
+`announcement_admin_ui_support.py`, dry-run by default. Apply preserves the
+existing `admin.html` owner/group/mode/ACL, backs it up, atomically adds the
+single navigation card, and creates the static page using matching safe
+metadata. It does not change Nginx or restart a service. Rollback verifies the
+installed hashes before restoring/removing those two exact files. The page is
+static and reveals no announcement data by itself; all data and actions remain
+behind the existing authenticated, event-admin API.
+
+After publishing this repository commit, prepare and apply the website change
+separately; the first command is read-only:
+
+```sh
+python3 -B dev/intake/announcement_admin_ui_support.py --commit <full-sha>
+sudo python3 -B dev/intake/announcement_admin_ui_support.py --commit <full-sha> --apply
+```
+
+No visual authoring tool was present in the deployed website inventory; the
+authenticated announcement API and schema already existed. The source-owned UI
+is available after the separate guarded website install at
+`https://nocturne.events/plugin-announcements-admin.html`.
+
+Safe manual smoke test after deployment: create a draft whose title begins
+`[TEST ONLY]`, message says it is a temporary admin-tool test, and expiry is a
+few minutes after its start. Verify the chat/sidebar previews, save it as a
+draft, then use the explicit publish confirmation only in an approved test
+window. Confirm the public RuneLite endpoint contains only its supported fields
+while active, then use **Unpublish** and verify the endpoint returns an empty
+announcement list. The action is audited; do not use real operational copy for
+this test.
+
 Dry run:
 
 ```sh

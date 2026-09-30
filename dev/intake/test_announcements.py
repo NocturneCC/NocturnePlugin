@@ -126,8 +126,9 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertIn("one\ntwo\nthree\nfour",
                       validate_fields(self.fields("one\ntwo\nthree\nfour"))["message"])
         bad = ["x" * (MAX_MESSAGE_CHARS + 1), "<b>markup</b>", "<img=12>",
+               "<script>alert(1)</script>",
                "[click](https://nocturne.events/)",
-               "control\u0001text", "one\ntwo\nthree\nfour\nfive"]
+               "control\u0001text", "bidi\u202etext", "one\ntwo\nthree\nfour\nfive"]
         for message in bad:
             with self.subTest(message=repr(message)), self.assertRaises(ValueError):
                 validate_fields(self.fields(message))
@@ -135,6 +136,22 @@ class AnnouncementsTest(unittest.TestCase):
         extra["rsn"] = "must not be accepted"
         with self.assertRaises(ValueError):
             validate_fields(extra)
+
+    def test_invalid_dates_and_field_types_fail_closed(self):
+        invalid = [
+            {"starts_at": "2026-09-30T12:00:00", "expires_at": "2026-10-01T12:00:00Z"},
+            {"starts_at": "not-a-date"},
+            {"starts_at": 123},
+            {"starts_at": (self.now + timedelta(hours=2)).isoformat(),
+             "expires_at": (self.now + timedelta(hours=1)).isoformat()},
+            {"severity": 2},
+            {"link": {"label": "open", "url": "https://nocturne.events/", "extra": True}},
+        ]
+        for changes in invalid:
+            value = self.fields()
+            value.update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_fields(value)
 
     def test_link_allowlist_is_exact_and_structured(self):
         allowed = self.fields(link={"label": "Event board", "url": "https://nocturne.events/event-board.html"})
@@ -244,8 +261,16 @@ class AnnouncementsTest(unittest.TestCase):
         self.assertEqual(401, client.get(path).status_code)
         self.assertEqual(403, client.get(path, headers={"X-Test-Auth": "yes"}).status_code)
         headers = {"X-Test-Auth": "yes", "X-Test-Role": "eventadmin"}
-        self.assertEqual(400, client.post(path, headers=headers,
+        self.assertEqual(400, client.post(path, headers={**headers, "Origin": "https://nocturne.events",
+                                                          "Content-Type": "application/json"},
+                                         data=b"{" + b" " * 4096).status_code)
+        self.assertEqual(400, client.post(path, headers={**headers, "Origin": "https://nocturne.events"},
                                          json={"announcement": self.fields(), "extra": True}).status_code)
+        self.assertEqual(403, client.post(path, headers=headers,
+                                          json={"announcement": self.fields()}).status_code)
+        self.assertEqual(403, client.post(path, headers={**headers, "Origin": "https://nocturne.events.attacker.test"},
+                                          json={"announcement": self.fields()}).status_code)
+        headers["Origin"] = "https://nocturne.events"
         created = client.post(path, headers=headers, json={"announcement": self.fields()})
         self.assertEqual(201, created.status_code)
         self.assertEqual(1, len(client.get(path, headers=headers).get_json()["audit"]))
@@ -262,12 +287,103 @@ class AnnouncementsTest(unittest.TestCase):
         path = "/admin/api/nocturne/plugin-announcements"
         duplicate = b'{"announcement":{},"announcement":{}}'
         self.assertEqual(400, client.post(path, data=duplicate,
-                                         content_type="application/json").status_code)
+                                         content_type="application/json",
+                                         headers={"Origin": "https://nocturne.events"}).status_code)
         draft = self.store.create_draft(self.fields(), "admin")
         edited = self.store.edit_draft(draft["announcement_id"], self.fields("first"), "admin", 1)
         self.assertEqual(2, edited["revision"])
         with self.assertRaises(RevisionConflict):
             self.store.edit_draft(draft["announcement_id"], self.fields("stale"), "admin", 1)
+
+    def test_authenticated_admin_create_edit_publish_withdraw_and_exact_snapshot(self):
+        try:
+            from flask import Flask, jsonify, request
+        except ImportError:
+            self.skipTest("Flask is exercised with the active admin interpreter")
+        app = Flask(__name__)
+
+        def require_auth(function):
+            @wraps(function)
+            def wrapped(*args, **kwargs):
+                if request.headers.get("X-Test-Auth") != "yes":
+                    return jsonify({"ok": False}), 401
+                return function(*args, **kwargs)
+            return wrapped
+
+        app.register_blueprint(create_admin_blueprint(
+            self.database, require_auth,
+            lambda: request.headers.get("X-Test-Role") == "eventadmin",
+            lambda: "verified-operator", self.snapshot))
+        client = app.test_client()
+        path = "/admin/api/nocturne/plugin-announcements"
+        headers = {"X-Test-Auth": "yes", "X-Test-Role": "eventadmin",
+                   "Origin": "https://nocturne.events"}
+        current = datetime.now(UTC)
+        fields = {"title": "Nocturne news", "message": "Clearly labeled temporary test announcement",
+                  "severity": "notice", "starts_at": (current - timedelta(seconds=60)).isoformat(),
+                  "expires_at": (current + timedelta(hours=1)).isoformat(), "link": None}
+        created = client.post(path, headers=headers, json={"announcement": fields})
+        self.assertEqual(201, created.status_code)
+        item = created.get_json()["announcement"]
+        edited = client.put(path + "/" + item["announcement_id"], headers=headers,
+                            json={"announcement": {**fields, "message": "edited test text"},
+                                  "expected_revision": item["revision"]})
+        self.assertEqual(200, edited.status_code)
+        item = edited.get_json()["announcement"]
+        published = client.post(path + "/" + item["announcement_id"] + "/state", headers=headers,
+                                json={"action": "publish", "expected_revision": item["revision"]})
+        self.assertEqual(200, published.status_code)
+        item = published.get_json()["announcement"]
+        root = json.loads(self.snapshot.read_bytes())
+        self.assertEqual({"schema_version", "revision", "generated_at", "announcements"}, set(root))
+        self.assertEqual({"announcement_id", "revision", "title", "message", "severity",
+                          "starts_at", "expires_at", "link"}, set(root["announcements"][0]))
+        self.assertEqual("edited test text", root["announcements"][0]["message"])
+        withdrawn = client.post(path + "/" + item["announcement_id"] + "/state", headers=headers,
+                                json={"action": "withdraw", "expected_revision": item["revision"]})
+        self.assertEqual(200, withdrawn.status_code)
+        self.assertEqual([], json.loads(self.snapshot.read_bytes())["announcements"])
+        audit = client.get(path, headers=headers).get_json()["audit"]
+        self.assertEqual(["withdraw", "publish", "edit_draft", "create_draft"],
+                         [entry["action"] for entry in audit])
+        self.assertTrue(all(entry["actor"] == "verified-operator" for entry in audit))
+
+    def test_announcement_blueprint_rejects_cross_site_reads_and_fetch_metadata(self):
+        try:
+            from flask import Flask, request
+        except ImportError:
+            self.skipTest("Flask is exercised with the active admin interpreter")
+        app = Flask(__name__)
+        app.register_blueprint(create_admin_blueprint(
+            self.database, lambda function: function, lambda: True, lambda: "admin", self.snapshot))
+        client = app.test_client()
+        path = "/admin/api/nocturne/plugin-announcements"
+        self.assertEqual(403, client.get(path, headers={"Origin": "https://nocturne.events.attacker.test"}).status_code)
+        self.assertEqual(403, client.post(path, headers={"Origin": "https://nocturne.events",
+                                                          "Sec-Fetch-Site": "cross-site"},
+                                         json={"announcement": self.fields()}).status_code)
+
+    def test_admin_blueprint_uses_isolated_publisher_with_server_generated_schema(self):
+        try:
+            from flask import Flask, request
+        except ImportError:
+            self.skipTest("Flask is exercised with the active admin interpreter")
+        from announcements import validate_snapshot_bytes
+        published = []
+        app = Flask(__name__)
+        app.register_blueprint(create_admin_blueprint(
+            self.database, lambda function: function, lambda: True, lambda: "admin",
+            snapshot_publisher=published.append))
+        client = app.test_client()
+        headers = {"Origin": "https://nocturne.events"}
+        response = client.get("/admin/api/nocturne/plugin-announcements", headers=headers)
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(published)
+        for raw in published:
+            snapshot = validate_snapshot_bytes(raw)
+            self.assertEqual({"schema_version", "revision", "generated_at", "announcements"},
+                             set(snapshot))
+            self.assertNotIn("actor", snapshot)
 
     def test_atomic_public_snapshot_survives_database_replace_and_exposes_no_sqlite_files(self):
         old_inode = self.snapshot.stat().st_ino
