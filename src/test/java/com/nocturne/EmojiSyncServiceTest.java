@@ -73,6 +73,55 @@ public class EmojiSyncServiceTest
 		finally { harness.close(); }
 	}
 
+	@Test public void startImmediatelySynchronizesAndPublishesVerifiedAssets() throws Exception
+	{
+		byte[] image = EmojiTestFixtures.png(0xff224466);
+		byte[] manifest = EmojiTestFixtures.manifest(gson,
+			List.of(new EmojiTestFixtures.FixtureEntry("wave", image)));
+		Path parent = Files.createTempDirectory("emoji-startup");
+		Path cachePath = parent.resolve("nocturne").resolve("emoji-cache-v1");
+		CountDownLatch published = new CountDownLatch(1);
+		AtomicInteger icon = new AtomicInteger(10);
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new EmojiRenderer.IconRegistrar()
+		{
+			@Override public int register(java.awt.image.BufferedImage image) { return icon.getAndIncrement(); }
+			@Override public int chatIndex(int value) { return value; }
+		});
+		AtomicInteger manifestRequests = new AtomicInteger();
+		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			if (chain.request().url().encodedPath().equals("/api/plugin/v1/emojis"))
+			{
+				manifestRequests.incrementAndGet();
+				return response(chain.request(), 200, "application/json", manifest, etag(manifest));
+			}
+			return response(chain.request(), 200, "image/png", image, null);
+		}).build();
+		EmojiSyncService service = new EmojiSyncService(base, gson, cachePath, assets ->
+		{
+			renderer.update(assets);
+			published.countDown();
+		});
+		try
+		{
+			service.start();
+			assertTrue("initial synchronization did not publish before timeout",
+				published.await(3, TimeUnit.SECONDS));
+			assertEquals(1, manifestRequests.get());
+			assertEquals(1, renderer.activeTriggerCountForTest());
+			EmojiCacheStore.Loaded cached = new EmojiCacheStore(cachePath, gson).load();
+			assertNotNull(cached);
+			assertTrue(cached.assets.containsKey("wave"));
+		}
+		finally
+		{
+			service.close();
+			base.dispatcher().executorService().shutdownNow();
+			base.connectionPool().evictAll();
+			Harness.delete(parent);
+		}
+	}
+
 	@Test public void manifest304404429AndServerErrorsRetainLastVerifiedRegistry() throws Exception
 	{
 		byte[] image = EmojiTestFixtures.png(0xff224466);
@@ -97,6 +146,42 @@ public class EmojiSyncServiceTest
 				harness.service.pollForTest();
 				assertEquals(1, harness.updates.size());
 			}
+		}
+		finally { harness.close(); }
+	}
+
+	@Test public void synchronizationOutcomesAreReportedOnceWithoutResponseDetails() throws Exception
+	{
+		byte[] image = EmojiTestFixtures.png(0xff224466);
+		byte[] manifest = EmojiTestFixtures.manifest(gson,
+			List.of(new EmojiTestFixtures.FixtureEntry("wave", image)));
+		AtomicInteger status = new AtomicInteger(503);
+		List<Boolean> outcomes = new CopyOnWriteArrayList<>();
+		Harness harness = harness(Files.createTempDirectory("emoji-outcome"), chain ->
+		{
+			if (!chain.request().url().encodedPath().equals("/api/plugin/v1/emojis"))
+				return response(chain.request(), 200, "image/png", image, null);
+			int code = status.get();
+			return response(chain.request(), code, "application/json",
+				code == 200 ? manifest : new byte[0], code == 200 ? etag(manifest) : null);
+		}, outcomes::add);
+		try
+		{
+			harness.service.pollForTest();
+			harness.service.pollForTest();
+			assertEquals(List.of(false), outcomes);
+
+			status.set(200);
+			harness.service.pollForTest();
+			assertEquals(List.of(false, true), outcomes);
+
+			status.set(304);
+			harness.service.pollForTest();
+			assertEquals(List.of(false, true), outcomes);
+
+			status.set(503);
+			harness.service.pollForTest();
+			assertEquals(List.of(false, true), outcomes);
 		}
 		finally { harness.close(); }
 	}
@@ -301,10 +386,15 @@ public class EmojiSyncServiceTest
 
 	private Harness harness(Path cache, Interceptor interceptor)
 	{
+		return harness(cache, interceptor, ignored -> { });
+	}
+
+	private Harness harness(Path cache, Interceptor interceptor, java.util.function.Consumer<Boolean> outcomes)
+	{
 		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(interceptor).build();
 		ScheduledExecutorService worker = Executors.newScheduledThreadPool(4);
 		List<Map<String, EmojiAsset>> updates = new CopyOnWriteArrayList<>();
-		EmojiSyncService service = new EmojiSyncService(base, gson, cache, updates::add,
+		EmojiSyncService service = new EmojiSyncService(base, gson, cache, updates::add, outcomes,
 			worker, false, () -> 0, 0, TimeUnit.DAYS.toMillis(1), 0);
 		return new Harness(base, service, worker, updates, cache);
 	}

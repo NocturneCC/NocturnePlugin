@@ -128,7 +128,9 @@ public class NocturnePlugin extends Plugin
 				{
 					if (lifecycle == token && emojiRenderer == createdEmojiRenderer)
 						createdEmojiRenderer.update(assets);
-				}));
+				}), succeeded -> log.debug(succeeded
+					? "Public Nocturne emoji manifest synchronized"
+					: "Unable to synchronize public Nocturne emoji manifest"));
 			emojiSyncService = emojis;
 			emojis.start();
 		}

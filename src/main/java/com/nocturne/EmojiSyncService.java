@@ -17,6 +17,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import okhttp3.Call;
@@ -32,7 +33,7 @@ final class EmojiSyncService implements AutoCloseable
 {
 	static final String ORIGIN = "https://nocturne.events";
 	static final String ENDPOINT = ORIGIN + "/api/plugin/v1/emojis";
-	static final long STARTUP_DELAY_MILLIS = 1_000;
+	static final long STARTUP_DELAY_MILLIS = 0;
 	static final long POLL_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(5);
 	static final long JITTER_MILLIS = TimeUnit.SECONDS.toMillis(30);
 	private static final int MAX_CONCURRENT_REQUESTS = 4;
@@ -41,6 +42,9 @@ final class EmojiSyncService implements AutoCloseable
 	private final Gson gson;
 	private final EmojiCacheStore cache;
 	private final Consumer<Map<String, EmojiAsset>> listener;
+	private final Consumer<Boolean> outcomeListener;
+	private final AtomicBoolean successReported = new AtomicBoolean();
+	private final AtomicBoolean failureReported = new AtomicBoolean();
 	private final ScheduledExecutorService worker;
 	private final boolean ownsWorker;
 	private final LongSupplier jitterSource;
@@ -59,7 +63,14 @@ final class EmojiSyncService implements AutoCloseable
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
 		Consumer<Map<String, EmojiAsset>> listener)
 	{
-		this(base, gson, cachePath, listener, newWorker(), true, System::nanoTime,
+		this(base, gson, cachePath, listener, ignored -> { }, newWorker(), true, System::nanoTime,
+			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS);
+	}
+
+	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
+		Consumer<Map<String, EmojiAsset>> listener, Consumer<Boolean> outcomeListener)
+	{
+		this(base, gson, cachePath, listener, outcomeListener, newWorker(), true, System::nanoTime,
 			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS);
 	}
 
@@ -68,9 +79,19 @@ final class EmojiSyncService implements AutoCloseable
 		boolean ownsWorker, LongSupplier jitterSource, long startupDelayMillis,
 		long pollIntervalMillis, long jitterMillis)
 	{
+		this(base, gson, cachePath, listener, ignored -> { }, worker, ownsWorker,
+			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis);
+	}
+
+	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
+		Consumer<Map<String, EmojiAsset>> listener, Consumer<Boolean> outcomeListener,
+		ScheduledExecutorService worker, boolean ownsWorker, LongSupplier jitterSource,
+		long startupDelayMillis, long pollIntervalMillis, long jitterMillis)
+	{
 		this.gson = gson;
 		this.cache = new EmojiCacheStore(cachePath, gson);
 		this.listener = listener;
+		this.outcomeListener = outcomeListener;
 		this.worker = worker;
 		this.ownsWorker = ownsWorker;
 		this.jitterSource = jitterSource;
@@ -106,7 +127,7 @@ final class EmojiSyncService implements AutoCloseable
 		if (started || closed) return;
 		started = true;
 		try { scheduled = worker.schedule(this::poll, startupDelayMillis, TimeUnit.MILLISECONDS); }
-		catch (RuntimeException ignored) { }
+		catch (RuntimeException ignored) { reportOutcome(false); }
 	}
 
 	private void poll()
@@ -130,22 +151,44 @@ final class EmojiSyncService implements AutoCloseable
 			synchronized (this) { call = manifestCall; }
 			try (Response response = call.execute())
 			{
-				if (response.code() == 304) return;
+				if (response.code() == 304)
+				{
+					reportOutcome(true);
+					return;
+				}
 				if (response.code() != 200 || response.body() == null
-					|| !json(response.body().contentType())) return;
+					|| !json(response.body().contentType()))
+				{
+					reportOutcome(false);
+					return;
+				}
 				byte[] raw = boundedBody(response, EmojiManifest.MAX_MANIFEST_BYTES);
 				String etag = response.header("ETag");
-				if (raw == null || etag == null || !etag.matches("\"[0-9a-f]{64}\"")) return;
+				if (raw == null || etag == null || !etag.matches("\"[0-9a-f]{64}\""))
+				{
+					reportOutcome(false);
+					return;
+				}
 				EmojiManifest manifest = EmojiManifest.parse(raw, gson);
 				activate(manifest, etag);
+				reportOutcome(true);
 			}
 		}
-		catch (IOException | RuntimeException ignored) { }
+		catch (IOException | RuntimeException ignored) { reportOutcome(false); }
 		finally
 		{
 			synchronized (this) { manifestCall = null; }
 			scheduleNext();
 		}
+	}
+
+	private void reportOutcome(boolean succeeded)
+	{
+		if (isClosed()) return;
+		AtomicBoolean reported = succeeded ? successReported : failureReported;
+		if (!reported.compareAndSet(false, true)) return;
+		try { outcomeListener.accept(succeeded); }
+		catch (RuntimeException ignored) { }
 	}
 
 	private void activate(EmojiManifest manifest, String etag) throws IOException

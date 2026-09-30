@@ -71,7 +71,7 @@ final class EmojiRenderer
 
 	boolean onChatMessage(ChatMessage event)
 	{
-		if (event == null || event.getType() != ChatMessageType.CLAN_CHAT) return false;
+		if (event == null || !supports(event.getType())) return false;
 		MessageNode node = event.getMessageNode();
 		if (node == null) return false;
 		String value = node.getValue();
@@ -82,6 +82,16 @@ final class EmojiRenderer
 		node.setValue(formatted);
 		refresh.run();
 		return true;
+	}
+
+	static boolean supports(ChatMessageType type)
+	{
+		return type == ChatMessageType.PUBLICCHAT
+			|| type == ChatMessageType.CLAN_CHAT
+			|| type == ChatMessageType.CLAN_GUEST_CHAT
+			|| type == ChatMessageType.FRIENDSCHAT
+			|| type == ChatMessageType.PRIVATECHAT
+			|| type == ChatMessageType.PRIVATECHATOUT;
 	}
 
 	static String format(String input, Map<String, Integer> registry)

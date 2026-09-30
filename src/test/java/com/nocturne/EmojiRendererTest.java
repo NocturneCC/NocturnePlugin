@@ -38,22 +38,38 @@ public class EmojiRendererTest
 		assertNull(EmojiRenderer.format("<img=:wave:>", registry));
 	}
 
-	@Test public void exactScopeIsOnlyNormalClanChatIncludingLocalEcho()
+	@Test public void supportedPlayerChatTypesRenderAndSystemTypesRemainLiteral()
 	{
 		AtomicInteger refreshes = new AtomicInteger();
 		FakeIcons icons = new FakeIcons();
 		EmojiRenderer renderer = new EmojiRenderer(refreshes::incrementAndGet, icons);
 		renderer.update(Map.of("wave", asset("wave", "a".repeat(64))));
-		TestNode localEcho = new TestNode(":wave:");
-		assertTrue(renderer.onChatMessage(event(ChatMessageType.CLAN_CHAT, localEcho)));
-		assertEquals("<img=100>", localEcho.getValue());
+		java.util.Set<ChatMessageType> supported = java.util.Set.of(
+			ChatMessageType.PUBLICCHAT,
+			ChatMessageType.CLAN_CHAT,
+			ChatMessageType.CLAN_GUEST_CHAT,
+			ChatMessageType.FRIENDSCHAT,
+			ChatMessageType.PRIVATECHAT,
+			ChatMessageType.PRIVATECHATOUT);
 		for (ChatMessageType type : ChatMessageType.values())
 		{
-			if (type == ChatMessageType.CLAN_CHAT) continue;
 			TestNode node = new TestNode(":wave:");
-			assertFalse(type.name(), renderer.onChatMessage(event(type, node)));
-			assertEquals(":wave:", node.getValue());
+			boolean replaced = renderer.onChatMessage(event(type, node));
+			assertEquals(type.name(), supported.contains(type), replaced);
+			assertEquals(type.name(), supported.contains(type) ? "<img=100>" : ":wave:", node.getValue());
 		}
+	}
+
+	@Test public void receivedAndLocalEchoMessagesUseOnlyTheirDisplayNodes()
+	{
+		EmojiRenderer renderer = new EmojiRenderer(() -> { }, new FakeIcons());
+		renderer.update(Map.of("wave", asset("wave", "a".repeat(64))));
+		TestNode incoming = new TestNode(":wave:");
+		TestNode outgoingLocalEcho = new TestNode(":wave:");
+		assertTrue(renderer.onChatMessage(event(ChatMessageType.PRIVATECHAT, incoming)));
+		assertTrue(renderer.onChatMessage(event(ChatMessageType.PRIVATECHATOUT, outgoingLocalEcho)));
+		assertEquals("<img=100>", incoming.getValue());
+		assertEquals("<img=100>", outgoingLocalEcho.getValue());
 	}
 
 	@Test public void addRenameDeleteDuplicateUpdatesAndSessionCapAreBounded()
