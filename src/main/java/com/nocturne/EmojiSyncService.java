@@ -36,6 +36,8 @@ final class EmojiSyncService implements AutoCloseable
 	static final long STARTUP_DELAY_MILLIS = 0;
 	static final long POLL_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(5);
 	static final long JITTER_MILLIS = TimeUnit.SECONDS.toMillis(30);
+	// Match the public mirror's strictest per-IP limit (2 requests/second).
+	static final long MIN_REQUEST_SPACING_MILLIS = 500;
 	private static final int MAX_CONCURRENT_REQUESTS = 4;
 
 	private final OkHttpClient http;
@@ -51,6 +53,10 @@ final class EmojiSyncService implements AutoCloseable
 	private final long startupDelayMillis;
 	private final long pollIntervalMillis;
 	private final long jitterMillis;
+	private final long requestSpacingNanos;
+	private final Object requestPacingLock = new Object();
+	private long nextRequestNanos;
+	private boolean hasRequested;
 	private final Set<Call> assetCalls = Collections.newSetFromMap(new ConcurrentHashMap<>());
 	private final Set<CompletableFuture<?>> assetFutures = Collections.newSetFromMap(new ConcurrentHashMap<>());
 	private ScheduledFuture<?> scheduled;
@@ -58,20 +64,22 @@ final class EmojiSyncService implements AutoCloseable
 	private EmojiCacheStore.Loaded current;
 	private boolean loaded;
 	private boolean started;
-	private boolean closed;
+	private volatile boolean closed;
 
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
 		Consumer<Map<String, EmojiAsset>> listener)
 	{
 		this(base, gson, cachePath, listener, ignored -> { }, newWorker(), true, System::nanoTime,
-			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS);
+			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS,
+			MIN_REQUEST_SPACING_MILLIS);
 	}
 
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
 		Consumer<Map<String, EmojiAsset>> listener, Consumer<Boolean> outcomeListener)
 	{
 		this(base, gson, cachePath, listener, outcomeListener, newWorker(), true, System::nanoTime,
-			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS);
+			STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS,
+			MIN_REQUEST_SPACING_MILLIS);
 	}
 
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
@@ -80,7 +88,7 @@ final class EmojiSyncService implements AutoCloseable
 		long pollIntervalMillis, long jitterMillis)
 	{
 		this(base, gson, cachePath, listener, ignored -> { }, worker, ownsWorker,
-			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis);
+			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis, 0);
 	}
 
 	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
@@ -88,6 +96,17 @@ final class EmojiSyncService implements AutoCloseable
 		ScheduledExecutorService worker, boolean ownsWorker, LongSupplier jitterSource,
 		long startupDelayMillis, long pollIntervalMillis, long jitterMillis)
 	{
+		this(base, gson, cachePath, listener, outcomeListener, worker, ownsWorker,
+			jitterSource, startupDelayMillis, pollIntervalMillis, jitterMillis, 0);
+	}
+
+	EmojiSyncService(OkHttpClient base, Gson gson, Path cachePath,
+		Consumer<Map<String, EmojiAsset>> listener, Consumer<Boolean> outcomeListener,
+		ScheduledExecutorService worker, boolean ownsWorker, LongSupplier jitterSource,
+		long startupDelayMillis, long pollIntervalMillis, long jitterMillis,
+		long requestSpacingMillis)
+	{
+		if (requestSpacingMillis < 0) throw new IllegalArgumentException("invalid request pacing");
 		this.gson = gson;
 		this.cache = new EmojiCacheStore(cachePath, gson);
 		this.listener = listener;
@@ -98,6 +117,7 @@ final class EmojiSyncService implements AutoCloseable
 		this.startupDelayMillis = startupDelayMillis;
 		this.pollIntervalMillis = pollIntervalMillis;
 		this.jitterMillis = jitterMillis;
+		this.requestSpacingNanos = TimeUnit.MILLISECONDS.toNanos(requestSpacingMillis);
 		Dispatcher dispatcher = new Dispatcher(worker);
 		dispatcher.setMaxRequests(MAX_CONCURRENT_REQUESTS);
 		dispatcher.setMaxRequestsPerHost(MAX_CONCURRENT_REQUESTS);
@@ -149,6 +169,7 @@ final class EmojiSyncService implements AutoCloseable
 		{
 			Call call;
 			synchronized (this) { call = manifestCall; }
+			awaitRequestSlot();
 			try (Response response = call.execute())
 			{
 				if (response.code() == 304)
@@ -180,6 +201,31 @@ final class EmojiSyncService implements AutoCloseable
 			synchronized (this) { manifestCall = null; }
 			scheduleNext();
 		}
+	}
+
+	private void awaitRequestSlot() throws IOException
+	{
+		synchronized (requestPacingLock)
+		{
+			while (!closed)
+			{
+				long now = System.nanoTime();
+				long waitNanos = nextRequestNanos - now;
+				if (!hasRequested || waitNanos <= 0)
+				{
+					nextRequestNanos = now + requestSpacingNanos;
+					hasRequested = true;
+					return;
+				}
+				try { TimeUnit.NANOSECONDS.timedWait(requestPacingLock, waitNanos); }
+				catch (InterruptedException error)
+				{
+					Thread.currentThread().interrupt();
+					throw new IOException("emoji request pacing interrupted", error);
+				}
+			}
+		}
+		throw new IOException("emoji synchronization stopped");
 	}
 
 	private void reportOutcome(boolean succeeded)
@@ -250,16 +296,20 @@ final class EmojiSyncService implements AutoCloseable
 			if (closed) throw new IOException("emoji synchronization stopped");
 			assetCalls.add(call);
 		}
-		try (Response response = call.execute())
+		try
 		{
-			MediaType type = response.body() == null ? null : response.body().contentType();
-			if (response.code() != 200 || response.body() == null || type == null
-				|| !"image".equals(type.type()) || !"png".equals(type.subtype()))
-				throw new IOException("emoji asset unavailable");
-			byte[] raw = boundedBody(response, EmojiManifest.MAX_ASSET_BYTES);
-			if (raw == null) throw new IOException("emoji asset too large");
-			EmojiCacheStore.validateAsset(raw, entry);
-			return raw;
+			awaitRequestSlot();
+			try (Response response = call.execute())
+			{
+				MediaType type = response.body() == null ? null : response.body().contentType();
+				if (response.code() != 200 || response.body() == null || type == null
+					|| !"image".equals(type.type()) || !"png".equals(type.subtype()))
+					throw new IOException("emoji asset unavailable");
+				byte[] raw = boundedBody(response, EmojiManifest.MAX_ASSET_BYTES);
+				if (raw == null) throw new IOException("emoji asset too large");
+				EmojiCacheStore.validateAsset(raw, entry);
+				return raw;
+			}
 		}
 		finally { assetCalls.remove(call); }
 	}
@@ -305,6 +355,7 @@ final class EmojiSyncService implements AutoCloseable
 	{
 		if (closed) return;
 		closed = true;
+		synchronized (requestPacingLock) { requestPacingLock.notifyAll(); }
 		if (scheduled != null) scheduled.cancel(true);
 		if (manifestCall != null) manifestCall.cancel();
 		for (Call call : assetCalls) call.cancel();

@@ -122,6 +122,66 @@ public class EmojiSyncServiceTest
 		}
 	}
 
+	@Test public void manifestAndAssetRequestsArePacedBelowThePerIpLimit() throws Exception
+	{
+		byte[] first = EmojiTestFixtures.png(0xff224466);
+		byte[] second = EmojiTestFixtures.png(0xff661122);
+		byte[] third = EmojiTestFixtures.png(0xff116622);
+		List<EmojiTestFixtures.FixtureEntry> entries = List.of(
+			new EmojiTestFixtures.FixtureEntry("one", first),
+			new EmojiTestFixtures.FixtureEntry("three", third),
+			new EmojiTestFixtures.FixtureEntry("two", second));
+		byte[] manifest = EmojiTestFixtures.manifest(gson, entries);
+		Map<String, byte[]> assets = Map.of(
+			EmojiManifest.sha256(first), first,
+			EmojiManifest.sha256(second), second,
+			EmojiManifest.sha256(third), third);
+		long spacingMillis = 30;
+		long requiredNanos = TimeUnit.MILLISECONDS.toNanos(spacingMillis - 3);
+		java.util.concurrent.atomic.AtomicLong lastRequest = new java.util.concurrent.atomic.AtomicLong();
+		java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+		java.util.concurrent.atomic.AtomicInteger throttled = new java.util.concurrent.atomic.AtomicInteger();
+		List<Boolean> outcomes = new CopyOnWriteArrayList<>();
+		Path cache = Files.createTempDirectory("emoji-paced");
+		OkHttpClient base = new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			long now = System.nanoTime();
+			long previous = lastRequest.getAndSet(now);
+			requests.incrementAndGet();
+			if (previous != 0 && now - previous < requiredNanos)
+			{
+				throttled.incrementAndGet();
+				return response(chain.request(), 429, "image/png", new byte[0], null);
+			}
+			String path = chain.request().url().encodedPath();
+			if (path.equals("/api/plugin/v1/emojis"))
+				return response(chain.request(), 200, "application/json", manifest, etag(manifest));
+			String digest = path.substring(path.lastIndexOf('/') + 1, path.length() - 4);
+			byte[] body = assets.get(digest);
+			return body == null ? response(chain.request(), 404, "image/png", new byte[0], null)
+				: response(chain.request(), 200, "image/png", body, null);
+		}).build();
+		ScheduledExecutorService worker = Executors.newScheduledThreadPool(4);
+		EmojiSyncService service = new EmojiSyncService(base, gson, cache, ignored -> { }, outcomes::add,
+			worker, false, () -> 0, 0, TimeUnit.DAYS.toMillis(1), 0, spacingMillis);
+		try
+		{
+			service.pollForTest();
+			assertEquals(4, requests.get());
+			assertEquals(0, throttled.get());
+			assertEquals(List.of(true), outcomes);
+			assertEquals(3, new EmojiCacheStore(cache, gson).load().assets.size());
+		}
+		finally
+		{
+			service.close();
+			worker.shutdownNow();
+			base.dispatcher().executorService().shutdownNow();
+			base.connectionPool().evictAll();
+			Harness.delete(cache);
+		}
+	}
+
 	@Test public void manifest304404429AndServerErrorsRetainLastVerifiedRegistry() throws Exception
 	{
 		byte[] image = EmojiTestFixtures.png(0xff224466);
