@@ -495,7 +495,9 @@ def _initialize_root(root, *, final_mode, accepted_modes, category):
         raise SyncFailure("output_initialization_failed") from error
     try:
         opened = os.fstat(descriptor)
-        if (not stat.S_ISDIR(opened.st_mode) or opened.st_dev != parent_stat.st_dev
+        if (not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev != parent_stat.st_dev
+                    and not verified_systemd_mount)
                 or opened.st_uid != os.geteuid() or opened.st_gid != os.getegid()
                 or stat.S_IMODE(opened.st_mode) not in accepted_modes
                 or not _acl_free(root)

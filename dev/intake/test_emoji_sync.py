@@ -426,6 +426,70 @@ class EmojiSynchronizerTest(unittest.TestCase):
         self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
         self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
 
+    def test_verified_systemd_state_mounts_may_cross_parent_device_boundary(self):
+        container = self.root / "device-state-container"
+        container.mkdir(mode=0o700)
+        backing = container / "private"
+        backing.mkdir(mode=0o755)
+        private_backing = backing / "nocturne-plugin-emojis"
+        public_backing = backing / "nocturne-plugin-emoji-public"
+        private_backing.mkdir(mode=0o755)
+        public_backing.mkdir(mode=0o755)
+        private_alias = container / "nocturne-plugin-emojis"
+        public_alias = container / "nocturne-plugin-emoji-public"
+        private_alias.symlink_to("private/nocturne-plugin-emojis")
+        public_alias.symlink_to("private/nocturne-plugin-emoji-public")
+        mounts = {backing, private_backing, public_backing}
+        parent_device = backing.lstat().st_dev + 1000
+        root_device = parent_device + 1000
+        real_lstat = Path.lstat
+        real_fstat = os.fstat
+
+        def with_device(value, device):
+            return os.stat_result((value.st_mode, value.st_ino, device,
+                                   value.st_nlink, value.st_uid, value.st_gid,
+                                   value.st_size, value.st_atime, value.st_mtime,
+                                   value.st_ctime))
+
+        def lstat_with_devices(path):
+            value = real_lstat(path)
+            if path == backing:
+                return with_device(value, parent_device)
+            if path in {private_backing, public_backing}:
+                return with_device(value, root_device)
+            return value
+
+        def fstat_with_root_device(descriptor):
+            return with_device(real_fstat(descriptor), root_device)
+
+        state_directories = f"{private_alias}:{public_alias}"
+        with patch.dict(os.environ, {"STATE_DIRECTORY": state_directories}), \
+                patch.object(Path, "lstat", autospec=True,
+                             side_effect=lstat_with_devices), \
+                patch("emoji_sync.os.fstat", side_effect=fstat_with_root_device), \
+                patch("emoji_sync.os.path.ismount",
+                      side_effect=lambda path: Path(path) in mounts):
+            self.assertEqual(private_backing, initialize_private_root(private_alias))
+            self.assertEqual(public_backing, initialize_public_root(public_alias))
+        self.assertEqual(0o700, stat.S_IMODE(private_backing.stat().st_mode))
+        self.assertEqual(0o755, stat.S_IMODE(public_backing.stat().st_mode))
+
+    def test_ordinary_root_must_share_its_parent_device(self):
+        ordinary = self.root / "ordinary-device-root"
+        ordinary.mkdir(mode=0o755)
+        real_fstat = os.fstat
+
+        def fstat_on_other_device(descriptor):
+            value = real_fstat(descriptor)
+            return os.stat_result((value.st_mode, value.st_ino,
+                                   value.st_dev + 1000, value.st_nlink,
+                                   value.st_uid, value.st_gid, value.st_size,
+                                   value.st_atime, value.st_mtime, value.st_ctime))
+
+        with patch("emoji_sync.os.fstat", side_effect=fstat_on_other_device), \
+                self.assertRaisesRegex(SyncFailure, "unsafe_output_directory"):
+            initialize_public_root(ordinary)
+
     def test_mounted_systemd_state_parent_requires_exact_environment_evidence(self):
         container = self.root / "evidence-state-container"
         container.mkdir(mode=0o700)
