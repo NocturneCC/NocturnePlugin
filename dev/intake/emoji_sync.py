@@ -334,17 +334,86 @@ def _write(path, raw, mode=0o644):
         os.fsync(output.fileno())
 
 
+def _installed_private_file_metadata(value, maximum):
+    return (stat.S_ISREG(value.st_mode) and value.st_nlink == 1
+            and value.st_uid in {0, os.geteuid()}
+            and not stat.S_IMODE(value.st_mode) & 0o077
+            and 1 <= value.st_size <= maximum)
+
+
+def _systemd_credential_parent(path, value, maximum):
+    """Return the identity of one exact, mounted systemd credential directory."""
+    raw = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not raw or len(raw) > 4096:
+        return None
+    directory = Path(raw)
+    if (not directory.is_absolute() or str(directory) != raw or ".." in directory.parts
+            or path.parent != directory or path.name in {"", ".", ".."}
+            or not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
+            or (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, 0, 0o440)
+            or not 1 <= value.st_size <= maximum or not _acl_free(path)):
+        return None
+    try:
+        metadata = directory.lstat()
+        resolved = directory.resolve(strict=True)
+        resolved_file = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if (resolved != directory or resolved_file != path
+            or not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_uid, metadata.st_gid,
+                stat.S_IMODE(metadata.st_mode)) != (0, 0, 0o550)
+            or not _acl_free(directory) or not os.path.ismount(directory)):
+        return None
+    return metadata.st_dev, metadata.st_ino
+
+
 def _safe_private_file(path, maximum):
     path = Path(path)
     try:
-        value = path.lstat()
+        named = path.lstat()
     except OSError as error:
         raise ValueError("invalid private file") from error
-    if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
-            or value.st_uid not in {0, os.geteuid()}
-            or stat.S_IMODE(value.st_mode) & 0o077 or not 1 <= value.st_size <= maximum):
+    installed = _installed_private_file_metadata(named, maximum)
+    credential_parent = _systemd_credential_parent(path, named, maximum)
+    if not installed and credential_parent is None:
         raise ValueError("unsafe private file")
-    return path.read_bytes()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError("invalid private file") from error
+    try:
+        opened = os.fstat(descriptor)
+        if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                or (installed and not _installed_private_file_metadata(opened, maximum))
+                or (credential_parent is not None
+                    and _systemd_credential_parent(path, opened, maximum)
+                    != credential_parent)):
+            raise ValueError("unsafe private file")
+        chunks = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        verified = os.fstat(descriptor)
+        current = path.lstat()
+        if (not 1 <= len(raw) <= maximum or len(raw) != verified.st_size
+                or (verified.st_dev, verified.st_ino) != (current.st_dev, current.st_ino)
+                or (installed and not _installed_private_file_metadata(verified, maximum))
+                or (credential_parent is not None
+                    and _systemd_credential_parent(path, current, maximum)
+                    != credential_parent)):
+            raise ValueError("unsafe private file")
+        return raw
+    except OSError as error:
+        raise ValueError("invalid private file") from error
+    finally:
+        os.close(descriptor)
 
 
 def _public_node(path, root_stat, *, directory, mode):
@@ -857,7 +926,7 @@ def _media_type(value):
 def _read_credential(path):
     try:
         value = _safe_private_file(path, 4096).decode("ascii", errors="strict").rstrip("\r\n")
-    except (OSError, UnicodeError) as error:
+    except (OSError, UnicodeError, SyncFailure) as error:
         raise ValueError("invalid credential file") from error
     if not re.fullmatch(r"[\x21-\x7e]{1,4096}", value):
         raise ValueError("invalid credential")

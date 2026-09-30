@@ -66,6 +66,17 @@ def item(identifier, name, **changes):
     return value
 
 
+def changed_stat(value, **changes):
+    return os.stat_result((changes.get("st_mode", value.st_mode),
+                           changes.get("st_ino", value.st_ino),
+                           changes.get("st_dev", value.st_dev),
+                           changes.get("st_nlink", value.st_nlink),
+                           changes.get("st_uid", value.st_uid),
+                           changes.get("st_gid", value.st_gid),
+                           changes.get("st_size", value.st_size),
+                           value.st_atime, value.st_mtime, value.st_ctime))
+
+
 class EmojiSynchronizerTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -861,6 +872,137 @@ class EmojiSynchronizerTest(unittest.TestCase):
         config.write_text('{"guild_id":"123","guild_id":"456"}')
         with self.assertRaisesRegex(ValueError, "invalid synchronization config"):
             _read_config(config)
+
+    def test_exact_systemd_load_credentials_are_accepted(self):
+        directory = self.root / "credentials"
+        directory.mkdir(mode=0o700)
+        config = directory / "emoji-sync-config"
+        config.write_text('{"guild_id":"123","denylist":["blocked"]}')
+        config.chmod(0o440)
+        token = directory / "discord-token"
+        token.write_text("fixture-token\n")
+        token.chmod(0o440)
+        directory.chmod(0o550)
+        files = {config, token}
+        real_lstat = Path.lstat
+        real_fstat = os.fstat
+
+        def credential_lstat(path):
+            value = real_lstat(path)
+            if path == directory:
+                return changed_stat(value, st_mode=stat.S_IFDIR | 0o550,
+                                    st_uid=0, st_gid=0)
+            if path in files:
+                return changed_stat(value, st_mode=stat.S_IFREG | 0o440,
+                                    st_uid=0, st_gid=0)
+            return value
+
+        def credential_fstat(descriptor):
+            return changed_stat(real_fstat(descriptor),
+                                st_mode=stat.S_IFREG | 0o440,
+                                st_uid=0, st_gid=0)
+
+        with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(directory)},
+                        clear=True), \
+                patch.object(Path, "lstat", autospec=True,
+                             side_effect=credential_lstat), \
+                patch("emoji_sync.os.fstat", side_effect=credential_fstat), \
+                patch("emoji_sync.os.path.ismount",
+                      side_effect=lambda path: Path(path) == directory):
+            self.assertEqual(("123", frozenset({"blocked"})), _read_config(config))
+            self.assertEqual("fixture-token", _read_credential(token))
+
+    def test_systemd_load_credential_metadata_remains_fail_closed(self):
+        directory = self.root / "credential-cases"
+        directory.mkdir(mode=0o700)
+        token = directory / "discord-token"
+        token.write_text("fixture-token\n")
+        token.chmod(0o440)
+        directory.chmod(0o550)
+        real_lstat = Path.lstat
+        real_fstat = os.fstat
+
+        def run_case(*, environment=None, mounted=True, parent_changes=None,
+                     file_changes=None, unsafe_acl_path=None, path=token):
+            parent_changes = {} if parent_changes is None else parent_changes
+            file_changes = {} if file_changes is None else file_changes
+
+            def credential_lstat(candidate):
+                value = real_lstat(candidate)
+                if candidate == directory:
+                    return changed_stat(value, **{"st_mode": stat.S_IFDIR | 0o550,
+                                                  "st_uid": 0, "st_gid": 0,
+                                                  **parent_changes})
+                if candidate == token:
+                    return changed_stat(value, **{"st_mode": stat.S_IFREG | 0o440,
+                                                  "st_uid": 0, "st_gid": 0,
+                                                  **file_changes})
+                return value
+
+            def credential_fstat(descriptor):
+                return changed_stat(real_fstat(descriptor),
+                                    **{"st_mode": stat.S_IFREG | 0o440,
+                                       "st_uid": 0, "st_gid": 0,
+                                       **file_changes})
+
+            credentials = (str(directory) if environment is None else environment)
+            with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": credentials},
+                            clear=True), \
+                    patch.object(Path, "lstat", autospec=True,
+                                 side_effect=credential_lstat), \
+                    patch("emoji_sync.os.fstat", side_effect=credential_fstat), \
+                    patch("emoji_sync.os.path.ismount",
+                          side_effect=lambda candidate: mounted
+                          and Path(candidate) == directory), \
+                    patch("emoji_sync._acl_free",
+                          side_effect=lambda candidate: Path(candidate)
+                          != unsafe_acl_path):
+                with self.assertRaisesRegex(ValueError, "unsafe private file"):
+                    _read_credential(path)
+
+        outside = self.root / "outside-token"
+        outside.write_text("fixture-token\n")
+        outside.chmod(0o440)
+        cases = {
+            "wrong_path": {"path": outside},
+            "unmounted_parent": {"mounted": False},
+            "parent_mode": {"parent_changes": {"st_mode": stat.S_IFDIR | 0o750}},
+            "parent_owner": {"parent_changes": {"st_uid": 1}},
+            "parent_acl": {"unsafe_acl_path": directory},
+            "file_acl": {"unsafe_acl_path": token},
+            "file_mode": {"file_changes": {"st_mode": stat.S_IFREG | 0o444}},
+            "file_owner": {"file_changes": {"st_uid": 1}},
+            "file_link": {"file_changes": {"st_nlink": 2}},
+            "relative_environment": {"environment": "relative/credentials"},
+            "spoofed_environment": {
+                "environment": str(directory.parent / "other" / ".." / directory.name)},
+        }
+        for name, arguments in cases.items():
+            with self.subTest(name=name):
+                run_case(**arguments)
+
+        target = self.root / "credential-target"
+        target.write_text("fixture-token\n")
+        target.chmod(0o440)
+        linked = directory / "linked-token"
+        directory.chmod(0o700)
+        linked.symlink_to(target)
+        directory.chmod(0o550)
+        with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(directory)}, clear=True), \
+                self.assertRaisesRegex(ValueError, "unsafe private file"):
+            _read_credential(linked)
+
+    def test_credential_sync_failure_is_reduced_to_invalid_file(self):
+        with patch("emoji_sync._safe_private_file",
+                   side_effect=[b'{"guild_id":"123","denylist":[]}',
+                                SyncFailure("unsafe_private_directory")]), \
+                self.assertLogs("nocturne-emoji-sync", logging.ERROR) as captured:
+            result = main(["--state", str(self.root / "credential-private"),
+                           "--output", str(self.root / "credential-public"),
+                           "--config-file", str(self.root / "emoji-sync-config"),
+                           "--token-file", str(self.root / "discord-token")])
+        self.assertEqual(78, result)
+        self.assertIn("category=invalid_credential_file", "\n".join(captured.output))
 
     def test_exceptions_and_logs_do_not_include_token_or_headers(self):
         secret = "fixture-secret-must-not-leak"
