@@ -54,6 +54,7 @@ public class AnnouncementServiceTest
 			await(() -> harness.messages.size() == 1);
 			assertEquals("GET", request.method());
 			assertNull(request.body());
+			assertEquals("no-cache", request.header("Cache-Control"));
 			assertEquals(AnnouncementService.ENDPOINT, request.url().toString());
 			assertNull(request.url().query());
 			String headers = request.headers().toString().toLowerCase();
@@ -81,6 +82,8 @@ public class AnnouncementServiceTest
 			assertNotSame(harness.base.dispatcher(), harness.service.httpForTest().dispatcher());
 			long interval = AnnouncementService.POLL_INTERVAL_MILLIS;
 			long jitter = AnnouncementService.JITTER_MILLIS;
+			assertEquals(TimeUnit.SECONDS.toMillis(30), interval);
+			assertEquals(TimeUnit.SECONDS.toMillis(5), jitter);
 			for (long random : new long[] {Long.MIN_VALUE, -1, 0, 1, Long.MAX_VALUE})
 			{
 				long delay = AnnouncementService.nextDelay(interval, jitter, random);
@@ -88,6 +91,86 @@ public class AnnouncementServiceTest
 			}
 		}
 		finally { harness.close(); }
+	}
+
+	@Test public void scheduledLaterPollDiscoversNewRevisionWithoutRestart() throws Exception
+	{
+		AtomicInteger calls = new AtomicInteger();
+		Harness harness = harness(chain ->
+		{
+			int call = calls.getAndIncrement();
+			int revision = call == 0 ? 1 : 2;
+			return response(chain.request(), 200, valid(revision, "Revision " + revision),
+				"\"" + String.valueOf(revision).repeat(64) + "\"");
+		}, 50);
+		try
+		{
+			harness.service.start();
+			await(() -> calls.get() >= 2 && harness.messages.size() == 2);
+			assertEquals(1, harness.messages.get(0).revision);
+			assertEquals(2, harness.messages.get(1).revision);
+		}
+		finally { harness.close(); }
+	}
+
+	@Test public void scheduledUnchangedRevisionDoesNotReplay() throws Exception
+	{
+		AtomicInteger calls = new AtomicInteger();
+		AtomicReference<String> secondIfNoneMatch = new AtomicReference<>();
+		String etag = "\"" + "a".repeat(64) + "\"";
+		Harness harness = harness(chain ->
+		{
+			if (calls.getAndIncrement() > 0) secondIfNoneMatch.set(chain.request().header("If-None-Match"));
+			return response(chain.request(), 200, valid(1, "Unchanged"), etag);
+		}, 50);
+		try
+		{
+			harness.service.start();
+			await(() -> calls.get() >= 2 && !harness.service.inFlightForTest());
+			assertEquals(1, harness.messages.size());
+			assertEquals(etag, secondIfNoneMatch.get());
+		}
+		finally { harness.close(); }
+	}
+
+	@Test public void scheduledTransientFailureRecoversOnNextPoll() throws Exception
+	{
+		AtomicInteger calls = new AtomicInteger();
+		Harness harness = harness(chain ->
+		{
+			int call = calls.getAndIncrement();
+			if (call == 1) throw new IOException("offline");
+			int revision = call == 0 ? 1 : 2;
+			return response(chain.request(), 200, valid(revision,
+				call == 0 ? "Before transient failure" : "Recovered"), null);
+		}, 100);
+		try
+		{
+			harness.service.start();
+			await(() -> calls.get() == 1 && harness.sidebars.size() == 1);
+			await(() -> calls.get() >= 2 && !harness.service.inFlightForTest());
+			assertEquals(1, harness.sidebars.size());
+			assertEquals("Before transient failure", harness.sidebars.get(0).get(0).message);
+			await(() -> calls.get() >= 3 && harness.messages.size() == 2);
+			assertEquals("Recovered", harness.messages.get(1).message);
+		}
+		finally { harness.close(); }
+	}
+
+	@Test public void shutdownCancelsFutureScheduledPoll() throws Exception
+	{
+		AtomicInteger calls = new AtomicInteger();
+		Harness harness = harness(chain ->
+		{
+			calls.incrementAndGet();
+			return response(chain.request(), 200, valid(1, "Only first poll"), null);
+		}, 100);
+		harness.service.start();
+		await(() -> calls.get() == 1 && harness.messages.size() == 1);
+		harness.service.close();
+		Thread.sleep(250);
+		assertEquals(1, calls.get());
+		harness.closeBase();
 	}
 
 	@Test public void statusesFailOpenWithoutRetryStormOrFeatureSideEffects() throws Exception
@@ -338,6 +421,11 @@ public class AnnouncementServiceTest
 		return new Harness(interceptor);
 	}
 
+	private static Harness harness(okhttp3.Interceptor interceptor, long intervalMillis) throws Exception
+	{
+		return new Harness(interceptor, intervalMillis);
+	}
+
 	private static Response response(Request request, int code, String body, String etag)
 	{
 		Response.Builder builder = new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
@@ -377,12 +465,17 @@ public class AnnouncementServiceTest
 
 		private Harness(okhttp3.Interceptor interceptor) throws Exception
 		{
+			this(interceptor, TimeUnit.HOURS.toMillis(1));
+		}
+
+		private Harness(okhttp3.Interceptor interceptor, long intervalMillis) throws Exception
+		{
 			base = new OkHttpClient.Builder().addInterceptor(interceptor).build();
 			state = Files.createTempDirectory("nocturne-announcement-service").resolve("state.json");
 			service = new AnnouncementService(base, new Gson(), state,
 				messages::add, sidebars::add,
 				worker, true, Clock.fixed(NOW, ZoneOffset.UTC), () -> 0L,
-				0, TimeUnit.HOURS.toMillis(1), 0);
+				0, intervalMillis, 0);
 		}
 
 		private void close()

@@ -54,8 +54,8 @@ final class AnnouncementService implements AutoCloseable
 	static final int MAX_MESSAGE_LINES = 4;
 	static final int MAX_TITLE_CHARS = 80;
 	static final long STARTUP_DELAY_MILLIS = 1_000;
-	static final long POLL_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(15);
-	static final long JITTER_MILLIS = TimeUnit.MINUTES.toMillis(1);
+	static final long POLL_INTERVAL_MILLIS = TimeUnit.SECONDS.toMillis(30);
+	static final long JITTER_MILLIS = TimeUnit.SECONDS.toMillis(5);
 	private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
 	private static final Pattern ETAG = Pattern.compile("\"[0-9a-f]{64}\"");
 	private static final Pattern MARKUP = Pattern.compile(
@@ -160,6 +160,9 @@ final class AnnouncementService implements AutoCloseable
 				loaded = true;
 			}
 			Request.Builder builder = new Request.Builder().url(ENDPOINT).get();
+			// The public endpoint may advertise a five-minute freshness window; always revalidate
+			// so intermediaries honor the ETag and newly published revisions are discovered promptly.
+			builder.header("Cache-Control", "no-cache");
 			if (etag != null) builder.header("If-None-Match", etag);
 			inFlight = http.newCall(builder.build());
 			Call call = inFlight;
