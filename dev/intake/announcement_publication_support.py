@@ -106,6 +106,42 @@ def _safe_target(path, *, optional=False):
     return info
 
 
+def _capture_target_state(path, run=_run):
+    """Capture one safe target without following or racing a path substitution."""
+    path = Path(path)
+    info = _safe_target(path, optional=True)
+    if info is None:
+        return None
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                              value.st_uid, value.st_gid, value.st_nlink,
+                              value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    expected_identity = identity(info)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity(opened) != expected_identity):
+            raise ValueError("publication target changed during state capture")
+        metadata = _capture_safe_metadata(path, run)
+        os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            digest.update(chunk)
+        named_after = _safe_target(path)
+        opened_after = os.fstat(fd)
+        if (identity(named_after) != expected_identity
+                or identity(opened_after) != expected_identity):
+            raise ValueError("publication target changed during state capture")
+        return {"metadata": metadata, "sha256": digest.hexdigest(),
+                "identity": expected_identity}
+    finally:
+        os.close(fd)
+
+
 def _validate_service_directory(path, run=_run, *, allow_mount=False):
     path = Path(path)
     info = path.lstat()
@@ -204,11 +240,7 @@ def install(*, repo, commit, source_dir=None, api_dir=Path("/srv/projects/api"),
             _validate_service_directory(directory, run)
     existing = {}
     for name, target in targets.items():
-        info = _safe_target(target, optional=True)
-        existing[name] = None if info is None else {
-            "metadata": _capture_safe_metadata(target, run),
-            "sha256": _hash(target.read_bytes()),
-        }
+        existing[name] = _capture_target_state(target, run)
     if existing["nocturne_announcements.py"] is None:
         raise ValueError("installed announcement API module is missing")
     for name in ("announcement_snapshot_writer.py", "announcements.py", *UNIT_FILES,
@@ -238,8 +270,9 @@ def install(*, repo, commit, source_dir=None, api_dir=Path("/srv/projects/api"),
     _require_services_stopped(maintenance_confirmed, stopped_services, service_active)
     planned_directories = [directory for directory in (library_dir, admin_dropin_dir)
                            if not directory.exists()]
-    if not all(existing[name] is None or existing[name]["sha256"] == _hash(sources[name])
-               for name in targets):
+    recaptured = {name: _capture_target_state(target, run)
+                  for name, target in targets.items()}
+    if recaptured != existing:
         raise ValueError("publication targets changed after preflight")
     backup = backup_root / ("announcement-publication-" + uuid4().hex)
     backup.mkdir(mode=0o700)
@@ -254,7 +287,8 @@ def install(*, repo, commit, source_dir=None, api_dir=Path("/srv/projects/api"),
             _apply_metadata(saved, existing[name]["metadata"], run)
             if _hash(saved.read_bytes()) != existing[name]["sha256"]:
                 raise ValueError("publication backup verification failed")
-            before[name] = {"existed": True, **existing[name], "backup": saved.name}
+            before[name] = {"existed": True, "metadata": existing[name]["metadata"],
+                            "sha256": existing[name]["sha256"], "backup": saved.name}
         else:
             before[name] = {"existed": False, "metadata": None, "sha256": None, "backup": None}
     manifest = {"purpose": PURPOSE, "commit": commit, "status": "verified",

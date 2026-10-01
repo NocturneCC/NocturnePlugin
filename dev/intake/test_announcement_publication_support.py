@@ -12,6 +12,93 @@ import announcement_publication_support as support
 
 
 class AnnouncementPublicationSupportTest(unittest.TestCase):
+    def _apply_fixture(self, mutation=None, *, api_current=False):
+        repository = Path(__file__).resolve().parents[2]
+        source_root = repository / "dev" / "intake"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release = root / "release" / "dev" / "intake"
+            release.mkdir(parents=True)
+            for source_name in set(support.EXPECTED_ARTIFACT_SOURCE_MAP.values()):
+                shutil.copyfile(source_root / source_name, release / source_name)
+            api = root / "api"
+            api.mkdir()
+            api_target = api / "nocturne_announcements.py"
+            api_target.write_bytes((release / "announcements.py").read_bytes()
+                                  if api_current else b"prior installed module\n")
+            api_target.chmod(0o644)
+            library_parent = root / "usr-local-lib"
+            library_parent.mkdir()
+            library_parent.chmod(0o755)
+            library = library_parent / "nocturne-plugin"
+            systemd = root / "systemd"
+            systemd.mkdir()
+            systemd.chmod(0o755)
+            admin_dropins = systemd / "osrs-drops-admin.service.d"
+            admin_dropins.mkdir(mode=0o755)
+            backups = root / "backups"
+            backups.mkdir(mode=0o700)
+            backups.chmod(0o700)
+            file_metadata = {"uid": os.geteuid(), "gid": os.getegid(), "mode": 0o644,
+                             "acl": "user::rw-\ngroup::r--\nother::r--\n\n"}
+            args = dict(
+                repo=repository, commit="a" * 40, source_dir=release,
+                api_dir=api, library_dir=library, systemd_dir=systemd,
+                admin_dropin_dir=admin_dropins, backup_root=backups, apply=True,
+                maintenance_confirmed=True, stopped_services=support.STOPPED_SERVICES,
+                expected_module_sha256=hashlib.sha256(api_target.read_bytes()).hexdigest(),
+                service_active=lambda _unit: False)
+            real_lstat = Path.lstat
+
+            def fixture_lstat(path):
+                result = real_lstat(path)
+                if stat.S_ISDIR(result.st_mode):
+                    fields = list(result)
+                    fields[4] = 0
+                    fields[5] = 0
+                    return os.stat_result(fields)
+                return result
+
+            changed = False
+
+            def capture_metadata(_path, _run, *, directory=False):
+                if directory:
+                    return {"uid": 0, "gid": 0, "mode": 0o755,
+                            "acl": "user::rwx\ngroup::r-x\nother::r-x\n\n"}
+                return file_metadata
+
+            def service_active(unit):
+                nonlocal changed
+                if mutation is not None and not changed:
+                    changed = True
+                    mutation(api_target, systemd, release)
+                return False
+
+            args["service_active"] = service_active
+            patches = (
+                patch.object(support, "_source_trust"),
+                patch.object(support, "validate_live_output", return_value={"uid": 1000, "gid": 33}),
+                patch.object(support, "_capture_safe_metadata", side_effect=capture_metadata),
+                patch.object(support, "_apply_metadata"),
+                patch.object(support, "_verify_metadata"),
+                patch.object(support, "_require_basic_acl"),
+                patch.object(support.os, "geteuid", return_value=0),
+                patch.object(support.os, "chown"),
+                patch.object(Path, "lstat", fixture_lstat),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4], \
+                    patches[5], patches[6], patches[7], patches[8]:
+                if mutation is None:
+                    result = support.install(**args)
+                    self.assertEqual("already_current" if api_current else "upgrade_required",
+                                     result["api_state"])
+                    self.assertEqual("installed", result["state"])
+                else:
+                    with self.assertRaises(ValueError):
+                        support.install(**args)
+                    self.assertEqual([], list(backups.iterdir()))
+                    self.assertFalse(library.exists())
+
     def test_complete_install_dry_run_uses_canonical_release_to_target_mapping(self):
         repository = Path(__file__).resolve().parents[2]
         source_root = repository / "dev" / "intake"
@@ -100,6 +187,36 @@ class AnnouncementPublicationSupportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete or unexpected"):
             support._validated_artifact_source_map((*pairs[:-1],
                 ("unrecognized-target", "announcement_snapshot_writer.py")))
+
+    def test_unchanged_upgrade_required_target_passes_apply(self):
+        self._apply_fixture()
+
+    def test_unchanged_already_current_target_passes_apply(self):
+        self._apply_fixture(api_current=True)
+
+    def test_apply_rejects_target_state_changes_after_preflight(self):
+        def changed_contents(target, _systemd, _release):
+            target.write_bytes(b"changed after preflight\n")
+
+        def changed_metadata(target, _systemd, _release):
+            target.chmod(0o600)
+
+        def disappeared(target, _systemd, _release):
+            target.unlink()
+
+        def symlink_substitution(target, _systemd, _release):
+            target.unlink()
+            target.symlink_to("replacement.py")
+
+        def appeared(_target, systemd, release):
+            unit = systemd / "nocturne-announcement-snapshot-writer.service"
+            unit.write_bytes((release / unit.name).read_bytes())
+            unit.chmod(0o644)
+
+        for mutation in (changed_contents, changed_metadata, disappeared,
+                         symlink_substitution, appeared):
+            with self.subTest(mutation=mutation.__name__):
+                self._apply_fixture(mutation)
 
     def test_sources_include_admin_dropin_and_exact_expected_stopped_set(self):
         source = Path(__file__).parent
