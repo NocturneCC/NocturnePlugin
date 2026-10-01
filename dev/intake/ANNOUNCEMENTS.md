@@ -99,14 +99,24 @@ most three active items and returns a valid empty list when none are active.
 The admin API process cannot safely write the public snapshot directory. The
 blueprint therefore sends only the bounded, server-generated snapshot document
 to a fixed Unix socket; it never sends browser JSON to that socket. The
-`announcement_snapshot_writer.py` daemon authenticates the peer UID, validates
-the exact versioned schema again, and can write only the one fixed snapshot in
+`announcement_snapshot_writer.py` daemon authenticates both peer UID and
+effective GID (`randal:www-data`), validates the exact versioned schema again,
+and can write only the one fixed snapshot in
 `/srv/projects/nocturne-plugin-announcements-public/`. It has no database,
-Discord, or network access. A systemd socket is group-accessible to `www-data`,
-while the daemon additionally requires peer UID `randal`; the snapshot remains
-owned by `nobody:nogroup`, mode 0644. Atomic publication uses a same-directory
-temporary file, file and directory fsync, atomic rename, and a strict read-back.
-No `sudo` is invoked by the web application.
+Discord, or network access. The socket is owned by `randal:randal`, mode 0600;
+the daemon requires peer UID `randal` and GID `www-data`. Its only writable
+namespace path is `/run/nocturne-announcement-public`, a bind of the exact
+public snapshot directory. All of `/srv/projects` is inaccessible in the
+writer namespace. The snapshot and directory remain `randal:www-data`, modes
+0644 and 0755. The inherited ACL is checked against the established host profile
+(including the observed named `glob` grant and masks); each replacement inherits
+and verifies that exact file ACL. Unexpected ACL entries fail closed. The admin
+service itself masks the public snapshot directory because its code publishes
+only through the socket and the public reader is the separate plugin intake.
+Atomic publication uses a same-directory temporary file, file and directory
+fsync, atomic rename, and strict metadata, ACL, schema, link-count, and read-back
+checks. No `sudo` is invoked by the web application. The persistent writer
+identity is never `nobody:nogroup`.
 
 The code and units are prepared by `announcement_publication_support.py` (dry
 run by default). Its apply operation requires root, the exact clean source
@@ -117,7 +127,8 @@ verified backup and does not reload systemd or control services. After an approv
 must run `systemctl daemon-reload`, start/enable
 `nocturne-announcement-snapshot-writer.socket`, verify its socket permissions,
 and then start the admin service. Rollback is explicit and restores only the
-verified files; it requires the same three stopped-unit confirmations and likewise
+verified API module, writer code, socket/service units, and admin-service
+hardening drop-in (`osrs-drops-admin.service.d/20-nocturne-announcement-snapshot-writer.conf`); it requires the same three stopped-unit confirmations and likewise
 does not reload or control services. The guarded commands are:
 
 ```sh

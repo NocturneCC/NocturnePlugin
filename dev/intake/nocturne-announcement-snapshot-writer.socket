@@ -3,9 +3,9 @@ Description=Nocturne announcement public snapshot writer socket
 
 [Socket]
 ListenStream=/run/nocturne-announcement-snapshot-writer/publish.sock
-SocketUser=root
-SocketGroup=www-data
-SocketMode=0660
+SocketUser=randal
+SocketGroup=randal
+SocketMode=0600
 DirectoryMode=0755
 RemoveOnStop=yes
 Service=nocturne-announcement-snapshot-writer.service

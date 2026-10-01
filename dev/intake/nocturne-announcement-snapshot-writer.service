@@ -4,14 +4,16 @@ After=local-fs.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
-ExecStart=/usr/bin/python3 -B /usr/local/lib/nocturne-plugin/announcement_snapshot_writer.py --allowed-user=randal
+User=randal
+Group=www-data
+ExecStart=/usr/bin/python3 -B /usr/local/lib/nocturne-plugin/announcement_snapshot_writer.py --allowed-user=randal --allowed-group=www-data
 UMask=0077
+RuntimeDirectory=nocturne-announcement-public
+RuntimeDirectoryMode=0755
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-InaccessiblePaths=/srv/projects/api /srv/projects/database /srv/nocturne-plugin /etc/nocturne-plugin -/run/credentials
+InaccessiblePaths=/srv/projects /srv/nocturne-plugin /etc/nocturne-plugin -/run/credentials
 PrivateTmp=yes
 PrivateDevices=yes
 PrivateNetwork=yes
@@ -29,7 +31,8 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 CapabilityBoundingSet=
-ReadWritePaths=/srv/projects/nocturne-plugin-announcements-public
+BindPaths=/srv/projects/nocturne-plugin-announcements-public:/run/nocturne-announcement-public
+ReadWritePaths=/run/nocturne-announcement-public
 MemoryMax=64M
 TasksMax=8
 Restart=on-failure
