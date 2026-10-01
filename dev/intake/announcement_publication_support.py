@@ -24,6 +24,26 @@ UNIT_FILES = {"nocturne-announcement-snapshot-writer.service",
               "nocturne-announcement-snapshot-writer.socket"}
 ADMIN_DROPIN_NAME = "osrs-drops-admin.service.d/20-nocturne-announcement-snapshot-writer.conf"
 ADMIN_DROPIN_SOURCE = "osrs-drops-admin-announcement-writer.conf"
+ARTIFACT_SOURCE_PAIRS = (
+    ("nocturne_announcements.py", "announcements.py"),
+    ("announcement_snapshot_writer.py", "announcement_snapshot_writer.py"),
+    ("announcements.py", "announcements.py"),
+    ("nocturne-announcement-snapshot-writer.service",
+     "nocturne-announcement-snapshot-writer.service"),
+    ("nocturne-announcement-snapshot-writer.socket",
+     "nocturne-announcement-snapshot-writer.socket"),
+    (ADMIN_DROPIN_NAME, ADMIN_DROPIN_SOURCE),
+)
+EXPECTED_ARTIFACT_SOURCE_MAP = {
+    "nocturne_announcements.py": "announcements.py",
+    "announcement_snapshot_writer.py": "announcement_snapshot_writer.py",
+    "announcements.py": "announcements.py",
+    "nocturne-announcement-snapshot-writer.service":
+        "nocturne-announcement-snapshot-writer.service",
+    "nocturne-announcement-snapshot-writer.socket":
+        "nocturne-announcement-snapshot-writer.socket",
+    ADMIN_DROPIN_NAME: ADMIN_DROPIN_SOURCE,
+}
 BASIC_ROOT_FILE = {"uid": 0, "gid": 0, "mode": 0o644,
                    "acl": "user::rw-\ngroup::r--\nother::r--\n\n"}
 
@@ -46,25 +66,31 @@ def _require_services_stopped(confirmed, stopped_services, service_active):
         raise ValueError("announcement publication services are active: " + ", ".join(running))
 
 
+def _validated_artifact_source_map(pairs=ARTIFACT_SOURCE_PAIRS):
+    mapping = {}
+    for pair in pairs:
+        if (not isinstance(pair, tuple) or len(pair) != 2
+                or any(not isinstance(value, str) or not value for value in pair)):
+            raise ValueError("announcement artifact mapping is malformed")
+        target, source = pair
+        if target in mapping:
+            raise ValueError("announcement artifact mapping has a duplicate target")
+        mapping[target] = source
+    if mapping != EXPECTED_ARTIFACT_SOURCE_MAP:
+        raise ValueError("announcement artifact mapping is incomplete or unexpected")
+    return mapping
+
+
 def _source_files(source_dir):
     source_dir = Path(source_dir)
-    for name in ("announcements.py", "announcement_snapshot_writer.py", *UNIT_FILES,
-                 ADMIN_DROPIN_SOURCE):
+    mapping = _validated_artifact_source_map()
+    source_names = set(mapping.values())
+    for name in source_names:
         path = source_dir / name
         if not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
             raise ValueError("publication source artifact is missing or unsafe")
-    result = {"nocturne_announcements.py": (source_dir / "announcements.py").read_bytes(),
-              "announcement_snapshot_writer.py": (source_dir / "announcement_snapshot_writer.py").read_bytes()}
-    for name in UNIT_FILES:
-        result[name] = (source_dir / name).read_bytes()
-    result[ADMIN_DROPIN_NAME] = (source_dir / ADMIN_DROPIN_SOURCE).read_bytes()
-    source_names = {"nocturne_announcements.py": "announcements.py",
-                    ADMIN_DROPIN_NAME: ADMIN_DROPIN_SOURCE}
-    for name in ("nocturne_announcements.py", "announcement_snapshot_writer.py", *UNIT_FILES,
-                 ADMIN_DROPIN_NAME):
-        if not (source_dir / source_names.get(name, name)).is_file():
-            raise ValueError("publication source artifact is missing")
-    return result
+    return {target: (source_dir / source).read_bytes()
+            for target, source in mapping.items()}
 
 
 def _safe_target(path, *, optional=False):
