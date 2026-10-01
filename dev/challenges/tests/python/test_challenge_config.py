@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import shutil
 import sqlite3
@@ -229,6 +230,8 @@ class ChallengeConfigTest(unittest.TestCase):
     def test_completion_configuration(self):
         doc=config_document(self.conn)
         boss=doc["bosses"][0]; boss["metric_type"]="completion"; boss["comparison_direction"]="complete"; boss["time_input_format"]=None
+        for field in ("timing_scope", "timing_segment_key", "timing_segment_label", "automatic_capture"):
+            boss.pop(field, None)
         for tier in boss["tiers"]:
             tier.update({"threshold":1,"threshold_display":"Completion","metric_type":"completion","operator":"complete","unit":"boolean"})
         self.assertFalse(any(e["path"].startswith("bosses[0]") for e in validate_document(doc)))
@@ -492,6 +495,109 @@ class ChallengeConfigTest(unittest.TestCase):
         self.assertIn("invalid_comparison_direction",codes)
         self.assertIn("invalid_rank",codes)
         self.assertIn("invalid_tier_name",codes)
+
+    def test_legacy_capture_metadata_defaults_remain_manual_only(self):
+        document = config_document(self.conn)
+        legacy = copy.deepcopy(document)
+        for boss in legacy["bosses"]:
+            for field in ("timing_scope", "timing_segment_key", "timing_segment_label",
+                          "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+                          "numeric_metric_unit"):
+                boss.pop(field, None)
+        normalized = normalize_draft_document(legacy)
+        for boss in normalized["bosses"]:
+            if boss["metric_type"] == "time":
+                self.assertEqual("unconfigured", boss["timing_scope"])
+                self.assertEqual("manual_only", boss["automatic_capture"])
+            elif boss["metric_type"] == "numeric":
+                self.assertEqual("manual_only", boss["automatic_capture"])
+                self.assertIsNone(boss["numeric_metric_key"])
+                self.assertIsNone(boss["numeric_metric_label"])
+                self.assertIsNone(boss["numeric_metric_unit"])
+        self.assertEqual([], validate_document(normalized))
+
+    def test_overall_and_segment_timing_validation_is_fail_closed(self):
+        document = config_document(self.conn)
+        boss = next(item for item in document["bosses"] if item["metric_type"] == "time")
+        boss.update(timing_scope="overall", timing_segment_key=None,
+                    timing_segment_label=None, automatic_capture="enabled")
+        self.assertEqual([], validate_document(document))
+        boss.update(timing_scope="segment", timing_segment_key="room_1",
+                    timing_segment_label="Room 1")
+        self.assertEqual([], validate_document(document))
+        boss["timing_segment_key"] = None
+        codes = {item["code"] for item in validate_document(document)}
+        self.assertIn("invalid_timing_segment_key", codes)
+        boss["timing_segment_key"] = "Room One"
+        self.assertIn("invalid_timing_segment_key", {item["code"] for item in validate_document(document)})
+
+    def test_timing_contradictions_unknown_values_and_unconfigured_capture_rejected(self):
+        document = config_document(self.conn)
+        boss = next(item for item in document["bosses"] if item["metric_type"] == "time")
+        boss.update(timing_scope="overall", timing_segment_key="room", timing_segment_label="Room")
+        codes = {item["code"] for item in validate_document(document)}
+        self.assertIn("contradictory_timing_segment", codes)
+        boss.update(timing_scope="unconfigured", timing_segment_key=None,
+                    timing_segment_label=None, automatic_capture="enabled")
+        self.assertIn("unconfigured_capture_enabled", {item["code"] for item in validate_document(document)})
+        boss.update(timing_scope="whole_run", automatic_capture="maybe")
+        codes = {item["code"] for item in validate_document(document)}
+        self.assertIn("invalid_timing_scope", codes)
+        self.assertIn("invalid_automatic_capture", codes)
+        boss.pop("timing_scope")
+        boss["surprise"] = True
+        self.assertIn("unexpected_field", {item["code"] for item in validate_document(document)})
+
+    def test_numeric_meaning_unit_and_metric_field_separation(self):
+        document = config_document(self.conn)
+        boss = next(item for item in document["bosses"] if item["metric_type"] == "numeric")
+        boss.update(numeric_metric_key="depth_waves", numeric_metric_label="Deepest delve",
+                    numeric_metric_unit="waves", automatic_capture="enabled")
+        self.assertEqual([], validate_document(document))
+        boss["numeric_metric_unit"] = None
+        self.assertIn("incomplete_numeric_definition", {item["code"] for item in validate_document(document)})
+        boss.update(numeric_metric_unit="waves", timing_scope="overall")
+        self.assertIn("unexpected_metric_fields", {item["code"] for item in validate_document(document)})
+        boss.pop("timing_scope")
+        boss["numeric_metric_key"] = "Invalid Key"
+        self.assertIn("invalid_numeric_metric_key", {item["code"] for item in validate_document(document)})
+
+    def test_unexpected_document_mode_and_system_tier_fields_fail_closed(self):
+        document = config_document(self.conn)
+        document["future_root_field"] = True
+        self.assertIn("unexpected_field", {item["code"] for item in validate_document(document)})
+        document.pop("future_root_field")
+        document["leaderboard_modes"][0]["future_mode_field"] = True
+        self.assertIn("unexpected_field", {item["code"] for item in validate_document(document)})
+        document["leaderboard_modes"][0].pop("future_mode_field")
+        document["system_tiers"][0]["future_tier_field"] = True
+        self.assertIn("unexpected_field", {item["code"] for item in validate_document(document)})
+
+    def test_capture_metadata_survives_draft_diff_publish_and_reload(self):
+        draft = create_draft(self.conn, "tester")
+        document = copy.deepcopy(draft["config"])
+        boss = next(item for item in document["bosses"] if item["metric_type"] == "time")
+        boss.update(timing_scope="segment", timing_segment_key="final_room",
+                    timing_segment_label="Final room", automatic_capture="enabled")
+        saved = save_draft(self.conn, draft["draft_id"], document, "tester", draft["revision"])
+        validation = validate_draft(self.conn, draft["draft_id"], "tester", saved["revision"])
+        self.assertTrue(validation["valid"], validation["errors"])
+        diff = draft_diff(self.conn, draft["draft_id"], validation["draft"]["revision"])
+        fields = {entry["field"] for change in diff["bosses"] for entry in change["fields"]}
+        self.assertTrue({"timing_scope", "timing_segment_key", "timing_segment_label", "automatic_capture"} <= fields)
+        published = publish_draft(self.conn, draft["draft_id"], "tester", confirmed=True,
+                                  expected_revision=validation["draft"]["revision"])
+        reloaded = next(item for item in config_document(self.conn, published["version_id"])["bosses"]
+                        if item["boss_key"] == boss["boss_key"])
+        self.assertEqual(("segment", "final_room", "Final room", "enabled"),
+                         (reloaded["timing_scope"], reloaded["timing_segment_key"],
+                          reloaded["timing_segment_label"], reloaded["automatic_capture"]))
+        stored = json.loads(self.conn.execute(
+            "SELECT config_json FROM challenge_config_versions WHERE config_version_id=?",
+            (published["version_id"],),
+        ).fetchone()[0])
+        self.assertEqual("final_room", next(item for item in stored["bosses"]
+                                              if item["boss_key"] == boss["boss_key"])["timing_segment_key"])
 
 
 if __name__ == "__main__": unittest.main()

@@ -39,6 +39,39 @@ TIER_EMOJIS = {
 TIME_TIER_DEFAULTS = {2: "", 3: "", 4: "", 5: ""}
 NUMERIC_TIER_DEFAULTS = {2: None, 3: None, 4: None, 5: None}
 TIME_INPUT_FORMATS = ("MM:SS.xx", "HH:MM:SS.xx")
+TIMING_SCOPES = {"unconfigured", "overall", "segment"}
+AUTOMATIC_CAPTURE_MODES = {"manual_only", "enabled"}
+SEGMENT_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+NUMERIC_METRIC_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+BOSS_DOCUMENT_FIELDS = frozenset({
+    "boss_key", "display_name", "active", "display_order", "metric_type",
+    "comparison_direction", "description", "help_text", "aliases", "icon_url",
+    "discord_label", "discord_emoji", "discord_group", "submission_enabled",
+    "supports_groups", "min_party_size", "submission_mode", "time_input_format",
+    "tiers", "timing_scope", "timing_segment_key", "timing_segment_label",
+    "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+    "numeric_metric_unit",
+})
+TIER_DOCUMENT_FIELDS = frozenset({
+    "tier_key", "tier", "rank", "threshold", "threshold_display", "metric_type",
+    "operator", "unit", "points", "progression_points", "discord_emoji",
+})
+CONFIG_DOCUMENT_FIELDS = frozenset({
+    "version_id", "version_key", "status", "published_at", "bosses",
+    "system_tiers", "leaderboard_modes",
+})
+SYSTEM_TIER_DOCUMENT_FIELDS = frozenset({
+    "system_tier_key", "display_name", "tier_rank", "min_progression_points",
+    "require_all_active_challenges", "one_time_rank_bonus",
+})
+LEADERBOARD_MODE_DOCUMENT_FIELDS = frozenset({
+    "mode_key", "boss_key", "content_key", "display_name", "active",
+    "display_order", "effective_display_order", "custom_order_override",
+    "metric_type", "comparison_direction", "metric_unit", "party_size_min",
+    "party_size_max", "top_n", "inherit_boss_icon", "icon_url",
+    "effective_icon_url", "publication_group_key", "publication_group_name",
+    "publication_group_order", "group_icon_url", "aliases",
+})
 INITIAL_DISCORD = {
     "gauntlet": ("<:CG:1384976641230639176>", 1),
     "colosseum": ("<:Sol:1384979613725360320>", 1),
@@ -117,6 +150,13 @@ CREATE TABLE IF NOT EXISTS challenge_config_bosses (
     supports_groups INTEGER NOT NULL DEFAULT 1 CHECK(supports_groups IN (0,1)),
     min_party_size INTEGER NOT NULL DEFAULT 1 CHECK(min_party_size BETWEEN 1 AND 100),
     time_input_format TEXT,
+    timing_scope TEXT,
+    timing_segment_key TEXT,
+    timing_segment_label TEXT,
+    automatic_capture TEXT,
+    numeric_metric_key TEXT,
+    numeric_metric_label TEXT,
+    numeric_metric_unit TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(config_version_id,boss_key),
     FOREIGN KEY(config_version_id) REFERENCES challenge_config_versions(config_version_id),
@@ -534,6 +574,117 @@ def normalize_boss_submission_semantics(boss: dict[str, Any]) -> dict[str, Any]:
     return boss
 
 
+def normalize_boss_capture_semantics(
+    boss: dict[str, Any], *, reset: bool = False,
+) -> dict[str, Any]:
+    """Supply safe legacy defaults while retaining invalid values for validation."""
+    metric = boss.get("metric_type")
+    if metric == "time":
+        if reset:
+            for field in ("numeric_metric_key", "numeric_metric_label", "numeric_metric_unit"):
+                boss.pop(field, None)
+            boss.update({"timing_scope": "unconfigured", "timing_segment_key": None,
+                         "timing_segment_label": None, "automatic_capture": "manual_only"})
+        else:
+            boss.setdefault("timing_scope", "unconfigured")
+            boss.setdefault("timing_segment_key", None)
+            boss.setdefault("timing_segment_label", None)
+            boss.setdefault("automatic_capture", "manual_only")
+            if boss["timing_scope"] is None:
+                boss["timing_scope"] = "unconfigured"
+            if boss["automatic_capture"] is None:
+                boss["automatic_capture"] = "manual_only"
+    elif metric == "numeric":
+        if reset:
+            for field in ("timing_scope", "timing_segment_key", "timing_segment_label"):
+                boss.pop(field, None)
+            boss.update({"numeric_metric_key": None, "numeric_metric_label": None,
+                         "numeric_metric_unit": None, "automatic_capture": "manual_only"})
+        else:
+            for field in ("numeric_metric_key", "numeric_metric_label", "numeric_metric_unit"):
+                boss.setdefault(field, None)
+            boss.setdefault("automatic_capture", "manual_only")
+            if boss["automatic_capture"] is None:
+                boss["automatic_capture"] = "manual_only"
+    elif reset:
+        for field in (
+            "timing_scope", "timing_segment_key", "timing_segment_label",
+            "numeric_metric_key", "numeric_metric_label", "numeric_metric_unit",
+            "automatic_capture",
+        ):
+            boss.pop(field, None)
+    return boss
+
+
+def _capture_text(value: Any, *, maximum: int) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and len(value.strip()) <= maximum
+        and not any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f for char in value)
+    )
+
+
+def _capture_metadata_errors(boss: dict[str, Any], metric: Any) -> list[tuple[str, str, str]]:
+    """Validate activity capture metadata without guessing legacy definitions."""
+    errors: list[tuple[str, str, str]] = []
+
+    def add(field: str, code: str, message: str) -> None:
+        errors.append((field, code, message))
+
+    time_fields = ("timing_scope", "timing_segment_key", "timing_segment_label")
+    numeric_fields = ("numeric_metric_key", "numeric_metric_label", "numeric_metric_unit")
+    if metric == "time":
+        if any(field in boss for field in numeric_fields):
+            add("numeric_metric_key", "unexpected_metric_fields", "numeric metric fields are only valid for numeric activities")
+        scope = boss.get("timing_scope")
+        if not isinstance(scope, str) or scope not in TIMING_SCOPES:
+            add("timing_scope", "invalid_timing_scope", "timing scope must be unconfigured, overall, or segment")
+        segment_key = boss.get("timing_segment_key")
+        segment_label = boss.get("timing_segment_label")
+        has_key = segment_key is not None and segment_key != ""
+        has_label = segment_label is not None and segment_label != ""
+        if scope == "segment":
+            if not isinstance(segment_key, str) or SEGMENT_KEY_RE.fullmatch(segment_key) is None:
+                add("timing_segment_key", "invalid_timing_segment_key", "segment timing requires a lowercase stable key")
+            if not _capture_text(segment_label, maximum=120):
+                add("timing_segment_label", "invalid_timing_segment_label", "segment timing requires a nonempty label of at most 120 characters")
+        elif scope in {"overall", "unconfigured"} and (has_key or has_label):
+            add("timing_segment_key", "contradictory_timing_segment", "segment fields are allowed only when timing scope is segment")
+        capture = boss.get("automatic_capture")
+        if not isinstance(capture, str) or capture not in AUTOMATIC_CAPTURE_MODES:
+            add("automatic_capture", "invalid_automatic_capture", "automatic capture must be manual_only or enabled")
+        elif scope == "unconfigured" and capture != "manual_only":
+            add("automatic_capture", "unconfigured_capture_enabled", "unconfigured timing must remain manual_only")
+        elif capture == "enabled" and scope not in {"overall", "segment"}:
+            add("automatic_capture", "incomplete_capture_definition", "automatic capture requires a complete timing definition")
+    elif metric == "numeric":
+        if any(field in boss for field in time_fields):
+            add("timing_scope", "unexpected_metric_fields", "time timing fields are only valid for time activities")
+        capture = boss.get("automatic_capture")
+        if not isinstance(capture, str) or capture not in AUTOMATIC_CAPTURE_MODES:
+            add("automatic_capture", "invalid_automatic_capture", "automatic capture must be manual_only or enabled")
+        values = [boss.get(field) for field in numeric_fields]
+        present = [value is not None and value != "" for value in values]
+        if any(present) and not all(present):
+            add("numeric_metric_key", "incomplete_numeric_definition", "numeric meaning, label, and unit must be supplied together")
+        if all(present):
+            key, label, unit = values
+            if not isinstance(key, str) or NUMERIC_METRIC_KEY_RE.fullmatch(key) is None:
+                add("numeric_metric_key", "invalid_numeric_metric_key", "numeric meaning requires a lowercase stable key")
+            if not _capture_text(label, maximum=120):
+                add("numeric_metric_label", "invalid_numeric_metric_label", "numeric meaning requires a nonempty label of at most 120 characters")
+            if not _capture_text(unit, maximum=32):
+                add("numeric_metric_unit", "invalid_numeric_metric_unit", "numeric unit must be nonempty and at most 32 characters")
+        elif capture == "enabled":
+            add("automatic_capture", "incomplete_capture_definition", "automatic capture requires numeric meaning, label, and unit")
+    else:
+        for field in (*time_fields, *numeric_fields, "automatic_capture"):
+            if field in boss:
+                add(field, "unexpected_metric_fields", "capture metadata is only valid for time or numeric activities")
+    return errors
+
+
 def normalize_boss_metric_semantics(
     boss: dict[str, Any],
     previous_metric: str | None = None,
@@ -617,11 +768,13 @@ def normalize_draft_document(
     for boss in result.get("bosses", []):
         key = str(boss.get("boss_key") or "")
         old = previous.get(key)
+        metric_changed = bool(old and old.get("metric_type") != boss.get("metric_type"))
         normalize_boss_metric_semantics(
             boss,
             str(old.get("metric_type")) if old else None,
         )
         normalize_boss_submission_semantics(boss)
+        normalize_boss_capture_semantics(boss, reset=metric_changed)
         boss["aliases"] = _stable_aliases(boss)
         boss["description"] = _optional_text(boss.get("description"))
         boss["help_text"] = _optional_text(boss.get("help_text"))
@@ -702,6 +855,14 @@ def migrate_schema(conn: sqlite3.Connection) -> dict[str, Any]:
             conn.execute("ALTER TABLE challenge_config_bosses ADD COLUMN time_input_format TEXT")
         if "icon_url" not in _column_names(conn, "challenge_config_bosses"):
             conn.execute("ALTER TABLE challenge_config_bosses ADD COLUMN icon_url TEXT")
+        boss_columns = _column_names(conn, "challenge_config_bosses")
+        for column in (
+            "timing_scope", "timing_segment_key", "timing_segment_label",
+            "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+            "numeric_metric_unit",
+        ):
+            if column not in boss_columns:
+                conn.execute(f"ALTER TABLE challenge_config_bosses ADD COLUMN {column} TEXT")
         active = conn.execute(
             "SELECT config_version_id FROM challenge_config_versions WHERE status='active'"
         ).fetchone()
@@ -720,12 +881,14 @@ def migrate_schema(conn: sqlite3.Connection) -> dict[str, Any]:
                     """INSERT INTO challenge_config_bosses
                        (config_version_id,boss_key,display_name,is_active,display_order,metric_type,
                         comparison_direction,description,help_text,discord_label,discord_emoji,
-                        discord_group,submission_enabled,supports_groups,min_party_size,time_input_format)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        discord_group,submission_enabled,supports_groups,min_party_size,time_input_format,
+                        timing_scope,automatic_capture)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (version_id,boss["boss_key"],boss["display_name"],int(boss["is_active"]),
                      int(boss["sort_order"] or 999),metric,direction,None,None,boss["display_name"],
                      emoji,None,int(boss["is_active"]),int(boss["supports_groups"]),min_party,
-                     None),
+                     None,"unconfigured" if metric == "time" else None,
+                     "manual_only" if metric in {"time", "numeric"} else None),
                 )
                 aliases = {str(boss["boss_key"]), str(boss["display_name"])}
                 if str(boss["boss_key"]) == "phosanis":
@@ -751,10 +914,14 @@ def migrate_schema(conn: sqlite3.Connection) -> dict[str, Any]:
                  WHERE state IN ('draft','validated')"""
         ).fetchall():
             draft_doc = json.loads(draft_row["draft_json"])
-            if "leaderboard_modes" in draft_doc:
-                continue
-            draft_doc["leaderboard_modes"] = config_document(conn, version_id)["leaderboard_modes"]
+            if "leaderboard_modes" not in draft_doc:
+                draft_doc["leaderboard_modes"] = config_document(conn, version_id)["leaderboard_modes"]
+            for boss in draft_doc.get("bosses", []):
+                if isinstance(boss, dict):
+                    normalize_boss_capture_semantics(boss)
             payload = canonical_json(draft_doc)
+            if payload == str(draft_row["draft_json"]):
+                continue
             conn.execute(
                 """UPDATE challenge_config_drafts
                       SET state='draft',revision=revision+1,draft_json=?,draft_sha256=?,
@@ -821,7 +988,7 @@ def config_document(conn: sqlite3.Connection, version_id: int | None = None, *, 
             "SELECT alias FROM challenge_config_aliases WHERE config_version_id=? AND boss_key=? ORDER BY alias COLLATE NOCASE",
             (version["config_version_id"],boss["boss_key"]),
         )]
-        bosses.append({
+        boss_document = {
             "boss_key": boss["boss_key"], "display_name": boss["display_name"],
             "active": bool(boss["is_active"]), "display_order": int(boss["display_order"]),
             "metric_type": boss["metric_type"], "comparison_direction": boss["comparison_direction"],
@@ -840,7 +1007,22 @@ def config_document(conn: sqlite3.Connection, version_id: int | None = None, *, 
                 if boss["metric_type"] == "time" else None
             ),
             "tiers": tiers,
-        })
+        }
+        relevant_capture_fields = (
+            ("timing_scope", "timing_segment_key", "timing_segment_label", "automatic_capture")
+            if boss["metric_type"] == "time" else
+            ("numeric_metric_key", "numeric_metric_label", "numeric_metric_unit", "automatic_capture")
+            if boss["metric_type"] == "numeric" else ()
+        )
+        for field in (
+            "timing_scope", "timing_segment_key", "timing_segment_label",
+            "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+            "numeric_metric_unit",
+        ):
+            if field in boss.keys() and (field in relevant_capture_fields or boss[field] is not None):
+                boss_document[field] = boss[field]
+        normalize_boss_capture_semantics(boss_document)
+        bosses.append(boss_document)
     system_tiers = [dict(row) for row in conn.execute(
         """SELECT system_tier_key,display_name,tier_rank,min_progression_points,
                   require_all_active_challenges,one_time_rank_bonus
@@ -917,6 +1099,8 @@ def validate_document(document: Any) -> list[dict[str, str]]:
         errors.append({"path": path, "code": code, "message": message})
     if not isinstance(document, dict) or not isinstance(document.get("bosses"), list):
         return [{"path": "bosses", "code": "required", "message": "bosses must be an array"}]
+    for unknown in sorted(set(document) - CONFIG_DOCUMENT_FIELDS):
+        add(str(unknown), "unexpected_field", "unexpected configuration field")
     seen_keys: set[str] = set()
     aliases: dict[str, str] = {}
     orders: set[int] = set()
@@ -926,6 +1110,8 @@ def validate_document(document: Any) -> list[dict[str, str]]:
         path = f"bosses[{i}]"
         if not isinstance(boss, dict):
             add(path,"invalid","boss must be an object"); continue
+        for unknown in sorted(set(boss) - BOSS_DOCUMENT_FIELDS):
+            add(path + "." + str(unknown), "unexpected_field", "unexpected activity field")
         key = str(boss.get("boss_key") or "").strip()
         if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", key):
             add(path+".boss_key","invalid_boss_key","use lowercase letters, numbers, and underscores")
@@ -937,6 +1123,8 @@ def validate_document(document: Any) -> list[dict[str, str]]:
         metric = boss.get("metric_type")
         if metric not in {"time","numeric","completion"}:
             add(path+".metric_type","invalid_metric_type","metric_type must be time, numeric, or completion")
+        for field, code, message in _capture_metadata_errors(boss, metric):
+            add(path + "." + field, code, message)
         expected_direction = {
             "time": "lower", "numeric": "higher", "completion": "complete",
         }.get(metric)
@@ -1019,6 +1207,10 @@ def validate_document(document: Any) -> list[dict[str, str]]:
         if not isinstance(tiers,list):
             add(path+".tiers","required","all five tiers are required"); continue
         by_key = {str(t.get("tier_key") or "").lower(): t for t in tiers if isinstance(t,dict)}
+        for tier_index, tier in enumerate(tiers):
+            if isinstance(tier, dict):
+                for unknown in sorted(set(tier) - TIER_DOCUMENT_FIELDS):
+                    add(path + f".tiers[{tier_index}]." + str(unknown), "unexpected_field", "unexpected tier field")
         expected = {item[0] for item in TIER_DEFINITIONS}
         if set(by_key) != expected:
             add(path+".tiers","invalid_tiers","exactly Bronze, Silver, Gold, Platinum, and Ascendant are required")
@@ -1087,6 +1279,8 @@ def validate_document(document: Any) -> list[dict[str, str]]:
         if not isinstance(raw_mode, dict):
             add(path, "invalid", "leaderboard mode must be an object")
             continue
+        for unknown in sorted(set(raw_mode) - LEADERBOARD_MODE_DOCUMENT_FIELDS):
+            add(path + "." + str(unknown), "unexpected_field", "unexpected leaderboard mode field")
         mode_key = str(raw_mode.get("mode_key") or "").strip()
         if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", mode_key):
             add(path+".mode_key", "invalid_mode_key", "use lowercase letters, numbers, and underscores")
@@ -1192,6 +1386,16 @@ def validate_document(document: Any) -> list[dict[str, str]]:
                 add(path+".aliases", "leaderboard_alias_conflict", f"alias conflicts with {owner}")
             else:
                 mode_aliases[normalized] = mode_key
+    system_tiers = document.get("system_tiers", [])
+    if not isinstance(system_tiers, list):
+        add("system_tiers", "invalid_system_tiers", "system tiers must be an array")
+    else:
+        for index, tier in enumerate(system_tiers):
+            if not isinstance(tier, dict):
+                add(f"system_tiers[{index}]", "invalid", "system tier must be an object")
+                continue
+            for unknown in sorted(set(tier) - SYSTEM_TIER_DOCUMENT_FIELDS):
+                add(f"system_tiers[{index}].{unknown}", "unexpected_field", "unexpected system tier field")
     return errors
 
 
@@ -1390,6 +1594,9 @@ BOSS_DIFF_FIELDS = (
     "icon_url", "discord_label", "discord_emoji", "discord_group",
     "submission_enabled", "submission_mode", "supports_groups",
     "min_party_size", "time_input_format",
+    "timing_scope", "timing_segment_key", "timing_segment_label",
+    "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+    "numeric_metric_unit",
 )
 TIER_DIFF_FIELDS = (
     "tier", "rank", "threshold", "threshold_display", "points",
@@ -1662,13 +1869,18 @@ def publish_draft(
                 """INSERT INTO challenge_config_bosses
                    (config_version_id,boss_key,display_name,is_active,display_order,metric_type,
                     comparison_direction,description,help_text,icon_url,discord_label,discord_emoji,discord_group,
-                    submission_enabled,supports_groups,min_party_size,time_input_format)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    submission_enabled,supports_groups,min_party_size,time_input_format,
+                    timing_scope,timing_segment_key,timing_segment_label,automatic_capture,
+                    numeric_metric_key,numeric_metric_label,numeric_metric_unit)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (version_id,boss["boss_key"],boss["display_name"],int(boss["active"]),boss["display_order"],
                  boss["metric_type"],boss.get("comparison_direction") or ("higher" if boss["metric_type"]=="numeric" else "lower"),
                  boss.get("description"),boss.get("help_text"),boss.get("icon_url"),boss.get("discord_label"),boss.get("discord_emoji"),
                  boss.get("discord_group"),int(boss["submission_enabled"]),int(boss["supports_groups"]),
-                 boss["min_party_size"],boss.get("time_input_format")),
+                 boss["min_party_size"],boss.get("time_input_format"),
+                 boss.get("timing_scope"),boss.get("timing_segment_key"),boss.get("timing_segment_label"),
+                 boss.get("automatic_capture"),boss.get("numeric_metric_key"),
+                 boss.get("numeric_metric_label"),boss.get("numeric_metric_unit")),
             )
             distinct_aliases = {normalize_alias(alias): alias for alias in boss["aliases"]}
             for normalized_alias, alias in distinct_aliases.items():

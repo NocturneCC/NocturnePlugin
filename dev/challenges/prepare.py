@@ -21,6 +21,13 @@ NORMALIZATIONS = {
     "dev/challenges/website/assets/styles.css": "strip_trailing_horizontal_whitespace",
     "dev/challenges/website/assets/nocturne-global.css": "normalize_known_global_css_whitespace",
 }
+REPOSITORY_EXTENSIONS = {
+    "dev/challenges/service/challenge_config.py": "Adds repository-owned timing/capture fields and validation; not byte-equivalent to the live baseline.",
+    "dev/challenges/tests/python/test_challenge_config.py": "Adds regression coverage for repository-owned timing/capture behavior; not byte-equivalent to the live baseline.",
+    "dev/challenges/website/challenge-admin-state.js": "Adds repository-owned timing/capture editor state; not byte-equivalent to the live baseline.",
+    "dev/challenges/website/challenge-admin.html": "Adds repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
+    "dev/challenges/website/tests/challenge-admin-state.test.js": "Adds regression coverage for repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
+}
 
 
 def bindings() -> dict[str, str]:
@@ -130,15 +137,20 @@ def file_record(path: Path, source: str | None = None) -> dict:
     st = path.lstat()
     if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1:
         raise RuntimeError(f"unsafe non-ordinary file in source bundle: {path.relative_to(ROOT)}")
-    return {
-        "path": path.relative_to(ROOT).as_posix(),
+    relative = path.relative_to(ROOT).as_posix()
+    record = {
+        "path": relative,
         "type": "regular",
         "sha256": sha256(path),
         "size": st.st_size,
         "executable": bool(stat.S_IMODE(st.st_mode) & 0o111),
         "source": source,
-        "normalization": NORMALIZATIONS.get(path.relative_to(ROOT).as_posix()),
+        "normalization": NORMALIZATIONS.get(relative),
     }
+    if relative in REPOSITORY_EXTENSIONS:
+        record["source_relationship"] = "repository_owned_extension"
+        record["extension_reason"] = REPOSITORY_EXTENSIONS[relative]
+    return record
 
 
 def source_record(path_text: str, metadata_seed: dict | None = None) -> dict:
@@ -271,10 +283,22 @@ def verify_bundle(expected: dict | None = None) -> None:
     if sorted(listed) != actual_names or len(listed) != len(set(listed)):
         raise RuntimeError("bundle completeness/uniqueness mismatch")
     sources_by_path = {r.get("path"): r for r in manifest.get("live_sources", []) if isinstance(r, dict)}
+    expected_sources = bindings()
     for record, path in zip(records, actual_paths):
         current = file_record(path, record.get("source"))
         if current != record:
             raise RuntimeError("adopted file drift: " + current["path"])
+        if record.get("source") != expected_sources.get(current["path"]):
+            raise RuntimeError("source binding mismatch: " + current["path"])
+        relationship = record.get("source_relationship")
+        if relationship not in {None, "repository_owned_extension"}:
+            raise RuntimeError("unknown source relationship: " + current["path"])
+        if relationship == "repository_owned_extension":
+            if (current["path"] not in REPOSITORY_EXTENSIONS
+                    or record.get("extension_reason") != REPOSITORY_EXTENSIONS[current["path"]]
+                    or record.get("normalization")):
+                raise RuntimeError("invalid repository extension record: " + current["path"])
+            continue
         rule = record.get("normalization")
         if rule:
             if rule not in {"strip_trailing_horizontal_whitespace", "normalize_known_global_css_whitespace"} or not record.get("source"):

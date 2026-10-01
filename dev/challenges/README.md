@@ -1,7 +1,9 @@
 # Nocturne Challenges source adoption (baseline snapshot)
 
-This directory is a repository-owned, byte-preserving adoption of the live
-Challenge configuration/editor workflow as observed on 2026-10-01. The
+This directory is a repository-owned adoption of the live Challenge
+configuration/editor workflow as observed on 2026-10-01. Its initial imported
+files were byte-preserving where noted below; explicitly listed repository
+extensions are not represented as byte-equivalent to their live baselines. The
 Challenge backend, website, bot, and API directories were deployment trees,
 not Git repositories. This snapshot is the reviewable source baseline; it is
 not installed or activated by this commit.
@@ -30,6 +32,15 @@ not installed or activated by this commit.
   `nocturne-global.css` has two redundant blank lines removed at a pinned
   location and EOF. These deterministic whitespace-only normalizations are
   checked against pinned sources; stylesheet rules/declarations are unchanged.
+- The timing/capture metadata change is a repository-owned extension in
+  `service/challenge_config.py`, `tests/python/test_challenge_config.py`,
+  `website/challenge-admin-state.js`, `website/challenge-admin.html`, and
+  `website/tests/challenge-admin-state.test.js`. For these five files the
+  manifest records the unchanged live file as the provenance baseline while
+  explicitly marking the repository file as an extension; it does not claim
+  byte equivalence. No activity timing mappings are inferred: legacy time
+  definitions normalize to `unconfigured` and `manual_only`, while numeric
+  definitions remain `manual_only` until their meaning is configured.
 - `integration/routes/`: bounded source excerpts for the authenticated admin
   proxy (`admin_app_challenge_routes.fragment.py`), public blueprint
   registration, navigation link, and the existing approved Challenge intake

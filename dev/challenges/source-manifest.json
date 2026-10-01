@@ -4,8 +4,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "0701d565b3466103a86b0dafc6deef6a474115105f2faa2e593afcd6af0d0b25",
-      "size": 7028,
+      "sha256": "b922884def09a0f6a3862caef6ca866d1a9204441e6dedfb151ab53b83d34bc1",
+      "size": 7847,
       "source": null,
       "type": "regular"
     },
@@ -175,8 +175,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/prepare.py",
-      "sha256": "d335197d2181378fc504c1c3c8e40d92983170a9f4c5862fd341ca1fa49aef4c",
-      "size": 18341,
+      "sha256": "3910c89a7deeaec29c17dfea9d71f7e5463173a463325896133915e81533081b",
+      "size": 20151,
       "source": null,
       "type": "regular"
     },
@@ -191,11 +191,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds repository-owned timing/capture fields and validation; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/service/challenge_config.py",
-      "sha256": "81421a75ca6cccc1a08011e8a9f02fa43833d9534ad2f58ab9f3181c3de5f0e5",
-      "size": 91244,
+      "sha256": "e2961b26b5a0c870289a0b2f48b8a97c344ed05da9f28dacecb0502554772383",
+      "size": 103707,
       "source": "/srv/projects/nocturne-services/challenge_config.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -326,11 +328,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds regression coverage for repository-owned timing/capture behavior; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_challenge_config.py",
-      "sha256": "f232f55d305812c5f99def9b65bfc2877f91da56135e8f4c7338cdeb8ae8ddf7",
-      "size": 27923,
+      "sha256": "9644f6fa930b16c2cec67fa463d08bad2d21750603519effc55095620ccba9c5",
+      "size": 34909,
       "source": "/srv/projects/nocturne-services/tests/test_challenge_config.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -400,8 +404,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_source_adoption.py",
-      "sha256": "5594861e5f237d081e2a7c498097bff8c5f554e7cf0663f24e302542e8ee4697",
-      "size": 3431,
+      "sha256": "4be3d82140e1020803961842e6bd22a6092ff56b6cec70eec08614ee3d3beadc",
+      "size": 4240,
       "source": null,
       "type": "regular"
     },
@@ -434,20 +438,24 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds repository-owned timing/capture editor state; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/website/challenge-admin-state.js",
-      "sha256": "f54c32097f7cc8331d8d5a6a018915159c8bc66701767a682ec99671338ecdf3",
-      "size": 15648,
+      "sha256": "45bb12c3aaa6623aad8038c5bf803911c3f06352cec5afa5d69f4d0435499ab2",
+      "size": 18472,
       "source": "/srv/projects/website/challenge-admin-state.js",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
       "executable": false,
+      "extension_reason": "Adds repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/website/challenge-admin.html",
-      "sha256": "4b0880737d62a86afe57ec1536f39dd8be881397054d81f6f82908db18e750ce",
-      "size": 40846,
+      "sha256": "3d0eb1a5a96455a94ad230c1bf1645f89de5639b9dee2e70d831e1a09031b06c",
+      "size": 45431,
       "source": "/srv/projects/website/challenge-admin.html",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -1280,11 +1288,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds regression coverage for repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/website/tests/challenge-admin-state.test.js",
-      "sha256": "6f1592bd7c4df163b21797d74fdfd627e125703c8c48d80f5d7b733ad2d3bd8d",
-      "size": 10346,
+      "sha256": "330e9b634efe0cfd7039fc9b537457ca41667ed18a0b758d44ff5cf8d48df73d",
+      "size": 13332,
       "source": "/srv/projects/website/tests/challenge-admin-state.test.js",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     }
   ],
@@ -3069,7 +3079,7 @@
       "uid": 1001
     }
   ],
-  "metadata_capture": "host-root",
+  "metadata_capture": "namespace-view-not-authoritative",
   "purpose": "source-only adoption; not an installer payload",
   "schema_version": 1
 }

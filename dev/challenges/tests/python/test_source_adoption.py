@@ -23,6 +23,21 @@ class SourceAdoptionTests(unittest.TestCase):
         self.assertIn("dev/challenges/service/leaderboard_proof_404.json", names)
         self.assertEqual(len([n for n in names if "/boss_icons/" in n]), 90)
 
+    def test_repository_timing_extensions_are_not_claimed_byte_equivalent(self):
+        manifest = prepare.build_manifest()
+        paths = {
+            "dev/challenges/service/challenge_config.py",
+            "dev/challenges/tests/python/test_challenge_config.py",
+            "dev/challenges/website/challenge-admin-state.js",
+            "dev/challenges/website/challenge-admin.html",
+            "dev/challenges/website/tests/challenge-admin-state.test.js",
+        }
+        records = {item["path"]: item for item in manifest["bundle_files"]}
+        self.assertTrue(paths <= records.keys())
+        for path in paths:
+            self.assertEqual("repository_owned_extension", records[path]["source_relationship"])
+            self.assertIn("not byte-equivalent", records[path]["extension_reason"])
+
     def test_version_10_equivalence_evidence_is_digest_only(self):
         evidence = json.loads((SCRIPT.parent / "evidence/config-v10-equivalence.json").read_text())
         self.assertEqual(evidence["version_id"], 10)

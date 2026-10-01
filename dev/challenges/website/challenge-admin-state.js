@@ -56,6 +56,19 @@
       throw new Error('Unsupported metric type');
     }
     boss.metric_type = nextMetric;
+    boss.automatic_capture = 'manual_only';
+    if (nextMetric === 'time') {
+      delete boss.numeric_metric_key; delete boss.numeric_metric_label; delete boss.numeric_metric_unit;
+      boss.timing_scope = 'unconfigured'; boss.timing_segment_key = null; boss.timing_segment_label = null;
+    } else if (nextMetric === 'numeric') {
+      delete boss.timing_scope; delete boss.timing_segment_key; delete boss.timing_segment_label;
+      boss.numeric_metric_key = null; boss.numeric_metric_label = null; boss.numeric_metric_unit = null;
+    } else {
+      for (const field of ['timing_scope', 'timing_segment_key', 'timing_segment_label',
+        'numeric_metric_key', 'numeric_metric_label', 'numeric_metric_unit', 'automatic_capture']) {
+        delete boss[field];
+      }
+    }
     boss.time_input_format = nextMetric === 'time'
       ? (boss.time_input_format || 'HH:MM:SS.xx') : null;
     boss.comparison_direction = nextMetric === 'numeric'
@@ -92,6 +105,47 @@
         });
       }
     }
+    return boss;
+  }
+
+  function normalizeCaptureMetadata(boss) {
+    if (boss.metric_type === 'time') {
+      boss.timing_scope ??= 'unconfigured';
+      boss.timing_segment_key ??= null;
+      boss.timing_segment_label ??= null;
+      boss.automatic_capture ??= 'manual_only';
+    } else if (boss.metric_type === 'numeric') {
+      boss.numeric_metric_key ??= null;
+      boss.numeric_metric_label ??= null;
+      boss.numeric_metric_unit ??= null;
+      boss.automatic_capture ??= 'manual_only';
+    }
+    return boss;
+  }
+
+  function captureDefinitionReady(boss) {
+    const key = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value);
+    const text = (value, max) => typeof value === 'string'
+      && value.trim().length > 0 && value.trim().length <= max
+      && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+    if (boss.metric_type === 'time') {
+      if (boss.timing_scope === 'overall') return true;
+      return boss.timing_scope === 'segment'
+        && key(boss.timing_segment_key) && text(boss.timing_segment_label, 120);
+    }
+    if (boss.metric_type === 'numeric') {
+      return key(boss.numeric_metric_key) && text(boss.numeric_metric_label, 120)
+        && text(boss.numeric_metric_unit, 32);
+    }
+    return false;
+  }
+
+  function setAutomaticCapture(boss, value) {
+    if (!['manual_only', 'enabled'].includes(value)) throw new Error('Unsupported automatic capture mode');
+    if (value === 'enabled' && !captureDefinitionReady(boss)) {
+      throw new Error('Complete the timing or numeric definition before enabling automatic capture.');
+    }
+    boss.automatic_capture = value;
     return boss;
   }
 
@@ -187,6 +241,7 @@
       })),
     };
     normalizeMetric(boss, metricType);
+    normalizeCaptureMetadata(boss);
     normalizeSubmissionMode(boss, submissionMode);
     return boss;
   }
@@ -262,6 +317,10 @@
       display_name: 'Name', active: 'Active status', aliases: 'Accepted names',
       metric_type: 'Submission type', submission_mode: 'Who can submit',
       min_party_size: 'Minimum party size', time_input_format: 'Time format',
+      timing_scope: 'Timing scope', timing_segment_key: 'Timing segment key',
+      timing_segment_label: 'Timing segment label', automatic_capture: 'Automatic capture',
+      numeric_metric_key: 'Numeric meaning', numeric_metric_label: 'Numeric label',
+      numeric_metric_unit: 'Numeric unit',
       submission_enabled: 'Available to members', icon_url: 'Boss artwork',
       points: 'Points', threshold: 'Requirement', threshold_display: 'Requirement',
       description: 'Description', help_text: 'Help text', display_order: 'Display order',
@@ -348,6 +407,9 @@
     validatePngFile,
     selectExistingArtwork,
     normalizeMetric,
+    normalizeCaptureMetadata,
+    captureDefinitionReady,
+    setAutomaticCapture,
     normalizeSubmissionMode,
     normalizeTimeThreshold,
     reorderBosses,

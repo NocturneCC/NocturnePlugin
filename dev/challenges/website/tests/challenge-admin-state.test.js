@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   createBoss,
   createLeaderboardMode,
@@ -9,6 +11,9 @@ const {
   friendlyDiffLines,
   isDraftOnly,
   normalizeMetric,
+  normalizeCaptureMetadata,
+  captureDefinitionReady,
+  setAutomaticCapture,
   normalizeSubmissionMode,
   normalizeTimeThreshold,
   reorderBosses,
@@ -92,6 +97,61 @@ test('time format is materialized only for timed metrics', () => {
   assert.equal(item.time_input_format, 'HH:MM:SS.xx');
   normalizeMetric(item, 'completion');
   assert.equal(item.time_input_format, null);
+});
+
+test('legacy timing editor defaults to unconfigured and manual-only', () => {
+  const item = normalizeCaptureMetadata({ metric_type: 'time' });
+  assert.equal(item.timing_scope, 'unconfigured');
+  assert.equal(item.automatic_capture, 'manual_only');
+  assert.equal(captureDefinitionReady(item), false);
+});
+
+test('timing and numeric definitions gate automatic capture', () => {
+  const timed = normalizeCaptureMetadata({ metric_type: 'time' });
+  assert.throws(() => setAutomaticCapture(timed, 'enabled'), /Complete the timing/);
+  timed.timing_scope = 'overall';
+  assert.equal(captureDefinitionReady(timed), true);
+  setAutomaticCapture(timed, 'enabled');
+  assert.equal(timed.automatic_capture, 'enabled');
+
+  const segment = { metric_type: 'time', timing_scope: 'segment',
+    timing_segment_key: 'final_room', timing_segment_label: 'Final room' };
+  assert.equal(captureDefinitionReady(segment), true);
+  const numeric = normalizeCaptureMetadata({ metric_type: 'numeric' });
+  assert.throws(() => setAutomaticCapture(numeric, 'enabled'), /Complete the timing or numeric/);
+  Object.assign(numeric, { numeric_metric_key: 'depth_waves',
+    numeric_metric_label: 'Deepest delve', numeric_metric_unit: 'waves' });
+  assert.equal(captureDefinitionReady(numeric), true);
+});
+
+test('capture metadata survives editor-style JSON draft round trip and appears in review', () => {
+  const loaded = normalizeCaptureMetadata({ boss_key: 'fixture', metric_type: 'time' });
+  assert.equal(loaded.timing_scope, 'unconfigured');
+  loaded.timing_scope = 'segment';
+  loaded.timing_segment_key = 'final_room';
+  loaded.timing_segment_label = 'Final room';
+  setAutomaticCapture(loaded, 'enabled');
+  const savedDraft = JSON.parse(JSON.stringify({ bosses: [loaded] }));
+  assert.deepEqual(savedDraft.bosses[0], loaded);
+  assert.equal(savedDraft.bosses[0].timing_segment_key, 'final_room');
+  assert.equal(savedDraft.bosses[0].automatic_capture, 'enabled');
+  const lines = friendlyDiffLines({ has_changes: true, bosses: [{
+    change_type: 'modified', display_name: 'Fixture', fields: [
+      { field: 'timing_scope', before: 'unconfigured', after: 'segment' },
+      { field: 'automatic_capture', before: 'manual_only', after: 'enabled' },
+    ], tiers: [],
+  }] });
+  assert.match(lines.join('\n'), /Timing scope/);
+  assert.match(lines.join('\n'), /Automatic capture/);
+});
+
+test('admin form exposes timing, numeric meaning, capture, and legacy status controls', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'challenge-admin.html'), 'utf8');
+  for (const id of ['timingScope', 'timingSegmentKey', 'timingSegmentLabel',
+    'numericMetricKey', 'numericMetricLabel', 'numericMetricUnit', 'automaticCapture']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /Unconfigured \/ manual submissions only/);
 });
 
 test('configured time input formats normalize to milliseconds and canonical storage', () => {
