@@ -68,7 +68,7 @@ final class AnnouncementService implements AutoCloseable
 	private final ScheduledExecutorService worker;
 	private final boolean ownsWorker;
 	private final AnnouncementStateStore stateStore;
-	private final Consumer<String> chat;
+	private final Consumer<Announcement> newlyActive;
 	private final Consumer<List<Announcement>> sidebar;
 	private final Clock clock;
 	private final LongSupplier jitterSource;
@@ -85,14 +85,14 @@ final class AnnouncementService implements AutoCloseable
 	private List<Announcement> current = List.of();
 
 	AnnouncementService(OkHttpClient base, Gson gson, Path statePath,
-		Consumer<String> chat, Consumer<List<Announcement>> sidebar)
+		Consumer<Announcement> newlyActive, Consumer<List<Announcement>> sidebar)
 	{
-		this(base, gson, statePath, chat, sidebar, newWorker(), true, Clock.systemUTC(),
+		this(base, gson, statePath, newlyActive, sidebar, newWorker(), true, Clock.systemUTC(),
 			System::nanoTime, STARTUP_DELAY_MILLIS, POLL_INTERVAL_MILLIS, JITTER_MILLIS);
 	}
 
 	AnnouncementService(OkHttpClient base, Gson gson, Path statePath,
-		Consumer<String> chat, Consumer<List<Announcement>> sidebar,
+		Consumer<Announcement> newlyActive, Consumer<List<Announcement>> sidebar,
 		ScheduledExecutorService worker, boolean ownsWorker, Clock clock,
 		LongSupplier jitterSource, long startupDelayMillis, long pollIntervalMillis,
 		long jitterMillis)
@@ -100,7 +100,7 @@ final class AnnouncementService implements AutoCloseable
 		this.worker = worker;
 		this.ownsWorker = ownsWorker;
 		this.stateStore = new AnnouncementStateStore(statePath, gson);
-		this.chat = chat;
+		this.newlyActive = newlyActive;
 		this.sidebar = sidebar;
 		this.clock = clock;
 		this.jitterSource = jitterSource;
@@ -212,7 +212,7 @@ final class AnnouncementService implements AutoCloseable
 	private void finish(Call call, List<Announcement> announcements, String responseEtag)
 	{
 		List<Announcement> display = announcements == null ? null : List.copyOf(announcements);
-		List<String> newMessages = new ArrayList<>();
+		List<Announcement> newlyActiveAnnouncements = new ArrayList<>();
 		synchronized (this)
 		{
 			if (inFlight == call) inFlight = null;
@@ -228,7 +228,7 @@ final class AnnouncementService implements AutoCloseable
 					{
 						seen.remove(announcement.id);
 						seen.put(announcement.id, announcement.revision);
-						newMessages.add(announcement.chatText());
+						newlyActiveAnnouncements.add(announcement);
 					}
 				}
 				trimSeen();
@@ -238,7 +238,7 @@ final class AnnouncementService implements AutoCloseable
 			try
 			{
 				if (display != null) sidebar.accept(display);
-				for (String message : newMessages) chat.accept(message);
+				for (Announcement announcement : newlyActiveAnnouncements) newlyActive.accept(announcement);
 			}
 			catch (RuntimeException ignored) { }
 			finally { scheduleNext(); }

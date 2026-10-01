@@ -5,8 +5,6 @@ import java.time.Instant;
 /** Validated, public announcement content. Contains no player or client identity. */
 final class Announcement
 {
-	static final String PREFIX = "[Nocturne Announcement]";
-
 	final String id;
 	final int revision;
 	final String title;
@@ -31,8 +29,4 @@ final class Announcement
 		this.linkUrl = linkUrl;
 	}
 
-	String chatText()
-	{
-		return PREFIX + " " + (title == null ? "" : title + ": ") + message;
-	}
 }

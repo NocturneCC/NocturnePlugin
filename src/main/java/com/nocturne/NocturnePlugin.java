@@ -22,8 +22,6 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
-import net.runelite.client.chat.ChatMessageManager;
-import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -40,6 +38,7 @@ import net.runelite.http.api.loottracker.LootRecordType;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.DrawManager;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 
 @Slf4j
 @PluginDescriptor(
@@ -79,7 +78,7 @@ public class NocturnePlugin extends Plugin
 	private DrawManager drawManager;
 
 	@Inject
-	private ChatMessageManager chatMessageManager;
+	private OverlayManager overlayManager;
 
 	@Inject
 	private ChatIconManager chatIconManager;
@@ -90,6 +89,7 @@ public class NocturnePlugin extends Plugin
 	private volatile SubmissionService submissions;
 	private volatile RaidPresenceService raidPresence;
 	private volatile AnnouncementService announcementService;
+	private volatile AnnouncementToastOverlay announcementToastOverlay;
 	private volatile EmojiSyncService emojiSyncService;
 	private volatile EmojiRenderer emojiRenderer;
 	private volatile RaidVerificationStatus raidVerification = RaidVerificationStatus.INACTIVE;
@@ -152,16 +152,18 @@ public class NocturnePlugin extends Plugin
 			log.debug("Unable to initialize public clan emojis", error);
 		}
 		AnnouncementService createdAnnouncements = null;
+		AnnouncementToastOverlay createdAnnouncementOverlay = new AnnouncementToastOverlay(client);
+		announcementToastOverlay = createdAnnouncementOverlay;
+		overlayManager.add(createdAnnouncementOverlay);
 		try
 		{
 			createdAnnouncements = new AnnouncementService(http, gson,
 				RuneLite.RUNELITE_DIR.toPath().resolve("nocturne").resolve("announcement-state-v1.json"),
-				message -> clientThread.invoke(() ->
+				announcement -> clientThread.invoke(() ->
 				{
-					if (lifecycle == token)
+					if (lifecycle == token && announcementToastOverlay == createdAnnouncementOverlay)
 					{
-						chatMessageManager.queue(QueuedMessage.builder()
-							.type(ChatMessageType.CONSOLE).value(message).build());
+						createdAnnouncementOverlay.enqueue(announcement);
 					}
 				}), current -> withPanel(view -> view.setAnnouncements(current)));
 		}
@@ -217,6 +219,13 @@ public class NocturnePlugin extends Plugin
 		AnnouncementService announcements = announcementService;
 		announcementService = null;
 		if (announcements != null) announcements.close();
+		AnnouncementToastOverlay announcementOverlay = announcementToastOverlay;
+		announcementToastOverlay = null;
+		if (announcementOverlay != null)
+		{
+			overlayManager.remove(announcementOverlay);
+			announcementOverlay.close();
+		}
 		EmojiSyncService emojis = emojiSyncService;
 		emojiSyncService = null;
 		if (emojis != null) emojis.close();

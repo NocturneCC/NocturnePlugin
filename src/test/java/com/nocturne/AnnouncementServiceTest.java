@@ -59,7 +59,8 @@ public class AnnouncementServiceTest
 			String headers = request.headers().toString().toLowerCase();
 			for (String forbidden : List.of("rsn", "account", "profile", "chat", "raid",
 				"telemetry", "receipt")) assertFalse(headers.contains(forbidden));
-			assertEquals("[Nocturne Announcement] Clan notice: Public clan news", harness.messages.get(0));
+			assertEquals("Clan notice", harness.messages.get(0).title);
+			assertEquals("Public clan news", harness.messages.get(0).message);
 			String persisted = Files.readString(harness.state);
 			assertFalse(persisted.contains("Public clan news"));
 			assertFalse(persisted.toLowerCase().contains("rsn"));
@@ -188,8 +189,8 @@ public class AnnouncementServiceTest
 				await(() -> calls.get() == count && !harness.service.inFlightForTest());
 			}
 			assertEquals(2, harness.messages.size());
-			assertTrue(harness.messages.get(0).endsWith("Revision 1"));
-			assertTrue(harness.messages.get(1).endsWith("Revision 2"));
+			assertEquals("Revision 1", harness.messages.get(0).message);
+			assertEquals("Revision 2", harness.messages.get(1).message);
 			assertEquals(4, harness.sidebars.size());
 		}
 		finally { harness.close(); }
@@ -235,7 +236,7 @@ public class AnnouncementServiceTest
 			return List.of(InetAddress.getLoopbackAddress());
 		}).build();
 		ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
-		List<String> messages = new CopyOnWriteArrayList<>();
+		List<Announcement> messages = new CopyOnWriteArrayList<>();
 		List<List<Announcement>> sidebars = new CopyOnWriteArrayList<>();
 		Path state = Files.createTempDirectory("nocturne-announcement-dns").resolve("state.json");
 		AnnouncementService service = new AnnouncementService(base, new Gson(), state,
@@ -297,7 +298,7 @@ public class AnnouncementServiceTest
 		OkHttpClient base = new OkHttpClient();
 		Path state = Files.createTempDirectory("nocturne-announcement-rejected").resolve("state.json");
 		AnnouncementService service = new AnnouncementService(base, new Gson(), state,
-			message -> fail("unexpected chat"), values -> fail("unexpected sidebar"), rejected,
+			announcement -> fail("unexpected announcement"), values -> fail("unexpected sidebar"), rejected,
 			false, Clock.fixed(NOW, ZoneOffset.UTC), () -> 0, 0, 1000, 0);
 		service.start();
 		service.start();
@@ -314,7 +315,6 @@ public class AnnouncementServiceTest
 				+ "\"url\":\"https://nocturne.events/event-board.html\"}"), NOW);
 		assertEquals(1, parsed.size());
 		assertEquals("https://nocturne.events/event-board.html", parsed.get(0).linkUrl);
-		assertEquals("[Nocturne Announcement]", Announcement.PREFIX);
 		assertEquals(10_001, AnnouncementService.nextDelay(TimeUnit.MINUTES.toMillis(15), 0, 0,
 			NOW, List.of(new Announcement("notice", 1, null, "Message", "notice", NOW.minusSeconds(1),
 				NOW.plusSeconds(10), null, null))));
@@ -370,7 +370,7 @@ public class AnnouncementServiceTest
 	{
 		private final OkHttpClient base;
 		private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
-		private final List<String> messages = new CopyOnWriteArrayList<>();
+		private final List<Announcement> messages = new CopyOnWriteArrayList<>();
 		private final List<List<Announcement>> sidebars = new CopyOnWriteArrayList<>();
 		private final Path state;
 		private final AnnouncementService service;
@@ -379,7 +379,8 @@ public class AnnouncementServiceTest
 		{
 			base = new OkHttpClient.Builder().addInterceptor(interceptor).build();
 			state = Files.createTempDirectory("nocturne-announcement-service").resolve("state.json");
-			service = new AnnouncementService(base, new Gson(), state, messages::add, sidebars::add,
+			service = new AnnouncementService(base, new Gson(), state,
+				messages::add, sidebars::add,
 				worker, true, Clock.fixed(NOW, ZoneOffset.UTC), () -> 0L,
 				0, TimeUnit.HOURS.toMillis(1), 0);
 		}
