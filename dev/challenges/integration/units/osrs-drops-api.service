@@ -1,0 +1,18 @@
+[Unit]
+Description=Nocturne Public API
+After=network.target
+
+[Service]
+Type=simple
+User=randal
+Group=www-data
+WorkingDirectory=/srv/projects/nocturne-services
+EnvironmentFile=-/srv/projects/nocturne-services/.env
+ExecStart=/srv/projects/api/venv-simon/bin/gunicorn --workers 2 --bind 127.0.0.1:5002 --timeout 30 api:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

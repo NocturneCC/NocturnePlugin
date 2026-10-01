@@ -1,0 +1,3075 @@
+{
+  "bundle_files": [
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/README.md",
+      "sha256": "0701d565b3466103a86b0dafc6deef6a474115105f2faa2e593afcd6af0d0b25",
+      "size": 7028,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/tests/challengeConfig.test.js",
+      "sha256": "94a50655f692e7dd6b369624dff078904de5e8152dab0a79b752e407ca1669e5",
+      "size": 6272,
+      "source": "/srv/projects/nocturne-bot/tests/challengeConfig.test.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/tests/challengeMetric.test.js",
+      "sha256": "617452ad93b7bee58b262d73881ce55a6f67588df13694631e133b8919f003de",
+      "size": 2457,
+      "source": "/srv/projects/nocturne-bot/tests/challengeMetric.test.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/utils/challengeConfig.js",
+      "sha256": "3bf4c5c33b9fd23dd9e6b4cbbe1015ee50857f89fe407896de6ecb4527f517ee",
+      "size": 6483,
+      "source": "/srv/projects/nocturne-bot/utils/challengeConfig.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/utils/challengeMetric.js",
+      "sha256": "5dd8adab3709f44bc1eb0aca3efd9020d4d519166c5806b6d75554297139e4b6",
+      "size": 3697,
+      "source": "/srv/projects/nocturne-bot/utils/challengeMetric.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/utils/challengeSubmissionIdentity.js",
+      "sha256": "a394d7d40bcad1e567f851c299b4b49c6e0ff9911d0b2d263d3668cb4cf4ac63",
+      "size": 1203,
+      "source": "/srv/projects/nocturne-bot/utils/challengeSubmissionIdentity.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/utils/dropSubmissionUtils.js",
+      "sha256": "89f659abd4db0695ad4a9cd414410633001d18050e7e80c1723931eaa7a39163",
+      "size": 29063,
+      "source": "/srv/projects/nocturne-bot/utils/dropSubmissionUtils.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/consumers/nocturne-bot/utils/midgardChallengeIntake.js",
+      "sha256": "35abf7614191d04563ebe3c3cd44a66fb8ba22e4f74b56b368fa0453f7157040",
+      "size": 4989,
+      "source": "/srv/projects/nocturne-bot/utils/midgardChallengeIntake.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/evidence/config-v10-equivalence.json",
+      "sha256": "8f983d2dffbac176ce111b9deb0e56ac9c5fe38d4e1ede119269d9f04dd2b4d8",
+      "size": 364,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/routes/admin-auth-and-proxy.fragment.conf",
+      "sha256": "26d31639949d3b902e00d382dcbaf8da2442793672656b92b4f6c1bbbec5e964",
+      "size": 2187,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/routes/admin-navigation.fragment.html",
+      "sha256": "66beffb5cea3de56cae0a65b9b98043f3b5c5108941896fcfafadcc506fd3f54",
+      "size": 411,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py",
+      "sha256": "3e66946ceb8db72e7b9bed4a9699a5947883aa0c0166b0009a96b5b097e16ede",
+      "size": 10917,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
+      "sha256": "3f753e60ac08e69bdf94d860818dfad2c2545068cbf10d9b39611abc5ceefe73",
+      "size": 711,
+      "source": "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/routes/public-config-registration.fragment.py",
+      "sha256": "f8440b5e7d63b75e710a595310e273e556392679936e69bb17c3f7fd9fa24a0d",
+      "size": 347,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/units/nocturne-challenge-intake.active.service",
+      "sha256": "79fe3d895f47694a22f90897967f0030805655ea74e0d82beca7af886d6f461b",
+      "size": 954,
+      "source": "/etc/systemd/system/nocturne-challenge-intake.service",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/units/nocturne-challenge-intake.service",
+      "sha256": "79fe3d895f47694a22f90897967f0030805655ea74e0d82beca7af886d6f461b",
+      "size": 954,
+      "source": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/units/osrs-drops-admin.active.service",
+      "sha256": "0919b5a06426c420679f17d0d50f057a398c3f0c0e7ee0c0ee63aaf4466bc204",
+      "size": 383,
+      "source": "/etc/systemd/system/osrs-drops-admin.service",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/units/osrs-drops-admin.service",
+      "sha256": "efb942e5cb09110985e3057e32dc8d29c75fabe509a6d6a63425435a998f5848",
+      "size": 374,
+      "source": "/srv/projects/api/osrs-drops-admin.service",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/integration/units/osrs-drops-api.service",
+      "sha256": "df2c3642742076302d81a1f1c1d0129fe2235f4be8bb8ca91419abf8a26160a5",
+      "size": 427,
+      "source": "/etc/systemd/system/osrs-drops-api.service",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/prepare.py",
+      "sha256": "d335197d2181378fc504c1c3c8e40d92983170a9f4c5862fd341ca1fa49aef4c",
+      "size": 18341,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_award_delivery.py",
+      "sha256": "8b5bce8821c2bb25fa00e03edea5c43073dc5422ce8d55045c2e876897e649d0",
+      "size": 56971,
+      "source": "/srv/projects/nocturne-services/challenge_award_delivery.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_config.py",
+      "sha256": "81421a75ca6cccc1a08011e8a9f02fa43833d9534ad2f58ab9f3181c3de5f0e5",
+      "size": 91244,
+      "source": "/srv/projects/nocturne-services/challenge_config.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_config_api.py",
+      "sha256": "d4b4fab9c1e7eaa96e7915c926dabbc88468c6baa76bb865b0c364ef70b299cc",
+      "size": 3616,
+      "source": "/srv/projects/nocturne-services/challenge_config_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_direct_diagnostics.py",
+      "sha256": "95652d565eefa62bebca2b3a0bba1f4f9ca568c13afe2f8fc4858b171143a8fe",
+      "size": 5894,
+      "source": "/srv/projects/nocturne-services/challenge_direct_diagnostics.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_direct_intake.py",
+      "sha256": "e03f9059ade627b1a5cf3183c8788e9a365e4043e1c74d45d883decae539e541",
+      "size": 62381,
+      "source": "/srv/projects/nocturne-services/challenge_direct_intake.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_intake_api.py",
+      "sha256": "18ed7786854e56c3a24f31adeb7acfb6bbc25cc15daef874e48eeaf4b389e7b2",
+      "size": 20931,
+      "source": "/srv/projects/nocturne-services/challenge_intake_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_legacy_baseline.py",
+      "sha256": "b4a4ace0710a630aadaa4b30f13b3dab9374ad9a1f3dd42e4f7b5f178d4ae939",
+      "size": 20955,
+      "source": "/srv/projects/nocturne-services/challenge_legacy_baseline.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_member_view.py",
+      "sha256": "a9fa4e09432677b3142026e8aeb32f6c78867bee4c5601bad2a24b2ad1e6d9e2",
+      "size": 14827,
+      "source": "/srv/projects/nocturne-services/challenge_member_view.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_shadow_common.py",
+      "sha256": "16cf0378dc110ffa56522e37e526c24b2a81e688bdaa04c6f014d717283eeabc",
+      "size": 34677,
+      "source": "/srv/projects/nocturne-services/challenge_shadow_common.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_shadow_sync.py",
+      "sha256": "d7249f2fa8df318b593efdbbc6528ab788e8b5f97894c4a9b90788aa6036594a",
+      "size": 25964,
+      "source": "/srv/projects/nocturne-services/challenge_shadow_sync.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_api.py",
+      "sha256": "1a45bb682e9b091ac319cda485c92ea7efe18cde73d846a8a92e958df2090417",
+      "size": 12775,
+      "source": "/srv/projects/nocturne-services/leaderboard_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": true,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_challenge_ingest.py",
+      "sha256": "4004ce3352885e5273a7aac785d5f1d7cd202ff1a7331df5da5f26f68a0e4330",
+      "size": 21812,
+      "source": "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py",
+      "type": "regular"
+    },
+    {
+      "executable": true,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_projection_refresh.py",
+      "sha256": "e861871142b600487706224dfbcf7f06a1179da625a117802f6494cb727a1b62",
+      "size": 5628,
+      "source": "/srv/projects/nocturne-services/leaderboard_projection_refresh.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_proof_404.json",
+      "sha256": "574681f48911e7a206a97b66ace44d3ccadf3b2a5c5438a9b77e9157fe8992f6",
+      "size": 50094,
+      "source": "/srv/projects/nocturne-services/leaderboard_proof_404.json",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_proof_resolver.py",
+      "sha256": "6fb86297ea6a561d0750aa7bdac4a9db29b5cff5280c78c0424a886baf5b8309",
+      "size": 5211,
+      "source": "/srv/projects/nocturne-services/leaderboard_proof_resolver.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/service/leaderboard_shadow_renderer.py",
+      "sha256": "b255b2f0ff186294ad4f7bc9836bd747d7f37d2dca093615ef9645f91f935543",
+      "size": 18050,
+      "source": "/srv/projects/nocturne-services/leaderboard_shadow_renderer.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_config.py",
+      "sha256": "f232f55d305812c5f99def9b65bfc2877f91da56135e8f4c7338cdeb8ae8ddf7",
+      "size": 27923,
+      "source": "/srv/projects/nocturne-services/tests/test_challenge_config.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_config_api.py",
+      "sha256": "07828b5eb5da8bb4c50c06ccaee55e1276639f95650739405ad8def1d1b1c15e",
+      "size": 13601,
+      "source": "/srv/projects/nocturne-services/tests/test_challenge_config_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_direct_intake.py",
+      "sha256": "1ba01fe8e043465aeac2268cd072553f2cc06db63b665065e09f744f32cb2c9e",
+      "size": 37613,
+      "source": "/srv/projects/nocturne-services/tests/test_challenge_direct_intake.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_member_api.py",
+      "sha256": "0907f3d9d21fb78593968f19324d670c3d938a747b9c1a5a8e1c5718d2f73874",
+      "size": 14916,
+      "source": "/srv/projects/nocturne-services/tests/test_challenge_member_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_shadow.py",
+      "sha256": "7fb12810a5cc427a347bb7e0dc7578325662e28d43ab472a126198f6cc91afdb",
+      "size": 5719,
+      "source": "/srv/projects/nocturne-services/tests/test_challenge_shadow.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_leaderboard_api.py",
+      "sha256": "af1d1ae52a48e914d008976281cf85fe8812273a6985cc5c9961887df019b96f",
+      "size": 8200,
+      "source": "/srv/projects/nocturne-services/tests/test_leaderboard_api.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_leaderboard_challenge_ingest.py",
+      "sha256": "c55525d270b287bd26d87d09ca5c8b96c0f4961be36074688cb39ca16f78f3d2",
+      "size": 7846,
+      "source": "/srv/projects/nocturne-services/tests/test_leaderboard_challenge_ingest.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_leaderboard_projection_refresh.py",
+      "sha256": "de38c38693d384a08b892e7a282b3f899555cdcc92324b81c2472f2db2e5cce0",
+      "size": 3654,
+      "source": "/srv/projects/nocturne-services/tests/test_leaderboard_projection_refresh.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_source_adoption.py",
+      "sha256": "5594861e5f237d081e2a7c498097bff8c5f554e7cf0663f24e302542e8ee4697",
+      "size": 3431,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": "normalize_known_global_css_whitespace",
+      "path": "dev/challenges/website/assets/nocturne-global.css",
+      "sha256": "a42dfb6ceb2778810c7ff27649945f2102b6af586d80572c68ce65192b76a47b",
+      "size": 4847,
+      "source": "/srv/projects/website/nocturne-global.css",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/assets/nocturne-theme.css",
+      "sha256": "155cc54f4dc4ba21cd150060ba4ce76d27ed1d53205a7b20135bdafa007c8486",
+      "size": 7921,
+      "source": "/srv/projects/website/nocturne-theme.css",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": "strip_trailing_horizontal_whitespace",
+      "path": "dev/challenges/website/assets/styles.css",
+      "sha256": "f786ed43a042532ecc9481bfd1d703c5dba1cace1edd03d6459eec43c64932e6",
+      "size": 14103,
+      "source": "/srv/projects/website/styles.css",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/challenge-admin-state.js",
+      "sha256": "f54c32097f7cc8331d8d5a6a018915159c8bc66701767a682ec99671338ecdf3",
+      "size": 15648,
+      "source": "/srv/projects/website/challenge-admin-state.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/challenge-admin.html",
+      "sha256": "4b0880737d62a86afe57ec1536f39dd8be881397054d81f6f82908db18e750ce",
+      "size": 40846,
+      "source": "/srv/projects/website/challenge-admin.html",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Abyssal_Sire.png",
+      "sha256": "0768d04272aba14a47b8bd25e9e018e71ea49e69896d6e506f4ef9ea9271200a",
+      "size": 2918,
+      "source": "/srv/projects/website/media/boss_icons/Abyssal_Sire.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Alchemical_Hydra.png",
+      "sha256": "455cf7b49704828e67c5e05b7f107f4593243df8d9f762777be35aa9aa0d1c9e",
+      "size": 2678,
+      "source": "/srv/projects/website/media/boss_icons/Alchemical_Hydra.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Callisto.png",
+      "sha256": "6fe277dcf1392ac2b3bd369a1645836f125130fe6ce4a1f6fbfaaf88c4ae628f",
+      "size": 2762,
+      "source": "/srv/projects/website/media/boss_icons/Callisto.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Calvarion.png",
+      "sha256": "d5419dc954a7efb830087c4fb2a36bf44b5ee90665947093ef5c57ff1d76cf89",
+      "size": 2813,
+      "source": "/srv/projects/website/media/boss_icons/Calvarion.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Chambers.png",
+      "sha256": "f4ce731be454d87292ba097ff8ac4c3e410c6a76f9e7f6ec1f651a34a2fb9c0e",
+      "size": 2702,
+      "source": "/srv/projects/website/media/boss_icons/Chambers.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Chambers_CM.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "source": "/srv/projects/website/media/boss_icons/Chambers_CM.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Duke_suc.png",
+      "sha256": "eb49d044af08c4692e33bb98bee33370f21a214c479feaa6708d72b030f0944c",
+      "size": 3333,
+      "source": "/srv/projects/website/media/boss_icons/Duke_suc.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/General_Graardor.png",
+      "sha256": "7aa510281860d588ba723a588f9eec6fdeee68576d2aadfedb49743552ed3a06",
+      "size": 2870,
+      "source": "/srv/projects/website/media/boss_icons/General_Graardor.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Kalphite_Queen.png",
+      "sha256": "b86969f1e66a1ffdcb2437cf10ce8818ee65d15fffbd361b6da62837e1912db3",
+      "size": 2504,
+      "source": "/srv/projects/website/media/boss_icons/Kalphite_Queen.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Kalphite_Queen2.png",
+      "sha256": "a5be9cd9af2a9f82fcd86a1e39d370c00b329519e46e835b8a9904444716e146",
+      "size": 2804,
+      "source": "/srv/projects/website/media/boss_icons/Kalphite_Queen2.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/King_Black_Dragon.png",
+      "sha256": "68ddad3268e93ceaad3db6c2952217401fd088ff2e01d4f064c5a5e6ec2ece55",
+      "size": 2690,
+      "source": "/srv/projects/website/media/boss_icons/King_Black_Dragon.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Phantom_muspah.png",
+      "sha256": "34b4954a7b9096f17237d581171103fba734b5c03c362bf3d051536543af3ac2",
+      "size": 2934,
+      "source": "/srv/projects/website/media/boss_icons/Phantom_muspah.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Phosanis_Nightmare.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "source": "/srv/projects/website/media/boss_icons/Phosanis_Nightmare.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Theatre_of_blood HMT.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/Theatre_of_blood HMT.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Theatre_of_blood.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/Theatre_of_blood.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/Vardorvis.png",
+      "sha256": "a9d4d97839eab4c733b1a65967c3675297e409b92b68391b1f911fb8c9187413",
+      "size": 2937,
+      "source": "/srv/projects/website/media/boss_icons/Vardorvis.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/amoxliatl.png",
+      "sha256": "82e2f824ef3284080d9a443316b3927fc2b8da74b496e3ecd468ac82cc0fb72b",
+      "size": 2333,
+      "source": "/srv/projects/website/media/boss_icons/amoxliatl.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/araxxor.png",
+      "sha256": "3b44c6696415864da2a11822e44a1f147a1bfd1426d42bfcfdab93266c4e6852",
+      "size": 3163,
+      "source": "/srv/projects/website/media/boss_icons/araxxor.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/artio.png",
+      "sha256": "6fe277dcf1392ac2b3bd369a1645836f125130fe6ce4a1f6fbfaaf88c4ae628f",
+      "size": 2762,
+      "source": "/srv/projects/website/media/boss_icons/artio.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/barrows.png",
+      "sha256": "36d1916423b159a081ec1c00efb8001f89ac2f1918a15a2cf957e020cffa9a9b",
+      "size": 2647,
+      "source": "/srv/projects/website/media/boss_icons/barrows.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/brutus.png",
+      "sha256": "b37434ad41f5f4af8882e4666527a4266b4650dfd0596624b973da9d47cd76a4",
+      "size": 2672,
+      "source": "/srv/projects/website/media/boss_icons/brutus.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/bryophyta.png",
+      "sha256": "740138f8946a6681b86fbb9dfcfd25e139f8e50af1b5a8a298889f1f35dd668b",
+      "size": 2567,
+      "source": "/srv/projects/website/media/boss_icons/bryophyta.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cerb.png",
+      "sha256": "0a9998e0d21cde6ee15bf5e8624e6f813208a3b1e20ca637d3b53989347d2ad6",
+      "size": 2767,
+      "source": "/srv/projects/website/media/boss_icons/cerb.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cg.png",
+      "sha256": "f959adf28434ff93f89076b755dd359af9e92e7fbd66ae564d1e73c8d2725668",
+      "size": 2493,
+      "source": "/srv/projects/website/media/boss_icons/cg.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/chaos_ele.png",
+      "sha256": "ea42af6a83147d1bf605bb07ec6bcfe06c30b12b0d8441bb3f02b3b9ac1325c7",
+      "size": 2779,
+      "source": "/srv/projects/website/media/boss_icons/chaos_ele.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/chaos_fanatic.png",
+      "sha256": "119768c68f969db88f00d64bb30e8e870958ac283284131e12b318cd5960ddfb",
+      "size": 2467,
+      "source": "/srv/projects/website/media/boss_icons/chaos_fanatic.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cm_1.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "source": "/srv/projects/website/media/boss_icons/cm_1.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cm_3.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "source": "/srv/projects/website/media/boss_icons/cm_3.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cm_5.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "source": "/srv/projects/website/media/boss_icons/cm_5.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/colosseum.png",
+      "sha256": "e1b178a9b69be6bf937d91ef8e63e421bc46cddb081cb48ac4a69e6c2aa9eca2",
+      "size": 2768,
+      "source": "/srv/projects/website/media/boss_icons/colosseum.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/commander_zilyana.png",
+      "sha256": "b0b5352119cfec05d59c7f8962c92bf817c6484e0570877d10b312525d1a90b2",
+      "size": 2854,
+      "source": "/srv/projects/website/media/boss_icons/commander_zilyana.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/corp.png",
+      "sha256": "e32a412d926b031dcf2db4f120dcec23572bc8ad867c6516b853eee2b6f3bae2",
+      "size": 2785,
+      "source": "/srv/projects/website/media/boss_icons/corp.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/cox_1.png",
+      "sha256": "f4ce731be454d87292ba097ff8ac4c3e410c6a76f9e7f6ec1f651a34a2fb9c0e",
+      "size": 2702,
+      "source": "/srv/projects/website/media/boss_icons/cox_1.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/crazy_arch.png",
+      "sha256": "e7270e946128815d4d5676250569b86cb9f29121f34b6516cdab54c1ee8b0fbd",
+      "size": 2495,
+      "source": "/srv/projects/website/media/boss_icons/crazy_arch.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/dagannoth_prime.png",
+      "sha256": "40c8396722935f9f4f5a31298e56d9ef9fbc2d5e03244ff8e5f08e0003c7f98e",
+      "size": 2517,
+      "source": "/srv/projects/website/media/boss_icons/dagannoth_prime.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/dagannoth_rex.png",
+      "sha256": "d69b6cb1fa835f56e75c6164405dff52319f1f840588985148f2f39a98b55c02",
+      "size": 2427,
+      "source": "/srv/projects/website/media/boss_icons/dagannoth_rex.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/dagannoth_supreme.png",
+      "sha256": "750f1adee314b5f8d4c48f59894e90e4111e7a3d2dae7826f3a47539ab48fdac",
+      "size": 2365,
+      "source": "/srv/projects/website/media/boss_icons/dagannoth_supreme.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/delve.png",
+      "sha256": "c1a622a4884295539bec461ba88574fa4c21104bf0443ef165914722eb36461f",
+      "size": 2775,
+      "source": "/srv/projects/website/media/boss_icons/delve.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/deranged_arch.png",
+      "sha256": "2630b689910f6db37dc8694387ff0ccbefde2b4beb28a5a85c3ac9d59d10e8ec",
+      "size": 2491,
+      "source": "/srv/projects/website/media/boss_icons/deranged_arch.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/dks.png",
+      "sha256": "11f86427c46b79f107d5faf7373bf405ff84e940af1bf51e722ddea40ff1d10e",
+      "size": 2774,
+      "source": "/srv/projects/website/media/boss_icons/dks.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/doom.png",
+      "sha256": "c1a622a4884295539bec461ba88574fa4c21104bf0443ef165914722eb36461f",
+      "size": 2775,
+      "source": "/srv/projects/website/media/boss_icons/doom.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/gauntlet.png",
+      "sha256": "f959adf28434ff93f89076b755dd359af9e92e7fbd66ae564d1e73c8d2725668",
+      "size": 2493,
+      "source": "/srv/projects/website/media/boss_icons/gauntlet.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/gem_crab.png",
+      "sha256": "9b4a8cdde8a0989bbb35f96c0abac10f6c970b11bbc08b25ab10ed6ac0f8051f",
+      "size": 2896,
+      "source": "/srv/projects/website/media/boss_icons/gem_crab.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/giant_mole.png",
+      "sha256": "4511871fa70827172425eaa222cf571a479f04128486116dd79af9abdb760150",
+      "size": 2357,
+      "source": "/srv/projects/website/media/boss_icons/giant_mole.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/grotesque_guardians.png",
+      "sha256": "f103934f5781d4c713be21560fa88ad88f0f82948d2dd966d11282ce1b9b416a",
+      "size": 2379,
+      "source": "/srv/projects/website/media/boss_icons/grotesque_guardians.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/grotesque_guardians2.png",
+      "sha256": "8648413556857766291ae4064fb40a472a776c59957f3aaec215f89ba49af07f",
+      "size": 2689,
+      "source": "/srv/projects/website/media/boss_icons/grotesque_guardians2.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/hespori.png",
+      "sha256": "8fc693bfb641660d3304e229be4f82be2a281066a82f6153115abfa414f70e15",
+      "size": 2781,
+      "source": "/srv/projects/website/media/boss_icons/hespori.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/hmt_5.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/hmt_5.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/jad.png",
+      "sha256": "acdf82a6a84f0ddd2e268ecdfc0aa985adddd8b7abf9cd7f5c2b0044ac54bbc4",
+      "size": 2587,
+      "source": "/srv/projects/website/media/boss_icons/jad.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/kraken.png",
+      "sha256": "b75efaa530057025ec9f77481e0e4b110a7d69d5d94d277faa10097879b19b4c",
+      "size": 2235,
+      "source": "/srv/projects/website/media/boss_icons/kraken.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/kree.png",
+      "sha256": "bcf18ad1f54a350078b65d29bd03d23be2bd5db050150006612bf2fbb3021da7",
+      "size": 2737,
+      "source": "/srv/projects/website/media/boss_icons/kree.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/kril.png",
+      "sha256": "07f257b7eb9ab60eeacbe4efed0e34bff08a0ee17a573e76ea99e6af942f081d",
+      "size": 2865,
+      "source": "/srv/projects/website/media/boss_icons/kril.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/lunar chest.png",
+      "sha256": "fd0617884b1024aa302027c2bcfb51f6b627b0d83a774f747fa2476ba09e9c4f",
+      "size": 1365,
+      "source": "/srv/projects/website/media/boss_icons/lunar chest.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/lunar_chest.png",
+      "sha256": "810ed70fe66267e981a44a7cf7012bbcebc3c4bfedfecbf87e84884e085c2619",
+      "size": 2887,
+      "source": "/srv/projects/website/media/boss_icons/lunar_chest.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/mimic.png",
+      "sha256": "d0dce1402fe67a67bebbe6ce86c7f1e9c1d22019c8c34e8223e90c760a24a0a0",
+      "size": 2472,
+      "source": "/srv/projects/website/media/boss_icons/mimic.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/nex.png",
+      "sha256": "7f3329b290ff58ca42549172bbaa0f68073538b285a71b78b8900c051b1f8a0f",
+      "size": 2776,
+      "source": "/srv/projects/website/media/boss_icons/nex.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/nightmare.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "source": "/srv/projects/website/media/boss_icons/nightmare.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/obor.png",
+      "sha256": "0ca039e7198846b3fe6e1f17257de9f94ea8922f437a62c5fe0e042b5b4ad89b",
+      "size": 2795,
+      "source": "/srv/projects/website/media/boss_icons/obor.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/phosanis.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "source": "/srv/projects/website/media/boss_icons/phosanis.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/revenants.png",
+      "sha256": "3ce7489b56197b56e1217fd53ceae114473bc14a3b70d0053e70767fcc9e384d",
+      "size": 90492,
+      "source": "/srv/projects/website/media/boss_icons/revenants.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/sarachnas.png",
+      "sha256": "0c733f7ed893ab3f4e1aa5831e02304983005812dc7a3888cb51a67be24092a3",
+      "size": 2401,
+      "source": "/srv/projects/website/media/boss_icons/sarachnas.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/scorpio.png",
+      "sha256": "5652592dae177d8904ba9beef98e9fe74ac1421c17f9297d9e26903a53650b45",
+      "size": 2655,
+      "source": "/srv/projects/website/media/boss_icons/scorpio.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/scurrius.png",
+      "sha256": "b05b97a056fb17f7b50a0879a4658ee819ff82414c0d6fc11597207e4edf63b9",
+      "size": 3960,
+      "source": "/srv/projects/website/media/boss_icons/scurrius.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/shellbane.png",
+      "sha256": "d8502d928b0cf462c17d8ffdf2dbd1581b73be800e1a30f8ac3c6f6f402ddada",
+      "size": 2991,
+      "source": "/srv/projects/website/media/boss_icons/shellbane.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/skotizo.png",
+      "sha256": "c6d821dfb52568f3b88a1c1db950984607b51ccc35381e986bfd0a8ff752b657",
+      "size": 2424,
+      "source": "/srv/projects/website/media/boss_icons/skotizo.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/sol.png",
+      "sha256": "e1b178a9b69be6bf937d91ef8e63e421bc46cddb081cb48ac4a69e6c2aa9eca2",
+      "size": 2768,
+      "source": "/srv/projects/website/media/boss_icons/sol.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/spindel.png",
+      "sha256": "a8380c0d07cad4290778546b7a0ef0506088f1c7f3fb62a65c63d696910c03ce",
+      "size": 2855,
+      "source": "/srv/projects/website/media/boss_icons/spindel.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tempoross.png",
+      "sha256": "efc114cd05e529772c4bddb08735ed8e6574353586ba5eaa4f002cfb10578ef2",
+      "size": 2225,
+      "source": "/srv/projects/website/media/boss_icons/tempoross.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/the_Leviathan.png",
+      "sha256": "0c5fdbdc4e6d896b899435c1d6272f17b77f891c71023744eaa0451fe3592e74",
+      "size": 3001,
+      "source": "/srv/projects/website/media/boss_icons/the_Leviathan.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/the_RTs.png",
+      "sha256": "5ddac392973a14132ac3c90817f3e46cde9de6766664733710b12b666256bcf9",
+      "size": 2987,
+      "source": "/srv/projects/website/media/boss_icons/the_RTs.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/the_Whisperer.png",
+      "sha256": "49ec1009c5653fb5e3ed4b6347757cad0fd2568c72252193bb7e40e7727afb04",
+      "size": 3501,
+      "source": "/srv/projects/website/media/boss_icons/the_Whisperer.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/the_gauntlet.png",
+      "sha256": "44e3177f009d8b05bf97c10b6732565300aeaf1ba3f5219dd017765e2cef90a5",
+      "size": 2536,
+      "source": "/srv/projects/website/media/boss_icons/the_gauntlet.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/the_hueycoatl.png",
+      "sha256": "42b22a3fae3fdb2197afe821bf93277fbfe0f8c93dd3ac601cba913a4b3ba58c",
+      "size": 2918,
+      "source": "/srv/projects/website/media/boss_icons/the_hueycoatl.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/thermy.png",
+      "sha256": "a72f831825e623d29cb0d7a4dd95b0b1407c891c3bb68b797f78c291f457a0e8",
+      "size": 2243,
+      "source": "/srv/projects/website/media/boss_icons/thermy.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/toa_1_300.png",
+      "sha256": "09bfa1b98a54c3fb11789a4272c9f55f6c67a0c18fde036fbec648ac6dfa4045",
+      "size": 2640,
+      "source": "/srv/projects/website/media/boss_icons/toa_1_300.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/toa_expert.png",
+      "sha256": "09bfa1b98a54c3fb11789a4272c9f55f6c67a0c18fde036fbec648ac6dfa4045",
+      "size": 2640,
+      "source": "/srv/projects/website/media/boss_icons/toa_expert.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/toa_normal.png",
+      "sha256": "12854ee9dfa2be9bdb87074650e456c5b372c6419495ef9adb71cae1c679a3b2",
+      "size": 2550,
+      "source": "/srv/projects/website/media/boss_icons/toa_normal.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tob_2.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/tob_2.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tob_3.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/tob_3.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tob_5.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/boss_icons/tob_5.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tzkal_zuk.png",
+      "sha256": "c6302bd51751543ce560b004c2c66b97d0f31043a7cfa0b61081132606f67cd6",
+      "size": 2722,
+      "source": "/srv/projects/website/media/boss_icons/tzkal_zuk.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/tztok_jad.png",
+      "sha256": "acdf82a6a84f0ddd2e268ecdfc0aa985adddd8b7abf9cd7f5c2b0044ac54bbc4",
+      "size": 2587,
+      "source": "/srv/projects/website/media/boss_icons/tztok_jad.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/venenatis.png",
+      "sha256": "a8380c0d07cad4290778546b7a0ef0506088f1c7f3fb62a65c63d696910c03ce",
+      "size": 2855,
+      "source": "/srv/projects/website/media/boss_icons/venenatis.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/vetion.png",
+      "sha256": "d5419dc954a7efb830087c4fb2a36bf44b5ee90665947093ef5c57ff1d76cf89",
+      "size": 2813,
+      "source": "/srv/projects/website/media/boss_icons/vetion.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/vorkath.png",
+      "sha256": "9ee301e1a7257466798dbca19da051888e70ffac5cba598d602ae18b412ee32f",
+      "size": 2763,
+      "source": "/srv/projects/website/media/boss_icons/vorkath.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/wintertodt.png",
+      "sha256": "b08f9bbfd93c888c104e8974e135f27d81af095da1f94ab9bb3f4ac09cbe2ae7",
+      "size": 2400,
+      "source": "/srv/projects/website/media/boss_icons/wintertodt.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/yama.png",
+      "sha256": "c2990139821c651e36393dd0be09116f2834aab1741dd6570fcea09f74265236",
+      "size": 3229,
+      "source": "/srv/projects/website/media/boss_icons/yama.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/zalcano.png",
+      "sha256": "b3f984810bce3736b54cd72dbc0ed470104d855dd6d467ed85ed9c609f60ae83",
+      "size": 2449,
+      "source": "/srv/projects/website/media/boss_icons/zalcano.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/zuk.png",
+      "sha256": "c6302bd51751543ce560b004c2c66b97d0f31043a7cfa0b61081132606f67cd6",
+      "size": 2722,
+      "source": "/srv/projects/website/media/boss_icons/zuk.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/boss_icons/zulrah.png",
+      "sha256": "7a4517723041e1599f38b8548c70103fb3dd1c8a25cf318aa095236f873b33bd",
+      "size": 2470,
+      "source": "/srv/projects/website/media/boss_icons/zulrah.png",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/media/nocturne_logo.gif",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "source": "/srv/projects/website/media/nocturne_logo.gif",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/navbar.html",
+      "sha256": "c99f93fd3822c69029a3ed754afc499de819783210835fcd9bd416096b5f5e75",
+      "size": 44169,
+      "source": "/srv/projects/website/navbar.html",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/website/tests/challenge-admin-state.test.js",
+      "sha256": "6f1592bd7c4df163b21797d74fdfd627e125703c8c48d80f5d7b733ad2d3bd8d",
+      "size": 10346,
+      "source": "/srv/projects/website/tests/challenge-admin-state.test.js",
+      "type": "regular"
+    }
+  ],
+  "excluded_classes": [
+    "databases and SQLite sidecars",
+    "credentials and environment files",
+    "active LKG/config cache",
+    "logs and reports",
+    "__pycache__ and bytecode",
+    "uploaded challenge artwork",
+    "runtime state and generated JSON"
+  ],
+  "external_references": [
+    {
+      "file": {
+        "acl_sha256": "cebaf133869f6d3d41e74de2e7fc8c7b7708c090e50c62842318a88fc282e250",
+        "gid": 33,
+        "mode": "0775",
+        "nlink": 1,
+        "path": "/srv/projects/api/admin_app.py",
+        "sha256": "189d18bf52616c8df0ffe797952d70836b5129fe57e9ce92328575b51f1b76cc",
+        "size": 246728,
+        "type": "regular",
+        "uid": 1000
+      },
+      "label": "admin_api_auth_proxy",
+      "line_ranges": [
+        [
+          39,
+          48
+        ],
+        [
+          241,
+          260
+        ],
+        [
+          293,
+          423
+        ],
+        [
+          426,
+          551
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+        "gid": 33,
+        "mode": "0664",
+        "nlink": 1,
+        "path": "/srv/projects/website/admin.html",
+        "sha256": "2a85f1cbbeca38d1149c2650505bd496ab5fc6e23c5a40e01341c6b2fd7760fc",
+        "size": 32353,
+        "type": "regular",
+        "uid": 1001
+      },
+      "label": "admin_navigation_source",
+      "line_ranges": [
+        [
+          1015,
+          1019
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "9be05cccde4633543f2497a2aa49412e3626502eaff9043ab11229b7097d753b",
+        "gid": 33,
+        "mode": "0775",
+        "nlink": 1,
+        "path": "/srv/projects/nocturne-services/api.py",
+        "sha256": "9a587d5dfc5f260d12503ae90199346c1780bc9be555e8a26382b7f123acb091",
+        "size": 268954,
+        "type": "regular",
+        "uid": 1001
+      },
+      "label": "public_blueprint_registration",
+      "line_ranges": [
+        [
+          72,
+          73
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "d67d448e19129b341dc40791e8cf12a2e56790544f94735eaf5cf39d551dad85",
+        "gid": 1001,
+        "mode": "0644",
+        "nlink": 1,
+        "path": "/srv/projects/nocturne-bot/commands/utility/submit.js",
+        "sha256": "5674a18d055f792774e85d9bda6d7079c02203adc50b4afcec3e72626fcfc0c1",
+        "size": 1218,
+        "type": "regular",
+        "uid": 1001
+      },
+      "label": "manual_challenge_submission_entry",
+      "line_ranges": [
+        [
+          1,
+          80
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "d67d448e19129b341dc40791e8cf12a2e56790544f94735eaf5cf39d551dad85",
+        "gid": 1001,
+        "mode": "0644",
+        "nlink": 1,
+        "path": "/srv/projects/nocturne-bot/handlers/buttonHandler.js",
+        "sha256": "3a0dde699a78e2a0a9e511aa7a1fee5c24d0ed62284d9f28708d98f5114b5f0e",
+        "size": 43661,
+        "type": "regular",
+        "uid": 1001
+      },
+      "label": "manual_challenge_approval_handler",
+      "line_ranges": [
+        [
+          885,
+          990
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+        "gid": 0,
+        "mode": "0644",
+        "nlink": 1,
+        "path": "/etc/nginx/sites-enabled/nocturne",
+        "sha256": "e33af54a16eacff3486d23d9f2b5d7091fd87bd56fb246656f3052418b92653c",
+        "size": 17977,
+        "type": "regular",
+        "uid": 0
+      },
+      "label": "admin_nginx_auth_and_routes",
+      "line_ranges": [
+        [
+          275,
+          297
+        ],
+        [
+          379,
+          405
+        ]
+      ]
+    },
+    {
+      "file": {
+        "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+        "gid": 0,
+        "mode": "0644",
+        "nlink": 1,
+        "path": "/etc/systemd/system/osrs-drops-api.service",
+        "sha256": "df2c3642742076302d81a1f1c1d0129fe2235f4be8bb8ca91419abf8a26160a5",
+        "size": 427,
+        "type": "regular",
+        "uid": 0
+      },
+      "label": "public_api_systemd_unit",
+      "line_ranges": null
+    },
+    {
+      "file": {
+        "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+        "gid": 0,
+        "mode": "0644",
+        "nlink": 1,
+        "path": "/etc/systemd/system/osrs-drops-admin.service",
+        "sha256": "0919b5a06426c420679f17d0d50f057a398c3f0c0e7ee0c0ee63aaf4466bc204",
+        "size": 383,
+        "type": "regular",
+        "uid": 0
+      },
+      "label": "admin_active_systemd_unit",
+      "line_ranges": null
+    },
+    {
+      "file": {
+        "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+        "gid": 0,
+        "mode": "0777",
+        "nlink": 1,
+        "path": "/etc/systemd/system/nocturne-challenge-intake.service",
+        "resolved_path": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+        "sha256": "79fe3d895f47694a22f90897967f0030805655ea74e0d82beca7af886d6f461b",
+        "size": 954,
+        "target": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+        "target_gid": 33,
+        "target_mode": "0664",
+        "target_nlink": 1,
+        "target_uid": 1001,
+        "type": "symlink",
+        "uid": 0
+      },
+      "label": "intake_active_systemd_unit",
+      "line_ranges": null
+    }
+  ],
+  "live_sources": [
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 0,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/etc/systemd/system/nocturne-challenge-intake.service",
+      "resolved_path": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+      "sha256": "79fe3d895f47694a22f90897967f0030805655ea74e0d82beca7af886d6f461b",
+      "size": 954,
+      "target": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 0
+    },
+    {
+      "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+      "gid": 0,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/etc/systemd/system/osrs-drops-admin.service",
+      "sha256": "0919b5a06426c420679f17d0d50f057a398c3f0c0e7ee0c0ee63aaf4466bc204",
+      "size": 383,
+      "type": "regular",
+      "uid": 0
+    },
+    {
+      "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+      "gid": 0,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/etc/systemd/system/osrs-drops-api.service",
+      "sha256": "df2c3642742076302d81a1f1c1d0129fe2235f4be8bb8ca91419abf8a26160a5",
+      "size": 427,
+      "type": "regular",
+      "uid": 0
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/api/osrs-drops-admin.service",
+      "sha256": "efb942e5cb09110985e3057e32dc8d29c75fabe509a6d6a63425435a998f5848",
+      "size": 374,
+      "type": "regular",
+      "uid": 1000
+    },
+    {
+      "acl_sha256": "ab2d5801fd8ca8bf0fb2a4a304a07b3e4cf7a68fd5fb76523bbae792eccf4fbe",
+      "gid": 1001,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/tests/challengeConfig.test.js",
+      "sha256": "94a50655f692e7dd6b369624dff078904de5e8152dab0a79b752e407ca1669e5",
+      "size": 6272,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "ab2d5801fd8ca8bf0fb2a4a304a07b3e4cf7a68fd5fb76523bbae792eccf4fbe",
+      "gid": 1001,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/tests/challengeMetric.test.js",
+      "sha256": "617452ad93b7bee58b262d73881ce55a6f67588df13694631e133b8919f003de",
+      "size": 2457,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "ab2d5801fd8ca8bf0fb2a4a304a07b3e4cf7a68fd5fb76523bbae792eccf4fbe",
+      "gid": 1001,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/utils/challengeConfig.js",
+      "sha256": "3bf4c5c33b9fd23dd9e6b4cbbe1015ee50857f89fe407896de6ecb4527f517ee",
+      "size": 6483,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "ab2d5801fd8ca8bf0fb2a4a304a07b3e4cf7a68fd5fb76523bbae792eccf4fbe",
+      "gid": 1001,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/utils/challengeMetric.js",
+      "sha256": "5dd8adab3709f44bc1eb0aca3efd9020d4d519166c5806b6d75554297139e4b6",
+      "size": 3697,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "d67d448e19129b341dc40791e8cf12a2e56790544f94735eaf5cf39d551dad85",
+      "gid": 1001,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/utils/challengeSubmissionIdentity.js",
+      "sha256": "a394d7d40bcad1e567f851c299b4b49c6e0ff9911d0b2d263d3668cb4cf4ac63",
+      "size": 1203,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "d67d448e19129b341dc40791e8cf12a2e56790544f94735eaf5cf39d551dad85",
+      "gid": 1001,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/utils/dropSubmissionUtils.js",
+      "sha256": "7e286657f4aa0f2411e3c8dcd7a9b911c6cc87eccc6e52e41765cc66c77f82ef",
+      "size": 28177,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "d67d448e19129b341dc40791e8cf12a2e56790544f94735eaf5cf39d551dad85",
+      "gid": 1001,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-bot/utils/midgardChallengeIntake.js",
+      "sha256": "35abf7614191d04563ebe3c3cd44a66fb8ba22e4f74b56b368fa0453f7157040",
+      "size": 4989,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_award_delivery.py",
+      "sha256": "8b5bce8821c2bb25fa00e03edea5c43073dc5422ce8d55045c2e876897e649d0",
+      "size": 56971,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_config.py",
+      "sha256": "81421a75ca6cccc1a08011e8a9f02fa43833d9534ad2f58ab9f3181c3de5f0e5",
+      "size": 91244,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_config_api.py",
+      "sha256": "d4b4fab9c1e7eaa96e7915c926dabbc88468c6baa76bb865b0c364ef70b299cc",
+      "size": 3616,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "cc7964caded7c0308ffd17f51b771a59122932216c6072f1f3bd5d0140441597",
+      "gid": 1001,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_direct_diagnostics.py",
+      "sha256": "95652d565eefa62bebca2b3a0bba1f4f9ca568c13afe2f8fc4858b171143a8fe",
+      "size": 5894,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+      "gid": 1001,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_direct_intake.py",
+      "sha256": "e03f9059ade627b1a5cf3183c8788e9a365e4043e1c74d45d883decae539e541",
+      "size": 62381,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_intake_api.py",
+      "sha256": "18ed7786854e56c3a24f31adeb7acfb6bbc25cc15daef874e48eeaf4b389e7b2",
+      "size": 20931,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_legacy_baseline.py",
+      "sha256": "b4a4ace0710a630aadaa4b30f13b3dab9374ad9a1f3dd42e4f7b5f178d4ae939",
+      "size": 20955,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_member_view.py",
+      "sha256": "a9fa4e09432677b3142026e8aeb32f6c78867bee4c5601bad2a24b2ad1e6d9e2",
+      "size": 14827,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_shadow_common.py",
+      "sha256": "16cf0378dc110ffa56522e37e526c24b2a81e688bdaa04c6f014d717283eeabc",
+      "size": 34677,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/challenge_shadow_sync.py",
+      "sha256": "d7249f2fa8df318b593efdbbc6528ab788e8b5f97894c4a9b90788aa6036594a",
+      "size": 25964,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_api.py",
+      "sha256": "1a45bb682e9b091ac319cda485c92ea7efe18cde73d846a8a92e958df2090417",
+      "size": 12775,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "46cfad4815f1a30e253add93c7dca649b84384c52e6a57319eaefc26a540a3d0",
+      "gid": 33,
+      "mode": "0755",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py",
+      "sha256": "4004ce3352885e5273a7aac785d5f1d7cd202ff1a7331df5da5f26f68a0e4330",
+      "size": 21812,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "46cfad4815f1a30e253add93c7dca649b84384c52e6a57319eaefc26a540a3d0",
+      "gid": 33,
+      "mode": "0755",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_projection_refresh.py",
+      "sha256": "e861871142b600487706224dfbcf7f06a1179da625a117802f6494cb727a1b62",
+      "size": 5628,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "7f801a85decd7117ac34e8f7b8213538eb8b98105cafa0c3487ded818d6444d8",
+      "gid": 33,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_proof_404.json",
+      "sha256": "574681f48911e7a206a97b66ace44d3ccadf3b2a5c5438a9b77e9157fe8992f6",
+      "size": 50094,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_proof_resolver.py",
+      "sha256": "6fb86297ea6a561d0750aa7bdac4a9db29b5cff5280c78c0424a886baf5b8309",
+      "size": 5211,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/leaderboard_shadow_renderer.py",
+      "sha256": "b255b2f0ff186294ad4f7bc9836bd747d7f37d2dca093615ef9645f91f935543",
+      "size": 18050,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf",
+      "sha256": "3f753e60ac08e69bdf94d860818dfad2c2545068cbf10d9b39611abc5ceefe73",
+      "size": 711,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/systemd/nocturne-challenge-intake.service",
+      "sha256": "79fe3d895f47694a22f90897967f0030805655ea74e0d82beca7af886d6f461b",
+      "size": 954,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_challenge_config.py",
+      "sha256": "f232f55d305812c5f99def9b65bfc2877f91da56135e8f4c7338cdeb8ae8ddf7",
+      "size": 27923,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_challenge_config_api.py",
+      "sha256": "07828b5eb5da8bb4c50c06ccaee55e1276639f95650739405ad8def1d1b1c15e",
+      "size": 13601,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "c7f627c39d49a9285c7e9e3d7080ea316d29296ec68cf30eeba013583b7bc146",
+      "gid": 33,
+      "mode": "0644",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_challenge_direct_intake.py",
+      "sha256": "1ba01fe8e043465aeac2268cd072553f2cc06db63b665065e09f744f32cb2c9e",
+      "size": 37613,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_challenge_member_api.py",
+      "sha256": "0907f3d9d21fb78593968f19324d670c3d938a747b9c1a5a8e1c5718d2f73874",
+      "size": 14916,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_challenge_shadow.py",
+      "sha256": "7fb12810a5cc427a347bb7e0dc7578325662e28d43ab472a126198f6cc91afdb",
+      "size": 5719,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_leaderboard_api.py",
+      "sha256": "af1d1ae52a48e914d008976281cf85fe8812273a6985cc5c9961887df019b96f",
+      "size": 8200,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_leaderboard_challenge_ingest.py",
+      "sha256": "c55525d270b287bd26d87d09ca5c8b96c0f4961be36074688cb39ca16f78f3d2",
+      "size": 7846,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/nocturne-services/tests/test_leaderboard_projection_refresh.py",
+      "sha256": "de38c38693d384a08b892e7a282b3f899555cdcc92324b81c2472f2db2e5cce0",
+      "size": 3654,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/challenge-admin-state.js",
+      "sha256": "f54c32097f7cc8331d8d5a6a018915159c8bc66701767a682ec99671338ecdf3",
+      "size": 15648,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/challenge-admin.html",
+      "sha256": "4b0880737d62a86afe57ec1536f39dd8be881397054d81f6f82908db18e750ce",
+      "size": 40846,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Abyssal_Sire.png",
+      "sha256": "0768d04272aba14a47b8bd25e9e018e71ea49e69896d6e506f4ef9ea9271200a",
+      "size": 2918,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Alchemical_Hydra.png",
+      "sha256": "455cf7b49704828e67c5e05b7f107f4593243df8d9f762777be35aa9aa0d1c9e",
+      "size": 2678,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Callisto.png",
+      "sha256": "6fe277dcf1392ac2b3bd369a1645836f125130fe6ce4a1f6fbfaaf88c4ae628f",
+      "size": 2762,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Calvarion.png",
+      "sha256": "d5419dc954a7efb830087c4fb2a36bf44b5ee90665947093ef5c57ff1d76cf89",
+      "size": 2813,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Chambers.png",
+      "sha256": "f4ce731be454d87292ba097ff8ac4c3e410c6a76f9e7f6ec1f651a34a2fb9c0e",
+      "size": 2702,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Chambers_CM.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Duke_suc.png",
+      "sha256": "eb49d044af08c4692e33bb98bee33370f21a214c479feaa6708d72b030f0944c",
+      "size": 3333,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/General_Graardor.png",
+      "sha256": "7aa510281860d588ba723a588f9eec6fdeee68576d2aadfedb49743552ed3a06",
+      "size": 2870,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Kalphite_Queen.png",
+      "sha256": "b86969f1e66a1ffdcb2437cf10ce8818ee65d15fffbd361b6da62837e1912db3",
+      "size": 2504,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Kalphite_Queen2.png",
+      "sha256": "a5be9cd9af2a9f82fcd86a1e39d370c00b329519e46e835b8a9904444716e146",
+      "size": 2804,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/King_Black_Dragon.png",
+      "sha256": "68ddad3268e93ceaad3db6c2952217401fd088ff2e01d4f064c5a5e6ec2ece55",
+      "size": 2690,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Phantom_muspah.png",
+      "sha256": "34b4954a7b9096f17237d581171103fba734b5c03c362bf3d051536543af3ac2",
+      "size": 2934,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Phosanis_Nightmare.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Theatre_of_blood HMT.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Theatre_of_blood.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/Vardorvis.png",
+      "sha256": "a9d4d97839eab4c733b1a65967c3675297e409b92b68391b1f911fb8c9187413",
+      "size": 2937,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/amoxliatl.png",
+      "sha256": "82e2f824ef3284080d9a443316b3927fc2b8da74b496e3ecd468ac82cc0fb72b",
+      "size": 2333,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/araxxor.png",
+      "sha256": "3b44c6696415864da2a11822e44a1f147a1bfd1426d42bfcfdab93266c4e6852",
+      "size": 3163,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/artio.png",
+      "sha256": "6fe277dcf1392ac2b3bd369a1645836f125130fe6ce4a1f6fbfaaf88c4ae628f",
+      "size": 2762,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/barrows.png",
+      "sha256": "36d1916423b159a081ec1c00efb8001f89ac2f1918a15a2cf957e020cffa9a9b",
+      "size": 2647,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/brutus.png",
+      "sha256": "b37434ad41f5f4af8882e4666527a4266b4650dfd0596624b973da9d47cd76a4",
+      "size": 2672,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/bryophyta.png",
+      "sha256": "740138f8946a6681b86fbb9dfcfd25e139f8e50af1b5a8a298889f1f35dd668b",
+      "size": 2567,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cerb.png",
+      "sha256": "0a9998e0d21cde6ee15bf5e8624e6f813208a3b1e20ca637d3b53989347d2ad6",
+      "size": 2767,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cg.png",
+      "sha256": "f959adf28434ff93f89076b755dd359af9e92e7fbd66ae564d1e73c8d2725668",
+      "size": 2493,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/chaos_ele.png",
+      "sha256": "ea42af6a83147d1bf605bb07ec6bcfe06c30b12b0d8441bb3f02b3b9ac1325c7",
+      "size": 2779,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/chaos_fanatic.png",
+      "sha256": "119768c68f969db88f00d64bb30e8e870958ac283284131e12b318cd5960ddfb",
+      "size": 2467,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cm_1.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Chambers_CM.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "target": "Chambers_CM.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cm_3.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Chambers_CM.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "target": "Chambers_CM.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cm_5.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Chambers_CM.png",
+      "sha256": "a2414a75ba9f815eba9beabebb3eed122854dc4dd5411f76ef1b92176e070883",
+      "size": 2867,
+      "target": "Chambers_CM.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/colosseum.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/sol.png",
+      "sha256": "e1b178a9b69be6bf937d91ef8e63e421bc46cddb081cb48ac4a69e6c2aa9eca2",
+      "size": 2768,
+      "target": "sol.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/commander_zilyana.png",
+      "sha256": "b0b5352119cfec05d59c7f8962c92bf817c6484e0570877d10b312525d1a90b2",
+      "size": 2854,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/corp.png",
+      "sha256": "e32a412d926b031dcf2db4f120dcec23572bc8ad867c6516b853eee2b6f3bae2",
+      "size": 2785,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/cox_1.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Chambers.png",
+      "sha256": "f4ce731be454d87292ba097ff8ac4c3e410c6a76f9e7f6ec1f651a34a2fb9c0e",
+      "size": 2702,
+      "target": "Chambers.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/crazy_arch.png",
+      "sha256": "e7270e946128815d4d5676250569b86cb9f29121f34b6516cdab54c1ee8b0fbd",
+      "size": 2495,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/dagannoth_prime.png",
+      "sha256": "40c8396722935f9f4f5a31298e56d9ef9fbc2d5e03244ff8e5f08e0003c7f98e",
+      "size": 2517,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/dagannoth_rex.png",
+      "sha256": "d69b6cb1fa835f56e75c6164405dff52319f1f840588985148f2f39a98b55c02",
+      "size": 2427,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/dagannoth_supreme.png",
+      "sha256": "750f1adee314b5f8d4c48f59894e90e4111e7a3d2dae7826f3a47539ab48fdac",
+      "size": 2365,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/delve.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/doom.png",
+      "sha256": "c1a622a4884295539bec461ba88574fa4c21104bf0443ef165914722eb36461f",
+      "size": 2775,
+      "target": "doom.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/deranged_arch.png",
+      "sha256": "2630b689910f6db37dc8694387ff0ccbefde2b4beb28a5a85c3ac9d59d10e8ec",
+      "size": 2491,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/dks.png",
+      "sha256": "11f86427c46b79f107d5faf7373bf405ff84e940af1bf51e722ddea40ff1d10e",
+      "size": 2774,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/doom.png",
+      "sha256": "c1a622a4884295539bec461ba88574fa4c21104bf0443ef165914722eb36461f",
+      "size": 2775,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/gauntlet.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/cg.png",
+      "sha256": "f959adf28434ff93f89076b755dd359af9e92e7fbd66ae564d1e73c8d2725668",
+      "size": 2493,
+      "target": "cg.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/gem_crab.png",
+      "sha256": "9b4a8cdde8a0989bbb35f96c0abac10f6c970b11bbc08b25ab10ed6ac0f8051f",
+      "size": 2896,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/giant_mole.png",
+      "sha256": "4511871fa70827172425eaa222cf571a479f04128486116dd79af9abdb760150",
+      "size": 2357,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/grotesque_guardians.png",
+      "sha256": "f103934f5781d4c713be21560fa88ad88f0f82948d2dd966d11282ce1b9b416a",
+      "size": 2379,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/grotesque_guardians2.png",
+      "sha256": "8648413556857766291ae4064fb40a472a776c59957f3aaec215f89ba49af07f",
+      "size": 2689,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/hespori.png",
+      "sha256": "8fc693bfb641660d3304e229be4f82be2a281066a82f6153115abfa414f70e15",
+      "size": 2781,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/hmt_5.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Theatre_of_blood HMT.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "target": "Theatre_of_blood HMT.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/jad.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/tztok_jad.png",
+      "sha256": "acdf82a6a84f0ddd2e268ecdfc0aa985adddd8b7abf9cd7f5c2b0044ac54bbc4",
+      "size": 2587,
+      "target": "tztok_jad.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/kraken.png",
+      "sha256": "b75efaa530057025ec9f77481e0e4b110a7d69d5d94d277faa10097879b19b4c",
+      "size": 2235,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/kree.png",
+      "sha256": "bcf18ad1f54a350078b65d29bd03d23be2bd5db050150006612bf2fbb3021da7",
+      "size": 2737,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/kril.png",
+      "sha256": "07f257b7eb9ab60eeacbe4efed0e34bff08a0ee17a573e76ea99e6af942f081d",
+      "size": 2865,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/lunar chest.png",
+      "sha256": "fd0617884b1024aa302027c2bcfb51f6b627b0d83a774f747fa2476ba09e9c4f",
+      "size": 1365,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/lunar_chest.png",
+      "sha256": "810ed70fe66267e981a44a7cf7012bbcebc3c4bfedfecbf87e84884e085c2619",
+      "size": 2887,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/mimic.png",
+      "sha256": "d0dce1402fe67a67bebbe6ce86c7f1e9c1d22019c8c34e8223e90c760a24a0a0",
+      "size": 2472,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/nex.png",
+      "sha256": "7f3329b290ff58ca42549172bbaa0f68073538b285a71b78b8900c051b1f8a0f",
+      "size": 2776,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/nightmare.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/obor.png",
+      "sha256": "0ca039e7198846b3fe6e1f17257de9f94ea8922f437a62c5fe0e042b5b4ad89b",
+      "size": 2795,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/phosanis.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Phosanis_Nightmare.png",
+      "sha256": "fa7f6eed3c588733ce5a0477ecfdc55d5814eba38141158a568fc11675df411b",
+      "size": 2533,
+      "target": "Phosanis_Nightmare.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "a3a244c8717b811de39c80e148dbd349d096a69531cfa3d5ddad41e6cfa2b656",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/revenants.png",
+      "sha256": "3ce7489b56197b56e1217fd53ceae114473bc14a3b70d0053e70767fcc9e384d",
+      "size": 90492,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/sarachnas.png",
+      "sha256": "0c733f7ed893ab3f4e1aa5831e02304983005812dc7a3888cb51a67be24092a3",
+      "size": 2401,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/scorpio.png",
+      "sha256": "5652592dae177d8904ba9beef98e9fe74ac1421c17f9297d9e26903a53650b45",
+      "size": 2655,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/scurrius.png",
+      "sha256": "b05b97a056fb17f7b50a0879a4658ee819ff82414c0d6fc11597207e4edf63b9",
+      "size": 3960,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/shellbane.png",
+      "sha256": "d8502d928b0cf462c17d8ffdf2dbd1581b73be800e1a30f8ac3c6f6f402ddada",
+      "size": 2991,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/skotizo.png",
+      "sha256": "c6d821dfb52568f3b88a1c1db950984607b51ccc35381e986bfd0a8ff752b657",
+      "size": 2424,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/sol.png",
+      "sha256": "e1b178a9b69be6bf937d91ef8e63e421bc46cddb081cb48ac4a69e6c2aa9eca2",
+      "size": 2768,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/spindel.png",
+      "sha256": "a8380c0d07cad4290778546b7a0ef0506088f1c7f3fb62a65c63d696910c03ce",
+      "size": 2855,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tempoross.png",
+      "sha256": "efc114cd05e529772c4bddb08735ed8e6574353586ba5eaa4f002cfb10578ef2",
+      "size": 2225,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/the_Leviathan.png",
+      "sha256": "0c5fdbdc4e6d896b899435c1d6272f17b77f891c71023744eaa0451fe3592e74",
+      "size": 3001,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/the_RTs.png",
+      "sha256": "5ddac392973a14132ac3c90817f3e46cde9de6766664733710b12b666256bcf9",
+      "size": 2987,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/the_Whisperer.png",
+      "sha256": "49ec1009c5653fb5e3ed4b6347757cad0fd2568c72252193bb7e40e7727afb04",
+      "size": 3501,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/the_gauntlet.png",
+      "sha256": "44e3177f009d8b05bf97c10b6732565300aeaf1ba3f5219dd017765e2cef90a5",
+      "size": 2536,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/the_hueycoatl.png",
+      "sha256": "42b22a3fae3fdb2197afe821bf93277fbfe0f8c93dd3ac601cba913a4b3ba58c",
+      "size": 2918,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/thermy.png",
+      "sha256": "a72f831825e623d29cb0d7a4dd95b0b1407c891c3bb68b797f78c291f457a0e8",
+      "size": 2243,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/toa_1_300.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/toa_expert.png",
+      "sha256": "09bfa1b98a54c3fb11789a4272c9f55f6c67a0c18fde036fbec648ac6dfa4045",
+      "size": 2640,
+      "target": "toa_expert.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/toa_expert.png",
+      "sha256": "09bfa1b98a54c3fb11789a4272c9f55f6c67a0c18fde036fbec648ac6dfa4045",
+      "size": 2640,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/toa_normal.png",
+      "sha256": "12854ee9dfa2be9bdb87074650e456c5b372c6419495ef9adb71cae1c679a3b2",
+      "size": 2550,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tob_2.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Theatre_of_blood.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "target": "Theatre_of_blood.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tob_3.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Theatre_of_blood.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "target": "Theatre_of_blood.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tob_5.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/Theatre_of_blood.png",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "target": "Theatre_of_blood.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tzkal_zuk.png",
+      "sha256": "c6302bd51751543ce560b004c2c66b97d0f31043a7cfa0b61081132606f67cd6",
+      "size": 2722,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/tztok_jad.png",
+      "sha256": "acdf82a6a84f0ddd2e268ecdfc0aa985adddd8b7abf9cd7f5c2b0044ac54bbc4",
+      "size": 2587,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/venenatis.png",
+      "sha256": "a8380c0d07cad4290778546b7a0ef0506088f1c7f3fb62a65c63d696910c03ce",
+      "size": 2855,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/vetion.png",
+      "sha256": "d5419dc954a7efb830087c4fb2a36bf44b5ee90665947093ef5c57ff1d76cf89",
+      "size": 2813,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/vorkath.png",
+      "sha256": "9ee301e1a7257466798dbca19da051888e70ffac5cba598d602ae18b412ee32f",
+      "size": 2763,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/wintertodt.png",
+      "sha256": "b08f9bbfd93c888c104e8974e135f27d81af095da1f94ab9bb3f4ac09cbe2ae7",
+      "size": 2400,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/yama.png",
+      "sha256": "c2990139821c651e36393dd0be09116f2834aab1741dd6570fcea09f74265236",
+      "size": 3229,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/zalcano.png",
+      "sha256": "b3f984810bce3736b54cd72dbc0ed470104d855dd6d467ed85ed9c609f60ae83",
+      "size": 2449,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0777",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/zuk.png",
+      "resolved_path": "/srv/projects/website/media/boss_icons/tzkal_zuk.png",
+      "sha256": "c6302bd51751543ce560b004c2c66b97d0f31043a7cfa0b61081132606f67cd6",
+      "size": 2722,
+      "target": "tzkal_zuk.png",
+      "target_gid": 33,
+      "target_mode": "0664",
+      "target_nlink": 1,
+      "target_uid": 1001,
+      "type": "symlink",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/boss_icons/zulrah.png",
+      "sha256": "7a4517723041e1599f38b8548c70103fb3dd1c8a25cf318aa095236f873b33bd",
+      "size": 2470,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/media/nocturne_logo.gif",
+      "sha256": "4491f6cee1272dadcdb0cc89c48c0b8254c57177e3bba88da505bac9df2b4627",
+      "size": 2559,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/navbar.html",
+      "sha256": "c99f93fd3822c69029a3ed754afc499de819783210835fcd9bd416096b5f5e75",
+      "size": 44169,
+      "type": "regular",
+      "uid": 1000
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/nocturne-global.css",
+      "sha256": "c89fb3396801c6e42907e880fcee822b3ebe281c7a53ea561517743ba935c14e",
+      "size": 4849,
+      "type": "regular",
+      "uid": 0
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/nocturne-theme.css",
+      "sha256": "155cc54f4dc4ba21cd150060ba4ce76d27ed1d53205a7b20135bdafa007c8486",
+      "size": 7921,
+      "type": "regular",
+      "uid": 0
+    },
+    {
+      "acl_sha256": "799322670821315ac3f263a41206851dc9b79d35ae345fef8f9905af7b92b2fe",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/styles.css",
+      "sha256": "32fe7c1423999e4901d06fdb691b5e7436ddf6c6fcbe0d53afdcf5208f83ea7a",
+      "size": 14104,
+      "type": "regular",
+      "uid": 1001
+    },
+    {
+      "acl_sha256": "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89",
+      "gid": 33,
+      "mode": "0664",
+      "nlink": 1,
+      "path": "/srv/projects/website/tests/challenge-admin-state.test.js",
+      "sha256": "6f1592bd7c4df163b21797d74fdfd627e125703c8c48d80f5d7b733ad2d3bd8d",
+      "size": 10346,
+      "type": "regular",
+      "uid": 1001
+    }
+  ],
+  "metadata_capture": "host-root",
+  "purpose": "source-only adoption; not an installer payload",
+  "schema_version": 1
+}

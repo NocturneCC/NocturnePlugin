@@ -1,0 +1,1839 @@
+
+<style>
+/* NOCTURNE_NAV_LEADERBOARDS_DROPDOWN */
+.nav-dropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.nav-dropbtn {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.nav-dropdown-content {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 230px;
+  background: rgba(13, 20, 36, .98);
+  border: 1px solid rgba(130, 105, 255, .30);
+  border-radius: 10px;
+  padding: 8px;
+  z-index: 9999;
+  box-shadow: 0 16px 36px rgba(0,0,0,.35);
+}
+
+.nav-dropdown:hover .nav-dropdown-content,
+.nav-dropdown:focus-within .nav-dropdown-content {
+  display: block;
+}
+
+.nav-dropdown-content a {
+  display: block;
+  padding: 11px 13px;
+  border-radius: 7px;
+  color: #f4f0ff;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav-dropdown-content a:hover {
+  background: #7c3aed;
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .nav-dropdown {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .nav-dropdown-content {
+    position: static;
+    transform: none;
+    width: 100%;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+}
+
+/* NOCTURNE_NAV_LEADERBOARDS_STYLE_FIX */
+.nav-dropdown > .nav-dropbtn {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: inherit !important;
+  text-decoration: none !important;
+  font: inherit !important;
+  line-height: inherit !important;
+  padding: inherit;
+  margin: 0;
+  cursor: pointer;
+}
+
+.nav-dropdown > .nav-dropbtn:hover,
+.nav-dropdown > .nav-dropbtn:focus {
+  color: inherit !important;
+  text-decoration: none !important;
+  outline: none !important;
+}
+
+
+
+/* NOCTURNE_NAV_DROPDOWN_STABLE_NO_SPACING_SHIFT */
+.nav-dropdown {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.nav-dropdown > .nav-dropbtn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: auto !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: inherit !important;
+  font: inherit !important;
+  line-height: inherit !important;
+  text-decoration: none !important;
+}
+
+.nav-dropdown-content {
+  top: calc(100% + 6px) !important;
+}
+
+.nav-dropdown-content::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  height: 10px;
+}
+
+.nav-dropdown:hover .nav-dropdown-content,
+.nav-dropdown:focus-within .nav-dropdown-content,
+.nav-dropdown-content:hover {
+  display: block !important;
+}
+
+</style>
+
+<nav class="navbar">
+    <div class="nav-container">
+
+        <a href="https://nocturne.events" class="nocturne-nav-brand" aria-label="Nocturne home">
+            <img
+                src="/media/noclogogolden.png"
+                alt=""
+                class="nocturne-nav-brand-logo"
+                aria-hidden="true"
+            >
+            <span class="nocturne-nav-brand-name">Nocturne</span>
+        </a>
+
+<!--
+        <a href="https://nocturne.events" class="logo-link">
+            <img src="/media/home-logo.png" alt="Home" class="nav-logo">
+        </a>
+-->
+        <a href="https://nocturne.events">Home</a>
+        <div class="nav-dropdown">
+  <a href="#" class="nav-link nav-dropbtn" onclick="return false;">Leaderboards</a>
+  <div class="nav-dropdown-content">
+    <a href="/leaderboard.html">Rank Points</a>
+    <a href="/leaderboards.html">Nocturne Challenges</a>
+    <a href="/event-board.html">Event Scoreboard</a>
+  </div>
+</div>
+
+        <div class="dropdown">
+            <a href="#" class="dropbtn event-highlight">Event</a>
+            <div class="dropdown-content">
+                <a href="https://nocturne.events/submission-report.html?v=1">Results</a>
+                <a href="event-board.html">Scoreboard</a>
+                <a href="/event-submit.html">Submit a drop</a>
+            </div>
+        </div>
+
+        <div class="dropdown">
+            <a href="#" class="dropbtn">Member</a>
+            <div class="dropdown-content">
+                <a
+                    id="nocturne-member-profile-link"
+                    href="#"
+                    style="display:none;"
+                >My Profile</a>
+                <a href="info.html">Information</a>
+                <a href="/nocturne-challenge-requirements.html">Challenges</a>
+                <a href="/regular-submissions-public.html">Submissions</a>
+            </div>
+        </div>
+
+        <div class="dropdown">
+            <a href="#" class="dropbtn utilities-highlight">Utilities</a>
+            <div class="dropdown-content">
+                <a href="/draft-tool-v2.html">Draft Tool</a>
+                <a href="https://nocturne.events/LFG.html">LFG - Group Finder</a>
+                <a href="spinner.html" target="_blank">Spinner</a>
+                <a href="local_markdown_reader.html" target="_blank">Markdown Reader</a>
+                <a href="video-trimmer.html" target="_blank">Video Trimmer</a>
+                <a href="log.html">Logs</a>
+            </div>
+        </div>
+        <a href="/gwars-home.html" class="gwars-nav-toplink">Gielinor Wars</a>
+        <a href="/admin.html" class="admin-nav-link">Admin</a>
+
+        <div id="nocturne-auth-slot" class="nocturne-auth-slot">
+            <!-- Populated by JS below once /auth/me responds -->
+        </div>
+</div>
+</nav>
+
+<style>
+/* NOCTURNE_NAV_AUTH_SLOT_V1 */
+.nocturne-auth-slot {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.nocturne-auth-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px !important;
+  border-radius: 8px !important;
+  background: #5865F2 !important;
+  color: #fff !important;
+  font-weight: 700 !important;
+  text-decoration: none !important;
+  font-size: 15px !important;
+}
+
+.nocturne-auth-login:hover {
+  background: #4752c4 !important;
+  color: #fff !important;
+}
+
+.nocturne-auth-user {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+
+/* Keep auth dropdown open while moving from profile pill to menu */
+.nocturne-auth-user::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 14px;
+}
+
+.nocturne-auth-user-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid rgba(130, 105, 255, .30);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  color: #f4f0ff;
+  font: inherit;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+}
+
+.nocturne-auth-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: block;
+}
+
+.nocturne-auth-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 160px;
+  background: rgba(13, 20, 36, .98);
+  border: 1px solid rgba(130, 105, 255, .30);
+  border-radius: 10px;
+  padding: 8px;
+  z-index: 9999;
+  box-shadow: 0 16px 36px rgba(0,0,0,.35);
+}
+
+.nocturne-auth-user:hover .nocturne-auth-menu,
+.nocturne-auth-user:focus-within .nocturne-auth-menu {
+  display: block;
+}
+
+.nocturne-auth-menu a {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 7px;
+  color: #f4f0ff;
+  text-decoration: none;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  white-space: nowrap;
+}
+
+.nocturne-auth-menu a:hover {
+  background: #7c3aed;
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .nocturne-auth-slot {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 8px;
+  }
+
+  .nocturne-auth-user {
+    width: 100%;
+  }
+
+  .nocturne-auth-user-btn {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .nocturne-auth-menu {
+    position: static;
+    width: 100%;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+}
+</style>
+
+<img src="/nocturne-auth-nav-bootstrap.gif" alt="" style="display:none"
+     onerror="this.remove(); var s=document.createElement('script'); s.src='/nocturne-auth-nav.js'; document.body.appendChild(s);">
+
+
+<style>
+/* NOCTURNE_NAV_LARGER_TEXT_NO_ACTIVE_BOX_V1 */
+
+/* Larger and bolder shared navbar links */
+nav a,
+.navbar a,
+.nav-link,
+.navbar-link,
+.nav-menu a,
+.nav-links a {
+  font-size: 18px !important;
+  font-weight: 750 !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.01em !important;
+}
+
+/* Remove the green active-page pill/box */
+nav a.active,
+.navbar a.active,
+.nav-link.active,
+.navbar-link.active,
+.nav-menu a.active,
+.nav-links a.active,
+nav a[aria-current="page"],
+.navbar a[aria-current="page"],
+.nav-link[aria-current="page"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: inherit !important;
+}
+
+/* Keep active links aligned exactly like the others */
+nav a,
+.navbar a,
+.nav-link,
+.navbar-link,
+.nav-menu a,
+.nav-links a {
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+}
+
+/* Subtle hover without creating a filled box */
+nav a:hover,
+.navbar a:hover,
+.nav-link:hover,
+.navbar-link:hover,
+.nav-menu a:hover,
+.nav-links a:hover {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: #f6dca9 !important;
+}
+
+@media (max-width: 760px) {
+  nav a,
+  .navbar a,
+  .nav-link,
+  .navbar-link,
+  .nav-menu a,
+  .nav-links a {
+    font-size: 16px !important;
+    font-weight: 750 !important;
+  }
+}
+</style>
+
+
+<style>
+/* NOCTURNE_NAV_UNIFIED_TOP_LEVEL_V2 */
+
+/*
+Top-level navbar items only.
+This avoids enlarging the links inside the dropdown menus.
+*/
+.navbar .nav-container > a,
+.navbar .nav-container > .dropdown > .dropbtn,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+  font-family: inherit !important;
+  font-size: 18px !important;
+  font-weight: 750 !important;
+  line-height: 1.2 !important;
+  letter-spacing: -0.01em !important;
+
+  color: #f4f0ff !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+
+  padding: 10px 14px !important;
+  margin: 0 !important;
+}
+
+/* Explicitly defeat the old green Event highlight */
+.navbar .nav-container > .dropdown > .dropbtn.event-highlight,
+.navbar .nav-container > .dropdown > .event-highlight {
+  color: #f4f0ff !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Explicitly defeat Leaderboards' earlier font: inherit rule */
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+  font-family: inherit !important;
+  font-size: 18px !important;
+  font-weight: 750 !important;
+}
+
+/* Match hover behavior across every top-level item */
+.navbar .nav-container > a:hover,
+.navbar .nav-container > .dropdown > .dropbtn:hover,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:hover,
+.navbar .nav-container > a:focus,
+.navbar .nav-container > .dropdown > .dropbtn:focus,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:focus {
+  color: #f6dca9 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Dropdown menu entries retain their smaller menu styling */
+.navbar .dropdown-content a,
+.navbar .nav-dropdown-content a {
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+}
+
+@media (max-width: 760px) {
+  .navbar .nav-container > a,
+  .navbar .nav-container > .dropdown > .dropbtn,
+  .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+    font-size: 16px !important;
+    font-weight: 750 !important;
+  }
+}
+</style>
+
+
+<style>
+/* NOCTURNE_NAV_BRAND_V1 */
+
+.navbar .nav-container {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Brand anchored to the far left without shifting the menu */
+.navbar .nocturne-nav-brand {
+  position: absolute !important;
+  left: 24px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+
+  padding: 4px 8px !important;
+  margin: 0 !important;
+
+  color: #f5f1ff !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+  width: 38px !important;
+  height: 38px !important;
+  object-fit: contain !important;
+  display: block !important;
+
+  filter:
+    drop-shadow(0 0 8px rgba(246,220,169,.25))
+    drop-shadow(0 5px 8px rgba(0,0,0,.35));
+}
+
+.navbar .nocturne-nav-brand-name {
+  font-size: 20px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  letter-spacing: -.02em !important;
+  color: #f5f1ff !important;
+  white-space: nowrap !important;
+}
+
+.navbar .nocturne-nav-brand:hover {
+  transform: translateY(-50%) scale(1.025) !important;
+  color: #f6dca9 !important;
+}
+
+.navbar .nocturne-nav-brand:hover .nocturne-nav-brand-name {
+  color: #f6dca9 !important;
+}
+
+.navbar .nocturne-nav-brand:hover .nocturne-nav-brand-logo {
+  filter:
+    drop-shadow(0 0 10px rgba(246,220,169,.65))
+    drop-shadow(0 0 22px rgba(246,220,169,.30));
+}
+
+@media (max-width: 1050px) {
+  .navbar .nocturne-nav-brand-name {
+    display: none !important;
+  }
+
+  .navbar .nocturne-nav-brand {
+    left: 14px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .navbar .nocturne-nav-brand {
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    align-self: flex-start !important;
+    margin-bottom: 8px !important;
+  }
+
+  .navbar .nocturne-nav-brand-name {
+    display: inline !important;
+  }
+
+  .navbar .nav-container {
+    justify-content: flex-start !important;
+  }
+}
+</style>
+
+
+<style>
+/* NOCTURNE_NAV_BRAND_DOUBLE_SIZE_V2 */
+
+.navbar .nocturne-nav-brand {
+  gap: 16px !important;
+  left: 24px !important;
+  padding: 2px 8px !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+  width: 76px !important;
+  height: 76px !important;
+}
+
+.navbar .nocturne-nav-brand-name {
+  font-size: 40px !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  letter-spacing: -.035em !important;
+}
+
+/* Give the navbar enough height for the larger branding */
+.navbar,
+.navbar .nav-container {
+  min-height: 92px !important;
+}
+
+/* Keep the centered navigation links vertically aligned */
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown,
+.navbar .nav-container > .nav-dropdown {
+  align-self: center !important;
+}
+
+@media (max-width: 1250px) {
+  .navbar .nocturne-nav-brand-name {
+    font-size: 30px !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 60px !important;
+    height: 60px !important;
+  }
+
+  .navbar,
+  .navbar .nav-container {
+    min-height: 78px !important;
+  }
+}
+
+@media (max-width: 1050px) {
+  .navbar .nocturne-nav-brand-name {
+    display: none !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 54px !important;
+    height: 54px !important;
+  }
+
+  .navbar,
+  .navbar .nav-container {
+    min-height: 70px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .navbar .nocturne-nav-brand-name {
+    display: inline !important;
+    font-size: 28px !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 54px !important;
+    height: 54px !important;
+  }
+}
+</style>
+
+<style>
+/* NOCTURNE_NAV_DROPDOWN_LAYER_FIX
+   Keep desktop dropdowns above page cards and forms. */
+.navbar {
+  position: relative !important;
+  z-index: 10000 !important;
+  overflow: visible !important;
+}
+
+.navbar .nav-container {
+  position: relative !important;
+  z-index: 10001 !important;
+  overflow: visible !important;
+}
+
+.navbar .dropdown,
+.navbar .nav-dropdown {
+  position: relative !important;
+  z-index: 10002 !important;
+}
+
+.navbar .dropdown-content,
+.navbar .nav-dropdown-content {
+  z-index: 10003 !important;
+}
+
+/* Preserve the stacked mobile navigation behavior. */
+@media (max-width: 760px) {
+  .navbar .dropdown,
+  .navbar .nav-dropdown {
+    z-index: auto !important;
+  }
+
+  .navbar .dropdown-content,
+  .navbar .nav-dropdown-content {
+    z-index: auto !important;
+  }
+}
+</style>
+
+
+
+<style>
+/* ==========================================================
+   NOCTURNE_NAV_GOLD_THEME_V1
+   Visual-only upgrade. Existing navbar structure/auth remains.
+   ========================================================== */
+
+.navbar {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(5, 6, 15, .97),
+      rgba(8, 8, 20, .94)
+    ) !important;
+
+  border-bottom:
+    1px solid rgba(136, 84, 225, .46) !important;
+
+  box-shadow:
+    0 7px 28px rgba(0, 0, 0, .34),
+    0 1px 0 rgba(179, 132, 255, .08) !important;
+
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+
+/* ----------------------------------------------------------
+   BRAND
+   ---------------------------------------------------------- */
+
+.navbar .nocturne-nav-brand {
+  width: 300px !important;
+  height: 76px !important;
+
+  left: 28px !important;
+
+  padding: 0 !important;
+  gap: 0 !important;
+
+  overflow: visible !important;
+}
+
+
+/*
+  Replace old separate N + text visual with the finished wordmark.
+*/
+.navbar .nocturne-nav-brand-logo {
+  content:
+    url("/media/nocturne-wordmark-gold.png") !important;
+
+  width: 300px !important;
+  height: 76px !important;
+
+  max-width: none !important;
+
+  object-fit: contain !important;
+  object-position: left center !important;
+
+  filter:
+    drop-shadow(0 0 8px rgba(246, 220, 169, .16))
+    drop-shadow(0 0 16px rgba(126, 74, 215, .10)) !important;
+}
+
+
+/* Hide the old text because it's now built into the image. */
+.navbar .nocturne-nav-brand-name {
+  display: none !important;
+}
+
+
+/* ----------------------------------------------------------
+   TOP-LEVEL NAV TYPOGRAPHY
+   ---------------------------------------------------------- */
+
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown > .dropbtn,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+
+  font-family:
+    "Trebuchet MS",
+    "Segoe UI",
+    Arial,
+    sans-serif !important;
+
+  font-size: 15px !important;
+  font-weight: 800 !important;
+
+  letter-spacing: .045em !important;
+  text-transform: uppercase !important;
+
+  color:
+    rgba(242, 237, 249, .90) !important;
+
+  padding:
+    10px 12px !important;
+
+  transition:
+    color .15s ease,
+    text-shadow .15s ease !important;
+}
+
+
+/* Hover / focus becomes champagne gold */
+.navbar .nav-container > a:not(.nocturne-nav-brand):hover,
+.navbar .nav-container > .dropdown > .dropbtn:hover,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:hover,
+.navbar .nav-container > a:not(.nocturne-nav-brand):focus,
+.navbar .nav-container > .dropdown > .dropbtn:focus,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:focus {
+
+  color:
+    #f5d98d !important;
+
+  text-shadow:
+    0 0 10px rgba(246, 220, 169, .22) !important;
+
+  background:
+    transparent !important;
+
+  border-color:
+    transparent !important;
+}
+
+
+/* ----------------------------------------------------------
+   DROPDOWN MENUS
+   ---------------------------------------------------------- */
+
+.navbar .dropdown-content,
+.navbar .nav-dropdown-content {
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(10, 9, 19, .99),
+      rgba(6, 5, 12, .99)
+    ) !important;
+
+  border:
+    1px solid rgba(139, 92, 246, .30) !important;
+
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, .52),
+    0 0 22px rgba(102, 58, 178, .08) !important;
+
+  border-radius:
+    10px !important;
+}
+
+
+.navbar .dropdown-content a,
+.navbar .nav-dropdown-content a {
+
+  color:
+    rgba(236, 231, 245, .82) !important;
+
+  font-size:
+    14px !important;
+
+  font-weight:
+    700 !important;
+
+  letter-spacing:
+    .015em !important;
+
+  text-transform:
+    none !important;
+}
+
+
+.navbar .dropdown-content a:hover,
+.navbar .nav-dropdown-content a:hover {
+
+  color:
+    #f5d98d !important;
+
+  background:
+    rgba(115, 74, 184, .17) !important;
+
+  text-shadow:
+    0 0 10px rgba(246, 220, 169, .16) !important;
+}
+
+
+/* ----------------------------------------------------------
+   AUTH USER CONTROL
+   ---------------------------------------------------------- */
+
+.nocturne-auth-user-btn {
+
+  background:
+    rgba(23, 17, 39, .78) !important;
+
+  border:
+    1px solid rgba(144, 96, 229, .36) !important;
+
+  color:
+    #f5efff !important;
+
+  border-radius:
+    9px !important;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.03) !important;
+}
+
+
+.nocturne-auth-user-btn:hover {
+
+  border-color:
+    rgba(190, 148, 255, .58) !important;
+
+  background:
+    rgba(93, 59, 151, .20) !important;
+}
+
+
+/* Discord login button, if logged out */
+.nocturne-auth-login {
+
+  background:
+    rgba(88, 101, 242, .18) !important;
+
+  border:
+    1px solid rgba(122, 130, 255, .38) !important;
+
+  color:
+    #e7e8ff !important;
+}
+
+
+.nocturne-auth-login:hover {
+
+  background:
+    rgba(88, 101, 242, .30) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIZE / SPACING
+   ---------------------------------------------------------- */
+
+.navbar,
+.navbar .nav-container {
+  min-height:
+    88px !important;
+}
+
+
+.navbar .nav-container {
+  gap:
+    7px !important;
+
+  padding:
+    8px 24px !important;
+}
+
+
+/* ----------------------------------------------------------
+   RESPONSIVE
+   ---------------------------------------------------------- */
+
+@media (max-width: 1250px) {
+
+  .navbar .nocturne-nav-brand {
+    width: 235px !important;
+    height: 68px !important;
+    left: 16px !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 235px !important;
+    height: 68px !important;
+  }
+
+  .navbar .nav-container > a:not(.nocturne-nav-brand),
+  .navbar .nav-container > .dropdown > .dropbtn,
+  .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+    font-size: 14px !important;
+    padding-left: 9px !important;
+    padding-right: 9px !important;
+  }
+}
+
+
+@media (max-width: 1050px) {
+
+  /* Use the N-heavy left portion of the wordmark at compact widths. */
+  .navbar .nocturne-nav-brand {
+    width: 86px !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 225px !important;
+    max-width: none !important;
+  }
+}
+
+
+@media (max-width: 760px) {
+
+  .navbar .nocturne-nav-brand {
+    width: 230px !important;
+    height: 64px !important;
+
+    margin-bottom:
+      5px !important;
+  }
+
+  .navbar .nocturne-nav-brand-logo {
+    width: 230px !important;
+    height: 64px !important;
+  }
+
+  .navbar .nav-container > a:not(.nocturne-nav-brand),
+  .navbar .nav-container > .dropdown > .dropbtn,
+  .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+    font-size:
+      14px !important;
+
+    letter-spacing:
+      .035em !important;
+  }
+}
+
+</style>
+
+
+<style>
+/* ==========================================================
+   NOCTURNE NAV REFINEMENT V2
+   Larger branding + sharper/thinner navigation typography
+   ========================================================== */
+
+/* ----------------------------------------------------------
+   WORDMARK
+   ---------------------------------------------------------- */
+
+.navbar .nocturne-nav-brand {
+    width: 365px !important;
+    height: 86px !important;
+    left: 30px !important;
+
+    overflow: visible !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+    width: 365px !important;
+    height: 86px !important;
+
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+
+    filter:
+        drop-shadow(0 0 7px rgba(245, 211, 126, .17))
+        drop-shadow(0 0 15px rgba(118, 70, 210, .08)) !important;
+}
+
+
+/* ----------------------------------------------------------
+   NAVIGATION TYPOGRAPHY
+   ---------------------------------------------------------- */
+
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown > .dropbtn,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+
+    /*
+       Intentionally narrower and cleaner than the previous
+       Trebuchet treatment.
+    */
+    font-family:
+        "Arial Narrow",
+        "Roboto Condensed",
+        "Helvetica Neue",
+        Arial,
+        sans-serif !important;
+
+    font-size: 14px !important;
+
+    font-weight: 600 !important;
+
+    letter-spacing: .065em !important;
+
+    text-transform: uppercase !important;
+
+    color: rgba(239, 236, 243, .90) !important;
+
+    text-shadow: none !important;
+}
+
+
+/* Gold hover — restrained rather than glowing heavily */
+.navbar .nav-container > a:not(.nocturne-nav-brand):hover,
+.navbar .nav-container > .dropdown > .dropbtn:hover,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:hover,
+.navbar .nav-container > a:not(.nocturne-nav-brand):focus,
+.navbar .nav-container > .dropdown > .dropbtn:focus,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:focus {
+
+    color: #efd38a !important;
+
+    text-shadow:
+        0 0 8px rgba(239, 211, 138, .14) !important;
+}
+
+
+/* Give the larger logo enough vertical room */
+.navbar,
+.navbar .nav-container {
+    min-height: 96px !important;
+}
+
+
+/* ----------------------------------------------------------
+   MEDIUM DESKTOP
+   ---------------------------------------------------------- */
+
+@media (max-width: 1350px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 310px !important;
+        height: 80px !important;
+        left: 20px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 310px !important;
+        height: 80px !important;
+    }
+
+    .navbar .nav-container > a:not(.nocturne-nav-brand),
+    .navbar .nav-container > .dropdown > .dropbtn,
+    .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+        font-size: 13px !important;
+        letter-spacing: .055em !important;
+    }
+}
+
+</style>
+
+<style>
+/* ==========================================================
+   NOCTURNE NAV FINAL REFINEMENT
+   Bigger wordmark + thinner, cleaner nav typography
+   ========================================================== */
+
+/* ----------------------------------------------------------
+   WORDMARK
+   ---------------------------------------------------------- */
+
+.navbar .nocturne-nav-brand {
+    width: 430px !important;
+    height: 96px !important;
+    left: 26px !important;
+    overflow: visible !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+    width: 430px !important;
+    height: 96px !important;
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+
+    filter:
+        drop-shadow(0 0 8px rgba(245, 211, 126, .20))
+        drop-shadow(0 0 18px rgba(118, 70, 210, .10)) !important;
+}
+
+.navbar .nocturne-nav-brand-name {
+    display: none !important;
+}
+
+
+/* ----------------------------------------------------------
+   TOP LEVEL NAV TEXT
+   ---------------------------------------------------------- */
+
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown > .dropbtn,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+
+    font-family:
+        "Helvetica Neue",
+        "Arial Narrow",
+        Arial,
+        sans-serif !important;
+
+    font-size: 15px !important;
+    font-weight: 500 !important;
+
+    letter-spacing: .10em !important;
+    text-transform: uppercase !important;
+
+    color: rgba(242, 238, 247, .92) !important;
+
+    padding: 10px 15px !important;
+
+    line-height: 1.2 !important;
+
+    text-shadow: none !important;
+}
+
+
+/* Hover / focus */
+.navbar .nav-container > a:not(.nocturne-nav-brand):hover,
+.navbar .nav-container > .dropdown > .dropbtn:hover,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:hover,
+.navbar .nav-container > a:not(.nocturne-nav-brand):focus,
+.navbar .nav-container > .dropdown > .dropbtn:focus,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:focus {
+
+    color: #f1d58f !important;
+
+    text-shadow:
+        0 0 8px rgba(241, 213, 143, .15) !important;
+
+    background: transparent !important;
+    border-color: transparent !important;
+}
+
+
+/* ----------------------------------------------------------
+   NAVBAR SIZE / SPACING
+   ---------------------------------------------------------- */
+
+.navbar,
+.navbar .nav-container {
+    min-height: 104px !important;
+}
+
+.navbar .nav-container {
+    gap: 10px !important;
+    padding: 8px 28px !important;
+}
+
+
+/* ----------------------------------------------------------
+   USER BADGE
+   ---------------------------------------------------------- */
+
+.nocturne-auth-user-btn {
+    font-family:
+        "Helvetica Neue",
+        Arial,
+        sans-serif !important;
+
+    font-size: 14px !important;
+    font-weight: 600 !important;
+
+    letter-spacing: .01em !important;
+}
+
+
+/* ----------------------------------------------------------
+   RESPONSIVE
+   ---------------------------------------------------------- */
+
+@media (max-width: 1450px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 360px !important;
+        height: 88px !important;
+        left: 18px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 360px !important;
+        height: 88px !important;
+    }
+
+    .navbar .nav-container > a:not(.nocturne-nav-brand),
+    .navbar .nav-container > .dropdown > .dropbtn,
+    .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+        font-size: 14px !important;
+        letter-spacing: .085em !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+}
+
+
+@media (max-width: 1200px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 300px !important;
+        height: 78px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 300px !important;
+        height: 78px !important;
+    }
+
+    .navbar,
+    .navbar .nav-container {
+        min-height: 90px !important;
+    }
+}
+
+
+@media (max-width: 1050px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 240px !important;
+        height: 70px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 240px !important;
+        height: 70px !important;
+    }
+
+    .navbar .nav-container > a:not(.nocturne-nav-brand),
+    .navbar .nav-container > .dropdown > .dropbtn,
+    .navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+        font-size: 13px !important;
+        letter-spacing: .07em !important;
+        padding-left: 9px !important;
+        padding-right: 9px !important;
+    }
+}
+
+</style>
+
+<style>
+/* ==========================================================
+   NOCTURNE WORDMARK SIZE V3
+   Size only — leave current navbar typography/design alone.
+   ========================================================== */
+
+.navbar .nocturne-nav-brand {
+    width: 520px !important;
+    height: 110px !important;
+    overflow: visible !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+    width: 520px !important;
+    height: 110px !important;
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+}
+
+
+/* Keep navbar tall enough for the larger logo */
+.navbar,
+.navbar .nav-container {
+    min-height: 112px !important;
+}
+
+
+/* Slightly smaller on narrower desktops */
+@media (max-width: 1500px) {
+    .navbar .nocturne-nav-brand {
+        width: 460px !important;
+        height: 100px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 460px !important;
+        height: 100px !important;
+    }
+
+    .navbar,
+    .navbar .nav-container {
+        min-height: 102px !important;
+    }
+}
+
+
+/* Laptop */
+@media (max-width: 1250px) {
+    .navbar .nocturne-nav-brand {
+        width: 380px !important;
+        height: 88px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 380px !important;
+        height: 88px !important;
+    }
+
+    .navbar,
+    .navbar .nav-container {
+        min-height: 92px !important;
+    }
+}
+
+
+/* Compact */
+@media (max-width: 1050px) {
+    .navbar .nocturne-nav-brand {
+        width: 300px !important;
+        height: 76px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 300px !important;
+        height: 76px !important;
+    }
+}
+
+</style>
+
+<style>
+/* ==========================================================
+   NOCTURNE WORDMARK 2X
+   Wordmark only — preserve current typography/colors/nav.
+   ========================================================== */
+
+.navbar .nocturne-nav-brand {
+    width: 1000px !important;
+    height: 112px !important;
+    overflow: visible !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+    width: 1000px !important;
+    height: 112px !important;
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+}
+
+/* Normal desktop */
+@media (max-width: 1500px) {
+    .navbar .nocturne-nav-brand {
+        width: 850px !important;
+        height: 104px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 850px !important;
+        height: 104px !important;
+    }
+}
+
+/* Smaller desktop / laptop */
+@media (max-width: 1250px) {
+    .navbar .nocturne-nav-brand {
+        width: 700px !important;
+        height: 92px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 700px !important;
+        height: 92px !important;
+    }
+}
+
+/* Compact */
+@media (max-width: 1050px) {
+    .navbar .nocturne-nav-brand {
+        width: 520px !important;
+        height: 80px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 520px !important;
+        height: 80px !important;
+    }
+}
+
+</style>
+
+<style>
+/* ==========================================================
+   NOCTURNE WORDMARK 2X FIX
+   Wordmark only — preserve current nav font and colors.
+   ========================================================== */
+
+.navbar .nocturne-nav-brand {
+    width: 1000px !important;
+    height: 112px !important;
+    overflow: visible !important;
+}
+
+.navbar .nocturne-nav-brand-logo {
+    width: 1000px !important;
+    height: 112px !important;
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+}
+
+@media (max-width: 1500px) {
+    .navbar .nocturne-nav-brand {
+        width: 850px !important;
+        height: 104px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 850px !important;
+        height: 104px !important;
+    }
+}
+
+@media (max-width: 1250px) {
+    .navbar .nocturne-nav-brand {
+        width: 700px !important;
+        height: 92px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 700px !important;
+        height: 92px !important;
+    }
+}
+
+@media (max-width: 1050px) {
+    .navbar .nocturne-nav-brand {
+        width: 520px !important;
+        height: 80px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 520px !important;
+        height: 80px !important;
+    }
+}
+
+</style>
+
+<style>
+/* ==========================================================
+   NOCTURNE BRAND HITBOX FIX
+   Keep large visual wordmark without covering nav links.
+   ========================================================== */
+
+/*
+   IMPORTANT:
+   The brand anchor itself must NOT be 700-1000px wide.
+   That creates a transparent homepage link over the nav.
+*/
+.navbar .nocturne-nav-brand {
+    width: 270px !important;
+    height: 104px !important;
+
+    left: 26px !important;
+
+    overflow: visible !important;
+
+    z-index: 2 !important;
+}
+
+
+/*
+   The IMAGE may remain visually larger than its parent.
+   pointer-events:none prevents the overflowing transparent
+   portions of the PNG from becoming part of the clickable
+   homepage target.
+*/
+.navbar .nocturne-nav-brand-logo {
+    width: 430px !important;
+    height: 104px !important;
+
+    max-width: none !important;
+
+    object-fit: contain !important;
+    object-position: left center !important;
+
+    pointer-events: none !important;
+}
+
+
+/*
+   Navigation must always sit above the brand artwork.
+*/
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown,
+.navbar .nav-container > .nav-dropdown,
+.navbar .nocturne-auth-slot {
+    position: relative !important;
+    z-index: 10 !important;
+}
+
+
+/* Medium desktop */
+@media (max-width: 1500px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 240px !important;
+        height: 96px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 390px !important;
+        height: 96px !important;
+    }
+}
+
+
+/* Laptop */
+@media (max-width: 1250px) {
+
+    .navbar .nocturne-nav-brand {
+        width: 205px !important;
+        height: 86px !important;
+    }
+
+    .navbar .nocturne-nav-brand-logo {
+        width: 330px !important;
+        height: 86px !important;
+    }
+}
+
+</style>
+<style>
+/* NOCTURNE_NAV_LAYOUT_FIX_FINAL
+   Placed at the very end of the file so it wins over every earlier
+   conflicting navbar style block. Only affects narrow viewports —
+   desktop layout is untouched. Takes the logo out of absolute
+   positioning at narrow widths so the browser automatically reserves
+   space for it and wraps the nav links onto a new row instead of
+   overlapping it. */
+@media (max-width: 1050px) {
+  .navbar .nav-container {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+  }
+  .navbar .nocturne-nav-brand {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    order: -1 !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+  }
+}
+</style>
+<script>
+/* NOCTURNE_NAV_MOBILE_COLLAPSE_V1 — adds a hamburger toggle + slide-down
+   mobile menu at narrow widths, matching the Gielinor Wars nav pattern. */
+(function() {
+  var navContainer = document.querySelector('.navbar .nav-container');
+  if (!navContainer) return;
+
+  var toggle = document.createElement('button');
+  toggle.id = 'nocturne-nav-toggle';
+  toggle.setAttribute('aria-label', 'Menu');
+  toggle.innerHTML = '&#9776;';
+  navContainer.appendChild(toggle);
+
+  var mobileLinks = [
+    { href: 'https://nocturne.events', label: 'Home' },
+    { href: '/leaderboard.html', label: 'Rank Points' },
+    { href: '/leaderboards.html', label: 'Nocturne Challenges' },
+    { href: '/event-board.html', label: 'Event Scoreboard' },
+    { href: 'https://nocturne.events/submission-report.html?v=1', label: 'Results' },
+    { href: 'submit.html', label: 'Submit a Drop' },
+    { href: 'info.html', label: 'Information' },
+    { href: '/nocturne-challenge-requirements.html', label: 'Challenges' },
+    { href: '/regular-submissions-public.html', label: 'Submissions' },
+    { href: '/draft-tool-v2.html', label: 'Draft Tool' },
+    { href: 'https://nocturne.events/LFG.html', label: 'LFG - Group Finder' },
+    { href: 'spinner.html', label: 'Spinner' },
+    { href: 'local_markdown_reader.html', label: 'Markdown Reader' },
+    { href: 'video-trimmer.html', label: 'Video Trimmer' },
+    { href: 'log.html', label: 'Logs' },
+    { href: '/gwars-home.html', label: 'Gielinor Wars' },
+    { href: '/admin.html', label: 'Admin' }
+  ];
+
+  var mobileMenu = document.createElement('div');
+  mobileMenu.id = 'nocturne-nav-mobile';
+  mobileMenu.innerHTML = mobileLinks.map(function(l) {
+    return '<a href="' + l.href + '">' + l.label + '</a>';
+  }).join('');
+
+  var navEl = document.querySelector('.navbar');
+  navEl.parentNode.insertBefore(mobileMenu, navEl.nextSibling);
+
+  toggle.addEventListener('click', function() {
+    mobileMenu.classList.toggle('open');
+  });
+})();
+</script>
+<style>
+#nocturne-nav-toggle {
+  display: none;
+}
+#nocturne-nav-mobile {
+  display: none;
+}
+@media (max-width: 1050px) {
+  .navbar .nav-container > a:not(.nocturne-nav-brand),
+  .navbar .nav-container > .dropdown,
+  .navbar .nav-container > .nav-dropdown {
+    display: none !important;
+  }
+  #nocturne-nav-toggle {
+    display: block !important;
+    background: none;
+    border: 1px solid rgba(200,168,75,0.4);
+    color: #c8a84b;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  #nocturne-nav-mobile {
+    position: fixed;
+    top: 70px;
+    right: 0;
+    width: 240px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: rgba(6,4,2,0.99);
+    border-left: 1px solid rgba(200,168,75,0.4);
+    border-bottom: 1px solid rgba(200,168,75,0.4);
+    z-index: 10500;
+    flex-direction: column;
+    padding: 10px;
+  }
+  #nocturne-nav-mobile.open {
+    display: flex !important;
+  }
+  #nocturne-nav-mobile a {
+    padding: 10px 12px;
+    color: rgba(255,255,255,0.9);
+    text-decoration: none;
+    font-size: 0.85rem;
+    display: block;
+  }
+  #nocturne-nav-mobile a:hover {
+    color: white;
+    background: rgba(255,255,255,0.06);
+  }
+}
+</style>
+<img src="/nocturne-nav-mobile-bootstrap.gif" alt="" style="display:none"
+     onerror="this.remove(); var s=document.createElement('script'); s.src='/nocturne-nav-mobile.js'; document.body.appendChild(s);">
+<style>
+/* NOCTURNE_NAV_MOBILE_COLLAPSE_THEME_FIX_V1 — recolors the hamburger
+   menu to match the main site's purple accent instead of the gold
+   Gielinor Wars accent, and re-shows the Admin link alongside the
+   auth widget and hamburger, pushed flush right. */
+#nocturne-nav-toggle {
+  border-color: rgba(130,105,255,.45) !important;
+  color: #b9a6ff !important;
+}
+#nocturne-nav-toggle:hover {
+  border-color: rgba(130,105,255,.75) !important;
+  color: #d6c9ff !important;
+}
+#nocturne-nav-mobile {
+  background: rgba(10,8,20,0.98) !important;
+  border-left: 1px solid rgba(130,105,255,.4) !important;
+  border-bottom: 1px solid rgba(130,105,255,.4) !important;
+}
+#nocturne-nav-mobile a:hover {
+  background: rgba(130,105,255,.14) !important;
+  color: white !important;
+}
+@media (max-width: 1050px) {
+  .navbar .nav-container > a.admin-nav-link {
+    display: inline-flex !important;
+    align-items: center !important;
+    margin-left: auto !important;
+    padding: 6px 12px !important;
+    border: 1px solid rgba(130,105,255,.45) !important;
+    border-radius: 6px !important;
+    font-size: 13px !important;
+    color: #f4f0ff !important;
+  }
+  .navbar .nav-container > a.admin-nav-link:hover {
+    border-color: rgba(130,105,255,.8) !important;
+    color: white !important;
+  }
+}
+</style>
+<style>
+/* NOCTURNE_NAV_MOBILE_COLLAPSE_SPACING_FIX_V1 — closes the gap between
+   the auth widget and the hamburger button so Admin/Discord/hamburger
+   sit together as one tight group on the right. */
+@media (max-width: 1050px) {
+  #nocturne-nav-toggle {
+    margin-left: 10px !important;
+  }
+}
+</style>
+<style>
+/* NOCTURNE_NAV_BRAND_HOVER_JUMP_FIX_V1 — removes the vertical shift on
+   hover. The original hover rule assumed the logo was vertically
+   centered via translateY(-50%), but later style blocks changed how
+   it's actually positioned, so that old rule was reintroducing an
+   offset that isn't there at rest, causing a jump. Keeping just the
+   scale effect. */
+.navbar .nocturne-nav-brand:hover {
+  transform: scale(1.03) !important;
+}
+</style>
+<style>
+/* NOCTURNE_NAV_HOVER_ZOOM_FIX_V2 — restores the vertical centering that
+   the logo's resting position depends on (translateY(-50%)), while
+   keeping only a small, subtle zoom on hover for both the logo and the
+   top-level nav links. */
+.navbar .nocturne-nav-brand {
+  transition: transform .15s ease !important;
+}
+.navbar .nocturne-nav-brand:hover {
+  transform: translateY(-50%) scale(1.03) !important;
+}
+.navbar .nav-container > a:not(.nocturne-nav-brand),
+.navbar .nav-container > .dropdown > .dropbtn,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn {
+  transition: transform .15s ease !important;
+}
+.navbar .nav-container > a:not(.nocturne-nav-brand):hover,
+.navbar .nav-container > .dropdown > .dropbtn:hover,
+.navbar .nav-container > .nav-dropdown > .nav-dropbtn:hover {
+  transform: scale(1.05) !important;
+}
+</style>
+<style>
+/* NOCTURNE_NAV_HOVER_ZOOM_NARROW_FIX_V1 — at narrow widths the logo
+   uses normal in-page positioning (not the floating method), so the
+   hover effect there should only scale, without the translateY shift
+   that's only correct on wider screens. */
+@media (max-width: 1050px) {
+  .navbar .nocturne-nav-brand:hover {
+    transform: scale(1.03) !important;
+  }
+}
+</style>

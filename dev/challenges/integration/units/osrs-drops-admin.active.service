@@ -1,0 +1,17 @@
+[Unit]
+Description=OSRS Drop Tracker — Admin Panel API
+After=network.target
+
+[Service]
+Type=simple
+User=randal
+Group=www-data
+WorkingDirectory=/srv/projects/api
+ExecStart=/srv/projects/api/venv-simon/bin/gunicorn --workers 2 --bind 127.0.0.1:5003 --timeout 30 admin_app:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

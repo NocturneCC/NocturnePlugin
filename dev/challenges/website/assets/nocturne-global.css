@@ -1,0 +1,225 @@
+/* ==========================================================
+   NOCTURNE GLOBAL DESIGN
+   Shared site-wide background
+   ========================================================== */
+
+:root {
+    --nocturne-bg: url('/media/nocturne-site-bg.png');
+    --nocturne-page-bg: #08070f;
+}
+
+
+/* ----------------------------------------------------------
+   GLOBAL PAGE BACKGROUND
+   ---------------------------------------------------------- */
+
+html {
+    min-height: 100%;
+    background: var(--nocturne-page-bg);
+}
+
+body {
+    min-height: 100vh;
+
+    background-color: var(--nocturne-page-bg) !important;
+
+    background-image:
+        linear-gradient(
+            180deg,
+            rgba(5, 5, 12, .20) 0%,
+            rgba(7, 6, 16, .34) 45%,
+            rgba(5, 5, 11, .68) 100%
+        ),
+        var(--nocturne-bg) !important;
+
+    background-size:
+        cover,
+        cover !important;
+
+    background-position:
+        center top,
+        center top !important;
+
+    background-repeat:
+        no-repeat,
+        no-repeat !important;
+
+    /*
+       Important:
+       scroll instead of fixed keeps the site smooth.
+       We already saw some lag from heavier background effects.
+    */
+    background-attachment:
+        scroll,
+        scroll !important;
+}
+
+
+/* Give long pages darkness after the artwork naturally ends */
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+
+    background:
+        linear-gradient(
+            180deg,
+            transparent 0%,
+            rgba(4, 3, 10, .08) 55%,
+            rgba(4, 3, 10, .48) 100%
+        );
+}
+
+
+/* ----------------------------------------------------------
+   DON'T LET COMMON PAGE WRAPPERS HIDE THE BACKGROUND
+   ---------------------------------------------------------- */
+
+main,
+.page,
+.page-wrapper,
+.site-wrapper,
+.content-wrapper {
+    background-color: transparent;
+}
+
+/* ----------------------------------------------------------
+   MOBILE
+   ---------------------------------------------------------- */
+
+@media (max-width: 768px) {
+    body {
+        background-position:
+            center top,
+            58% top !important;
+    }
+}
+
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+    body::before {
+        position: absolute;
+    }
+}
+
+
+/* ==========================================================
+   NOCTURNE GLOBAL BACKGROUND AUTHORITY V2
+   This intentionally overrides legacy per-page body backgrounds.
+   ========================================================== */
+
+html {
+    background: #08070f !important;
+}
+
+body {
+    background:
+        linear-gradient(
+            180deg,
+            rgba(5, 5, 12, .24) 0%,
+            rgba(7, 6, 16, .38) 48%,
+            rgba(5, 4, 11, .72) 100%
+        ),
+        url("/media/nocturne-site-bg.png")
+        center top / cover
+        no-repeat
+        scroll !important;
+
+    background-color: #08070f !important;
+}
+
+/*
+   Disable legacy body pseudo-backgrounds if a page has them.
+   We are NOT touching card/hero/panel backgrounds.
+*/
+body::before {
+    background:
+        linear-gradient(
+            180deg,
+            transparent 0%,
+            rgba(4, 3, 10, .08) 55%,
+            rgba(4, 3, 10, .44) 100%
+        ) !important;
+}
+
+
+
+/* ==========================================================
+   NOCTURNE VIEWPORT BACKGROUND V3
+   Keep artwork sized to the browser viewport, not page height.
+   ========================================================== */
+
+html {
+    min-height: 100% !important;
+    background: #08070f !important;
+}
+
+body {
+    min-height: 100vh !important;
+
+    /*
+      The body itself stays transparent.
+      The fixed pseudo-element below owns the artwork.
+    */
+    background: transparent !important;
+    background-image: none !important;
+}
+
+
+/*
+  Fixed viewport artwork.
+
+  This solves long-page scaling:
+  the image always covers the visible browser window instead
+  of resizing itself to cover a 5,000+ px leaderboard.
+*/
+body::before {
+    content: "" !important;
+
+    display: block !important;
+
+    position: fixed !important;
+    inset: 0 !important;
+
+    width: 100vw !important;
+    height: 100vh !important;
+
+    z-index: -1 !important;
+
+    pointer-events: none !important;
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(5, 5, 12, .22) 0%,
+            rgba(7, 6, 16, .34) 48%,
+            rgba(5, 4, 11, .60) 100%
+        ),
+        url("/media/nocturne-site-bg.png")
+        center center / cover
+        no-repeat !important;
+
+    background-color: #08070f !important;
+}
+
+
+/*
+  We only need one global atmospheric layer.
+*/
+body::after {
+    content: none !important;
+    display: none !important;
+}
+
+
+/* Keep normal page roots from painting over it. */
+main,
+.page,
+.page-wrapper,
+.site-wrapper,
+.content-wrapper {
+    background-color: transparent;
+}

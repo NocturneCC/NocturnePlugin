@@ -1,0 +1,9 @@
+{
+  "comparison": "canonical challenge_config.config_document(active DB) versus bot LKG payload excluding transport-only ok field",
+  "canonical_sha256": "4886bd680d368567f8b3e25a3111b8c72ea91618e9804e2e88a06a4727278471",
+  "lkg_file_copied": false,
+  "equal": true,
+  "status": "active",
+  "version_id": 10,
+  "version_key": "midgard-20261001T003208Z-1d377f87"
+}

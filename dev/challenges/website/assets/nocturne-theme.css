@@ -1,0 +1,543 @@
+/* ==========================================================
+   NOCTURNE GLOBAL THEME
+   Shared visual language for Nocturne pages/tools
+   ========================================================== */
+
+:root {
+  --noc-bg: #06050b;
+  --noc-panel: rgba(13, 10, 22, .94);
+  --noc-panel-2: rgba(20, 15, 31, .93);
+
+  --noc-text: #f6f1ff;
+  --noc-muted: rgba(210, 200, 227, .72);
+
+  --noc-purple: #8b5cf6;
+  --noc-purple-bright: #b596ff;
+  --noc-purple-soft: rgba(139, 92, 246, .14);
+
+  --noc-gold: #f6dca9;
+  --noc-green: #56d99a;
+  --noc-red: #ff6d82;
+
+  --noc-border: rgba(150, 112, 235, .28);
+  --noc-border-strong: rgba(183, 146, 255, .48);
+
+  --noc-radius: 14px;
+  --noc-shadow:
+    0 20px 60px rgba(0, 0, 0, .42);
+}
+
+
+html {
+  min-height: 100%;
+  background: var(--noc-bg);
+}
+
+
+body {
+  min-height: 100vh;
+  margin: 0;
+
+  color: var(--noc-text);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(5, 4, 10, .60),
+      rgba(5, 4, 10, .80) 55%,
+      rgba(4, 3, 8, .94)
+    ),
+    url("/media/nocturne-site-bg.png")
+      center top / cover
+      no-repeat;
+
+  background-color: var(--noc-bg);
+}
+
+
+/*
+  One fixed background layer performs much better than
+  background-attachment: fixed + many backdrop filters.
+*/
+body::before {
+  content: "";
+
+  position: fixed;
+  inset: 0;
+
+  z-index: -2;
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(4, 3, 9, .32),
+      rgba(4, 3, 9, .58)
+    ),
+    url("/media/nocturne-site-bg.png")
+      center top / cover
+      no-repeat;
+
+  pointer-events: none;
+}
+
+
+body::after {
+  content: "";
+
+  position: fixed;
+  inset: 0;
+
+  z-index: -1;
+
+  pointer-events: none;
+
+  background:
+    radial-gradient(
+      ellipse at 70% 15%,
+      rgba(123, 73, 207, .10),
+      transparent 38%
+    ),
+    linear-gradient(
+      180deg,
+      transparent,
+      rgba(0, 0, 0, .20)
+    );
+}
+
+
+/* ==========================================================
+   PAGE SHELL
+   ========================================================== */
+
+.noc-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 38px 0 80px;
+}
+
+
+.noc-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 22px;
+
+  margin-bottom: 24px;
+}
+
+
+.noc-eyebrow {
+  margin-bottom: 7px;
+
+  color: var(--noc-gold);
+
+  font-size: .72rem;
+  font-weight: 900;
+
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+
+
+.noc-title {
+  margin: 0;
+
+  color: var(--noc-text);
+
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 950;
+
+  letter-spacing: -.035em;
+
+  text-shadow:
+    0 0 24px rgba(139, 92, 246, .30),
+    0 3px 18px rgba(0, 0, 0, .75);
+}
+
+
+.noc-subtitle {
+  max-width: 760px;
+
+  margin-top: 8px;
+
+  color: var(--noc-muted);
+
+  font-size: .95rem;
+  line-height: 1.55;
+}
+
+
+/* ==========================================================
+   PANELS / CARDS
+   ========================================================== */
+
+.noc-panel,
+.noc-card {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(20, 15, 31, .95),
+      rgba(9, 7, 15, .95)
+    );
+
+  border:
+    1px solid var(--noc-border);
+
+  border-radius:
+    var(--noc-radius);
+
+  box-shadow:
+    var(--noc-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, .03);
+}
+
+
+.noc-card {
+  padding: 15px;
+}
+
+
+/* ==========================================================
+   BUTTONS
+   ========================================================== */
+
+.noc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 7px;
+
+  min-height: 38px;
+
+  padding: 8px 13px;
+
+  border:
+    1px solid var(--noc-border);
+
+  border-radius: 9px;
+
+  color: #eee8ff;
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(139, 92, 246, .24),
+      rgba(83, 52, 144, .18)
+    );
+
+  font-weight: 850;
+
+  text-decoration: none;
+
+  cursor: pointer;
+
+  transition:
+    background .15s ease,
+    border-color .15s ease,
+    transform .15s ease;
+}
+
+
+.noc-btn:hover {
+  border-color: var(--noc-border-strong);
+
+  background:
+    linear-gradient(
+      180deg,
+      rgba(150, 105, 255, .34),
+      rgba(96, 61, 164, .25)
+    );
+
+  transform: translateY(-1px);
+}
+
+
+.noc-btn-gold {
+  border-color:
+    rgba(246, 220, 169, .34);
+
+  color:
+    var(--noc-gold);
+
+  background:
+    rgba(246, 220, 169, .07);
+}
+
+
+/* ==========================================================
+   FORMS
+   ========================================================== */
+
+.noc-input,
+.noc-select,
+input.noc-input,
+select.noc-select {
+  min-height: 39px;
+
+  color: var(--noc-text);
+
+  background:
+    rgba(4, 3, 9, .74);
+
+  border:
+    1px solid rgba(255, 255, 255, .11);
+
+  border-radius:
+    9px;
+
+  padding:
+    9px 11px;
+
+  outline:
+    none;
+}
+
+
+.noc-input:focus,
+.noc-select:focus {
+  border-color:
+    var(--noc-border-strong);
+
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, .08);
+}
+
+
+/* ==========================================================
+   TABLES
+   ========================================================== */
+
+.noc-table {
+  width: 100%;
+
+  border-collapse:
+    collapse;
+}
+
+
+.noc-table th {
+  padding:
+    11px 15px;
+
+  background:
+    rgba(3, 2, 7, .48);
+
+  color:
+    rgba(204, 193, 225, .70);
+
+  text-align:
+    left;
+
+  font-size:
+    .68rem;
+
+  font-weight:
+    900;
+
+  letter-spacing:
+    .10em;
+
+  text-transform:
+    uppercase;
+}
+
+
+.noc-table td {
+  padding:
+    11px 15px;
+
+  border-top:
+    1px solid rgba(255, 255, 255, .05);
+}
+
+
+.noc-table tbody tr:hover td {
+  background:
+    rgba(126, 84, 206, .06);
+}
+
+
+/* ==========================================================
+   BADGES
+   ========================================================== */
+
+.noc-badge {
+  display:
+    inline-flex;
+
+  align-items:
+    center;
+
+  padding:
+    5px 9px;
+
+  border-radius:
+    999px;
+
+  font-size:
+    .67rem;
+
+  font-weight:
+    900;
+
+  letter-spacing:
+    .04em;
+}
+
+
+.noc-badge-purple {
+  color:
+    #e0d4ff;
+
+  background:
+    rgba(139, 92, 246, .14);
+
+  border:
+    1px solid rgba(154, 120, 235, .30);
+}
+
+
+.noc-badge-green {
+  color:
+    #a8f5cf;
+
+  background:
+    rgba(45, 182, 115, .12);
+
+  border:
+    1px solid rgba(75, 220, 150, .26);
+}
+
+
+/* ==========================================================
+   TOOL SUMMARY CARDS
+   ========================================================== */
+
+.noc-stat-grid {
+  display:
+    grid;
+
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+
+  gap:
+    10px;
+
+  margin-bottom:
+    16px;
+}
+
+
+.noc-stat-card {
+  padding:
+    15px;
+
+  border:
+    1px solid var(--noc-border);
+
+  border-radius:
+    12px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(27, 21, 41, .92),
+      rgba(10, 8, 17, .93)
+    );
+
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, .28);
+}
+
+
+.noc-stat-value {
+  color:
+    #f8f4ff;
+
+  font-size:
+    1.45rem;
+
+  font-weight:
+    950;
+}
+
+
+.noc-stat-label {
+  margin-top:
+    4px;
+
+  color:
+    rgba(198, 186, 219, .72);
+
+  font-size:
+    .72rem;
+
+  font-weight:
+    900;
+
+  letter-spacing:
+    .08em;
+
+  text-transform:
+    uppercase;
+}
+
+
+/* ==========================================================
+   FOOTER SPACING
+   ========================================================== */
+
+#site-footer {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* ==========================================================
+   PERFORMANCE
+   ========================================================== */
+
+/*
+  Avoid backdrop-filter globally.
+  The semi-opaque panels already create the glass effect.
+*/
+
+.noc-panel,
+.noc-card,
+.noc-stat-card {
+  backdrop-filter:
+    none !important;
+
+  -webkit-backdrop-filter:
+    none !important;
+}
+
+
+/* ==========================================================
+   MOBILE
+   ========================================================== */
+
+@media (max-width: 760px) {
+
+  .noc-shell {
+    width:
+      min(100% - 20px, 1180px);
+
+    padding-top:
+      24px;
+  }
+
+
+  .noc-page-header {
+    flex-direction:
+      column;
+  }
+
+
+  .noc-stat-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}

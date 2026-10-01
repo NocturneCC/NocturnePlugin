@@ -1,0 +1,32 @@
+[Unit]
+Description=Nocturne Challenges authenticated direct shadow intake
+After=local-fs.target network.target
+
+[Service]
+Type=simple
+User=Simon
+Group=www-data
+WorkingDirectory=/srv/projects/nocturne-services
+UMask=0007
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CHALLENGE_INTAKE_TOKEN_FILE=/etc/nocturne/challenge-intake.token
+ExecStart=/srv/projects/api/venv-simon/bin/gunicorn --workers 1 --threads 4 --timeout 30 --bind 127.0.0.1:5011 challenge_intake_api:app
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+ReadOnlyPaths=/srv/projects/database/Members.db
+ReadOnlyPaths=/srv/projects/database/RegularSubmissions.db
+ReadOnlyPaths=/etc/nocturne/challenge-intake.token
+ReadWritePaths=/srv/projects/database
+
+[Install]
+WantedBy=multi-user.target
