@@ -69,6 +69,10 @@ LOCK_PATH = Path("/run/nocturne-challenge-timing-deploy.lock")
 MAX_ACL_OUTPUT_BYTES = 16 * 1024
 SIDECAR_DRAIN_TIMEOUT_SECONDS = 10.0
 SIDECAR_DRAIN_INTERVAL_SECONDS = 0.1
+INTAKE_HEALTH_READY_TIMEOUT_SECONDS = 10.0
+INTAKE_HEALTH_RETRY_INTERVAL_SECONDS = 0.25
+INTAKE_HEALTH_REQUEST_TIMEOUT_SECONDS = 4.0
+INTAKE_SERVICE = "nocturne-challenge-intake.service"
 
 
 class DeployError(RuntimeError):
@@ -100,6 +104,7 @@ class LiveVerificationError(DeployError):
     def __init__(self, category: str):
         allowed = {
             "intake_health_failed",
+            "intake_service_unavailable",
             "configuration_read_failed",
             "configuration_version_mismatch",
             "schema_verification_failed",
@@ -175,7 +180,7 @@ def _read_regular(path: Path, maximum: int = 32 * 1024 * 1024) -> bytes:
         os.close(fd)
 
 
-def _run(argv: list[str], *, timeout: int = 15, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(argv: list[str], *, timeout: float = 15, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(argv, input=input_text, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=timeout, check=False,
@@ -609,9 +614,9 @@ def verify_extension_sources(release: Path, release_manifest: dict, source_manif
     return _source_targets(release, source_manifest, release_manifest)
 
 
-def _systemd_show(unit: str) -> dict[str, str]:
+def _systemd_show(unit: str, *, timeout: float = 15) -> dict[str, str]:
     fields = ("Id", "LoadState", "ActiveState", "SubState", "Result", "MainPID")
-    proc = _run(["/usr/bin/systemctl", "show", unit, *(f"--property={x}" for x in fields)])
+    proc = _run(["/usr/bin/systemctl", "show", unit, *(f"--property={x}" for x in fields)], timeout=timeout)
     if proc.returncode:
         raise DeployError(f"cannot inspect service state: {unit}")
     result: dict[str, str] = {}
@@ -650,8 +655,8 @@ def _systemd_show(unit: str) -> dict[str, str]:
 
 
 class Systemd:
-    def show(self, unit: str) -> dict[str, str]:
-        return _systemd_show(unit)
+    def show(self, unit: str, *, timeout: float = 15) -> dict[str, str]:
+        return _systemd_show(unit, timeout=timeout)
 
     def stop(self, unit: str) -> None:
         proc = _run(["/usr/bin/systemctl", "stop", unit], timeout=30)
@@ -1253,7 +1258,8 @@ def _load_config_module(release: Path):
     return module
 
 
-def _http_json(url: str, *, expected: set[int] = {200}, maximum: int = 2 * 1024 * 1024) -> tuple[int, dict[str, Any] | None]:
+def _http_json(url: str, *, expected: set[int] = {200}, maximum: int = 2 * 1024 * 1024,
+               timeout: float = 4.0) -> tuple[int, dict[str, Any] | None]:
     import urllib.error
     import urllib.request
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1261,7 +1267,7 @@ def _http_json(url: str, *, expected: set[int] = {200}, maximum: int = 2 * 1024 
             return None
     request = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
     try:
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(request, timeout=4)
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         status = int(exc.code)
         exc.close()
@@ -1296,14 +1302,66 @@ def _live_endpoint_json(url: str, category: str, *, expected: set[int] = {200}) 
         raise LiveVerificationError(category) from exc
 
 
-def verify_live_behavior(expected_document: dict[str, Any]) -> dict[str, Any]:
+def _require_intake_service_ready(systemd, *, timeout: float) -> None:
+    try:
+        state = systemd.show(INTAKE_SERVICE, timeout=timeout)
+        ready = (
+            isinstance(state, dict)
+            and state.get("Id") == INTAKE_SERVICE
+            and state.get("LoadState") == "loaded"
+            and state.get("ActiveState") == "active"
+            and state.get("SubState") == "running"
+            and isinstance(state.get("MainPID"), str)
+            and state["MainPID"].isascii()
+            and state["MainPID"].isdecimal()
+            and int(state["MainPID"]) > 0
+        )
+    except Exception as exc:
+        raise LiveVerificationError("intake_service_unavailable") from exc
+    if not ready:
+        raise LiveVerificationError("intake_service_unavailable")
+
+
+def _verify_intake_health(systemd) -> None:
+    """Poll only intake readiness, bounded by monotonic time and service state."""
+    url = "http://127.0.0.1:5011/health"
+    deadline = time.monotonic() + INTAKE_HEALTH_READY_TIMEOUT_SECONDS
+    last_failure: Exception | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LiveVerificationError("intake_health_failed") from last_failure
+        try:
+            status, payload = _http_json(
+                url, timeout=min(INTAKE_HEALTH_REQUEST_TIMEOUT_SECONDS, remaining))
+            if (time.monotonic() <= deadline and status == 200
+                    and payload and payload.get("ok") is True):
+                return
+            last_failure = DeployError("intake readiness response was not ready")
+        except DeployError as exc:
+            # _http_json uses DeployError for bounded transport, status, and
+            # JSON-shape failures. Keep its detail chained, never in output.
+            last_failure = exc
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LiveVerificationError("intake_health_failed") from last_failure
+        time.sleep(min(INTAKE_HEALTH_RETRY_INTERVAL_SECONDS, remaining))
+        if time.monotonic() >= deadline:
+            raise LiveVerificationError("intake_health_failed") from last_failure
+        # Check immediately before the next request so an exited worker is not
+        # misreported as a transient endpoint-readiness delay.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LiveVerificationError("intake_health_failed") from last_failure
+        _require_intake_service_ready(systemd, timeout=min(2.0, remaining))
+
+
+def verify_live_behavior(expected_document: dict[str, Any], *, systemd) -> dict[str, Any]:
     """Read-only bounded probes; response contents are never emitted."""
     if not isinstance(expected_document, dict) or expected_document.get("version_id") != 10:
         raise LiveVerificationError("configuration_version_mismatch")
-    _status, intake_health = _live_endpoint_json(
-        "http://127.0.0.1:5011/health", "intake_health_failed")
-    if not intake_health or intake_health.get("ok") is not True:
-        raise LiveVerificationError("intake_health_failed")
+    _verify_intake_health(systemd)
     _status, public_config = _live_endpoint_json(
         "http://127.0.0.1:5002/api/challenges/config/active", "configuration_read_failed")
     if not public_config:
@@ -1983,7 +2041,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         _restore_units(systemd, units)
         if failpoint: failpoint("services_restored")
         phase = "live_behavior_verification"
-        live = verify_live_behavior(after["document"])
+        live = verify_live_behavior(after["document"], systemd=systemd)
         phase = "transaction_commit_record"
         _write_tx_record(tx, commit, "committed")
         return {"status": "installed", "target": commit, "backup_record": str(backup_dir / "transaction.json"),

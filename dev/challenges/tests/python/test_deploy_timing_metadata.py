@@ -861,7 +861,7 @@ class FakeSystemd:
                                  "SubState": "waiting" if timer else ("running" if unit in deploy.LONG_SERVICES else "exited"),
                                  "Result": "success", "MainPID": "0" if timer or unit in deploy.WRITER_SERVICES else "101"}
 
-    def show(self, unit):
+    def show(self, unit, *, timeout=15):
         return dict(self.states[unit])
 
     def stop(self, unit):
@@ -1022,9 +1022,11 @@ class DeploymentTests(unittest.TestCase):
                             raise failure
                         return failure
                     return self.fake_http(url, **kwargs)
-                with mock.patch.object(deploy, "_http_json", side_effect=fake):
+                with (mock.patch.object(deploy, "INTAKE_HEALTH_READY_TIMEOUT_SECONDS", 0.005),
+                      mock.patch.object(deploy, "INTAKE_HEALTH_RETRY_INTERVAL_SECONDS", 0.001),
+                      mock.patch.object(deploy, "_http_json", side_effect=fake)):
                     with self.assertRaises(deploy.LiveVerificationError) as caught:
-                        deploy.verify_live_behavior(expected)
+                        deploy.verify_live_behavior(expected, systemd=self.systemd)
                 self.assertEqual(category, caught.exception.diagnostic_category)
                 self.assertEqual(f"diagnostic_category={category}", str(caught.exception))
                 self.assertNotIn("example.invalid", str(caught.exception))
@@ -1041,14 +1043,177 @@ class DeploymentTests(unittest.TestCase):
         with self.subTest(name="legacy defaults"):
             with mock.patch.object(deploy, "_http_json", side_effect=lambda _url, **_kwargs: (200, bad_legacy_config)):
                 with self.assertRaises(deploy.LiveVerificationError) as caught:
-                    deploy.verify_live_behavior(expected_bad_legacy)
+                    deploy.verify_live_behavior(expected_bad_legacy, systemd=self.systemd)
             self.assertEqual("schema_verification_failed", caught.exception.diagnostic_category)
 
         with self.subTest(name="expected identity"):
             with mock.patch.object(deploy, "_http_json", side_effect=self.fake_http):
                 with self.assertRaises(deploy.LiveVerificationError) as caught:
-                    deploy.verify_live_behavior({**expected, "version_id": 11})
+                    deploy.verify_live_behavior({**expected, "version_id": 11}, systemd=self.systemd)
             self.assertEqual("configuration_version_mismatch", caught.exception.diagnostic_category)
+
+    def _live_expected_document(self):
+        payload = self.fake_http("http://127.0.0.1:5002/api/challenges/config/active")[1]
+        return {key: value for key, value in payload.items() if key != "ok"}
+
+    def test_intake_readiness_immediate_success_does_not_wait_or_recheck_service(self):
+        events = []
+        original_show = self.systemd.show
+
+        def show(unit, **kwargs):
+            events.append(("service", unit))
+            return original_show(unit, **kwargs)
+
+        def http(url, **kwargs):
+            events.append(("http", url))
+            return self.fake_http(url, **kwargs)
+
+        with (mock.patch.object(self.systemd, "show", side_effect=show),
+              mock.patch.object(deploy, "_http_json", side_effect=http),
+              mock.patch.object(deploy.time, "sleep") as sleep):
+            result = deploy.verify_live_behavior(self._live_expected_document(), systemd=self.systemd)
+        self.assertEqual("ok", result["intake_health"])
+        self.assertFalse(sleep.called)
+        self.assertEqual(("http", "http://127.0.0.1:5011/health"), events[0])
+        self.assertFalse(any(kind == "service" for kind, _value in events))
+
+    def test_intake_readiness_retries_transient_failure_classes_then_recovers(self):
+        class Clock:
+            value = 0.0
+
+            def monotonic(self):
+                return self.value
+
+            def sleep(self, seconds):
+                self.value += seconds
+
+        for label, first in (
+            ("connection", deploy.DeployError("connection failure")),
+            ("http status", deploy.DeployError("unexpected HTTP response")),
+            ("malformed or empty JSON", deploy.DeployError("invalid JSON response")),
+            ("not ready", (200, {"ok": False})),
+        ):
+            with self.subTest(failure=label):
+                clock = Clock()
+                events = []
+                health_count = 0
+                original_show = self.systemd.show
+
+                def show(unit, **kwargs):
+                    events.append("service")
+                    return original_show(unit, **kwargs)
+
+                def http(url, **kwargs):
+                    nonlocal health_count
+                    if url.endswith("/health"):
+                        events.append("health")
+                        health_count += 1
+                        if health_count == 1:
+                            if isinstance(first, Exception):
+                                raise first
+                            return first
+                    return self.fake_http(url, **kwargs)
+
+                with (mock.patch.object(deploy, "_http_json", side_effect=http),
+                      mock.patch.object(self.systemd, "show", side_effect=show),
+                      mock.patch.object(deploy.time, "monotonic", side_effect=clock.monotonic),
+                      mock.patch.object(deploy.time, "sleep", side_effect=clock.sleep)):
+                    result = deploy.verify_live_behavior(self._live_expected_document(), systemd=self.systemd)
+                self.assertEqual("ok", result["intake_health"])
+                self.assertEqual(2, health_count)
+                self.assertEqual(["health", "service", "health"], events[:3])
+
+    def test_intake_readiness_timeout_is_bounded_and_sanitized(self):
+        class Clock:
+            value = 0.0
+
+            def monotonic(self):
+                return self.value
+
+            def sleep(self, seconds):
+                self.value += seconds
+
+        clock = Clock()
+        calls = []
+
+        def http(url, **kwargs):
+            if url.endswith("/health"):
+                calls.append(url)
+                raise deploy.DeployError("private transport detail")
+            return self.fake_http(url, **kwargs)
+
+        with (mock.patch.object(deploy, "INTAKE_HEALTH_READY_TIMEOUT_SECONDS", 0.75),
+              mock.patch.object(deploy, "INTAKE_HEALTH_RETRY_INTERVAL_SECONDS", 0.25),
+              mock.patch.object(deploy, "_http_json", side_effect=http),
+              mock.patch.object(deploy.time, "monotonic", side_effect=clock.monotonic),
+              mock.patch.object(deploy.time, "sleep", side_effect=clock.sleep)):
+            with self.assertRaises(deploy.LiveVerificationError) as caught:
+                deploy.verify_live_behavior(self._live_expected_document(), systemd=self.systemd)
+        self.assertEqual("intake_health_failed", caught.exception.diagnostic_category)
+        self.assertEqual(3, len(calls))
+        self.assertEqual(0.75, clock.value)
+        self.assertNotIn("private transport detail", str(caught.exception))
+        self.assertIsNotNone(caught.exception.__cause__)
+
+    def test_intake_service_exit_before_retry_has_distinct_category(self):
+        events = []
+
+        def http(url, **kwargs):
+            if url.endswith("/health"):
+                events.append("health")
+                self.systemd.states[deploy.INTAKE_SERVICE].update(
+                    ActiveState="inactive", SubState="dead", MainPID="0")
+                raise deploy.DeployError("transient probe failure")
+            return self.fake_http(url, **kwargs)
+
+        with (mock.patch.object(deploy, "_http_json", side_effect=http),
+              mock.patch.object(deploy.time, "sleep", side_effect=lambda _seconds: events.append("wait"))):
+            with self.assertRaises(deploy.LiveVerificationError) as caught:
+                deploy.verify_live_behavior(self._live_expected_document(), systemd=self.systemd)
+        self.assertEqual("intake_service_unavailable", caught.exception.diagnostic_category)
+        self.assertEqual(["health", "wait"], events)
+
+    def test_intake_retry_requires_loaded_running_service_with_nonzero_pid(self):
+        bad_states = (
+            {"LoadState": "not-found", "ActiveState": "inactive", "SubState": "dead", "MainPID": "0"},
+            {"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "MainPID": "0"},
+            {"LoadState": "loaded", "ActiveState": "active", "SubState": "starting", "MainPID": "101"},
+            {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": "0"},
+            {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": "bad"},
+        )
+        for state_fields in bad_states:
+            with self.subTest(state=state_fields):
+                systemd = FakeSystemd()
+                systemd.states[deploy.INTAKE_SERVICE].update(state_fields)
+                with (mock.patch.object(deploy, "_http_json", side_effect=deploy.DeployError("not ready")),
+                      mock.patch.object(deploy.time, "sleep", return_value=None)):
+                    with self.assertRaises(deploy.LiveVerificationError) as caught:
+                        deploy._verify_intake_health(systemd)
+                self.assertEqual("intake_service_unavailable", caught.exception.diagnostic_category)
+
+    def test_malformed_intake_response_recovers_on_later_poll(self):
+        responses = [
+            deploy.DeployError("malformed JSON fixture"),
+            (200, {"ok": True}),
+        ]
+        health_count = 0
+
+        def http(url, **kwargs):
+            nonlocal health_count
+            if url.endswith("/health"):
+                health_count += 1
+                response = responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+            return self.fake_http(url, **kwargs)
+
+        with (mock.patch.object(deploy, "_http_json", side_effect=http),
+              mock.patch.object(deploy.time, "sleep") as sleep):
+            result = deploy.verify_live_behavior(self._live_expected_document(), systemd=self.systemd)
+        self.assertEqual("ok", result["intake_health"])
+        self.assertEqual(2, health_count)
+        sleep.assert_called_once_with(deploy.INTAKE_HEALTH_RETRY_INTERVAL_SECONDS)
 
     def test_live_verification_failure_reports_category_and_restores_full_prestate(self):
         files_before = [deploy._sha_file(item[2]) for item in self.targets]
@@ -1179,7 +1344,7 @@ class DeploymentTests(unittest.TestCase):
             # waiter: systemd omits MainPID for timer units on this host.
             wait_inactive = deploy.Systemd.wait_inactive
 
-            def show(self, unit):
+            def show(self, unit, *, timeout=15):
                 state = dict(self.states[unit])
                 if unit.endswith(".timer"):
                     state.pop("MainPID", None)
