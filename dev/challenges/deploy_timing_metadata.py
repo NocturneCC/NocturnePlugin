@@ -75,6 +75,25 @@ class DeployError(RuntimeError):
     pass
 
 
+SIDECAR_FAILURE_CATEGORIES = frozenset({
+    "known_holder_still_active", "unknown_holder_present", "holder_scan_failed",
+    "sidecar_disappearance_timeout", "sidecar_identity_changed",
+    "sidecar_metadata_changed", "sidecar_content_changed", "sidecar_reappeared",
+    "database_identity_changed",
+})
+
+
+class CategorizedDeployError(DeployError):
+    """A fixed, non-sensitive diagnostic category with a preserved cause."""
+
+    def __init__(self, category: str, *, retryable: bool = False):
+        if category not in SIDECAR_FAILURE_CATEGORIES:
+            raise ValueError("unsupported diagnostic category")
+        self.diagnostic_category = category
+        self.retryable = retryable
+        super().__init__(f"diagnostic_category={category}")
+
+
 # Explicitly approved live Challenges.db ancestry and ACL principals.  This is
 # intentionally narrower than a generic “writable parent is okay” rule.
 _DB_ANCESTRY = {
@@ -1362,34 +1381,40 @@ def _stop_for_migration(systemd, snapshot: dict[str, dict[str, str]]) -> None:
 def _verify_migration_maintenance(systemd, snapshot: dict[str, dict[str, str]]) -> None:
     """Require every captured Challenge unit to be safely paused or drained."""
     for unit, before in snapshot.items():
-        current = systemd.show(unit)
+        try:
+            current = systemd.show(unit)
+        except Exception as exc:
+            raise CategorizedDeployError("holder_scan_failed") from exc
         if current.get("LoadState") != before.get("LoadState"):
-            raise DeployError("Challenge unit load state changed during maintenance")
+            raise CategorizedDeployError("known_holder_still_active")
         if before.get("LoadState") == "not-found":
             if current.get("ActiveState") != "inactive" or current.get("SubState") != "dead":
-                raise DeployError("absent Challenge unit has an unsafe maintenance state")
+                raise CategorizedDeployError("known_holder_still_active")
             continue
         pid = current.get("MainPID")
         if unit.endswith(".timer"):
             if (current.get("ActiveState") != "inactive" or current.get("SubState") != "dead" or
                     pid not in {None, "0"}):
-                raise DeployError("Challenge timer did not become safely inactive")
+                raise CategorizedDeployError("known_holder_still_active")
         elif unit in LONG_SERVICES:
             if (current.get("ActiveState") != "inactive" or current.get("SubState") != "dead" or
                     pid != "0"):
-                raise DeployError("Challenge import service did not become safely inactive")
+                raise CategorizedDeployError("known_holder_still_active")
         elif unit in WRITER_SERVICES:
             safe_idle = (current.get("ActiveState"), current.get("SubState"), pid) in {
                 ("inactive", "dead", "0"), ("active", "exited", "0")}
             if not safe_idle:
-                raise DeployError("Challenge one-shot service did not drain safely")
+                raise CategorizedDeployError("known_holder_still_active")
         else:
-            raise DeployError("unexpected unit in Challenge maintenance snapshot")
+            raise CategorizedDeployError("holder_scan_failed")
 
 
 def _sidecar_state_snapshot(path: Path) -> dict[str, tuple[Any, ...]]:
     """Capture only validated sidecar identity/metadata while waiting for close."""
-    main = _db_lstat(path)
+    try:
+        main = _db_lstat(path)
+    except OSError as exc:
+        raise CategorizedDeployError("database_identity_changed") from exc
     result: dict[str, tuple[Any, ...]] = {}
     for label, suffix in (("-journal", "-journal"), ("-wal", "-wal"), ("-shm", "-shm")):
         node = Path(str(path) + suffix)
@@ -1397,19 +1422,45 @@ def _sidecar_state_snapshot(path: Path) -> dict[str, tuple[Any, ...]]:
             st = _db_lstat(node)
         except FileNotFoundError:
             continue
-        except OSError:
-            raise DeployError("database maintenance sidecar state is ambiguous") from None
+        except OSError as exc:
+            retryable = exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE}
+            raise CategorizedDeployError("sidecar_identity_changed", retryable=retryable) from exc
         if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1 or
                 st.st_size > 512 * 1024 * 1024 or
                 (st.st_dev, st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) !=
                 (main.st_dev, main.st_uid, main.st_gid, stat.S_IMODE(main.st_mode))):
-            raise DeployError("database maintenance sidecar metadata is unsafe")
+            raise CategorizedDeployError("sidecar_metadata_changed")
         try:
             acl_text = _acl_text(node)
             acl_digest = (_validate_db_sidecar_acl(acl_text) if path == DB else _acl_hash(acl_text))
-        except (OSError, ValueError, DeployError):
-            raise DeployError("database maintenance sidecar ACL is unsafe") from None
-        result[label] = (*_stat_identity(st), acl_digest)
+        except (OSError, ValueError, DeployError) as exc:
+            raise CategorizedDeployError("sidecar_metadata_changed") from exc
+        identity = _stat_identity(st)
+        try:
+            content_digest = _safe_file_digest(node, identity)
+        except (OSError, DeployError) as exc:
+            try:
+                node.lstat()
+            except FileNotFoundError:
+                raise CategorizedDeployError("sidecar_identity_changed", retryable=True) from exc
+            except OSError as stat_error:
+                retryable = stat_error.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE}
+                raise CategorizedDeployError("sidecar_identity_changed", retryable=retryable) from exc
+            raise CategorizedDeployError("sidecar_content_changed") from exc
+        try:
+            after = _db_lstat(node)
+            acl_after = _acl_text(node)
+        except OSError as exc:
+            retryable = exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE}
+            raise CategorizedDeployError("sidecar_identity_changed", retryable=retryable) from exc
+        except DeployError as exc:
+            raise CategorizedDeployError("sidecar_metadata_changed") from exc
+        if _stat_identity(after) != identity:
+            raise CategorizedDeployError("sidecar_identity_changed")
+        acl_after_digest = _raw_numeric_acl_hash(acl_after) if path == DB else _acl_hash(acl_after)
+        if acl_after_digest != acl_digest:
+            raise CategorizedDeployError("sidecar_metadata_changed")
+        result[label] = (*identity, acl_digest, content_digest)
     return result
 
 
@@ -1418,8 +1469,8 @@ def _database_open_holders(path: Path, identities: set[tuple[int, int]]) -> set[
     holders: set[int] = set()
     try:
         processes = list(os.scandir("/proc"))
-    except OSError:
-        raise DeployError("cannot verify database holders after maintenance") from None
+    except OSError as exc:
+        raise CategorizedDeployError("holder_scan_failed") from exc
     for process in processes:
         if not process.name.isdigit():
             continue
@@ -1430,22 +1481,22 @@ def _database_open_holders(path: Path, identities: set[tuple[int, int]]) -> set[
         except (FileNotFoundError, ProcessLookupError):
             continue
         except PermissionError:
-            raise DeployError("cannot verify database holders after maintenance") from None
+            raise CategorizedDeployError("holder_scan_failed") from None
         except OSError as exc:
             if exc.errno in {errno.ENOENT, errno.ESRCH}:
                 continue
-            raise DeployError("cannot verify database holders after maintenance") from None
+            raise CategorizedDeployError("holder_scan_failed") from exc
         for descriptor in descriptors:
             try:
                 opened = os.stat(descriptor.path)
             except (FileNotFoundError, ProcessLookupError):
                 continue
             except PermissionError:
-                raise DeployError("cannot verify database holders after maintenance") from None
+                raise CategorizedDeployError("holder_scan_failed") from None
             except OSError as exc:
                 if exc.errno in {errno.ENOENT, errno.ESRCH}:
                     continue
-                raise DeployError("cannot verify database holders after maintenance") from None
+                raise CategorizedDeployError("holder_scan_failed") from exc
             if (opened.st_dev, opened.st_ino) in identities:
                 holders.add(pid)
                 break
@@ -1463,46 +1514,77 @@ def _wait_for_no_sqlite_sidecars(path: Path, systemd, snapshot: dict[str, dict[s
     deadline = time.monotonic() + timeout
     previous: dict[str, tuple[Any, ...]] | None = None
     disappeared: set[str] = set()
-    main = _db_lstat(path)
+    empty_observations = 0
+    try:
+        main = _db_lstat(path)
+    except OSError as exc:
+        raise CategorizedDeployError("database_identity_changed") from exc
     expected_main = main_identity[:6] if main_identity is not None else _stat_identity(main)[:6]
     if _stat_identity(main)[:6] != expected_main:
-        raise DeployError("Challenges.db identity changed during maintenance")
+        raise CategorizedDeployError("database_identity_changed")
     tracked = {(main.st_dev, main.st_ino)}
     tracked.update((value[0], value[1]) for value in initial_sidecars.values())
     while True:
         _verify_migration_maintenance(systemd, snapshot)
-        if _stat_identity(_db_lstat(path))[:6] != expected_main:
-            raise DeployError("Challenges.db identity changed during maintenance")
+        try:
+            current_main = _db_lstat(path)
+        except OSError as exc:
+            raise CategorizedDeployError("database_identity_changed") from exc
+        if _stat_identity(current_main)[:6] != expected_main:
+            raise CategorizedDeployError("database_identity_changed")
         try:
             current = _sidecar_state_snapshot(path)
-        except DeployError as exc:
-            # A sidecar being unlinked by the already stopped final SQLite
-            # connection can race this metadata sample; retry only that class.
-            if "state is ambiguous" not in str(exc):
+        except CategorizedDeployError as exc:
+            # A sidecar disappearing while its metadata is sampled can race
+            # the last SQLite close. Retry only that bounded ENOENT/ESTALE
+            # class; every other category fails closed immediately.
+            if not exc.retryable:
                 raise
             current = None
+        except DeployError as exc:
+            raise CategorizedDeployError("sidecar_metadata_changed") from exc
         if current is not None:
             if set(current) - set(initial_sidecars):
-                raise DeployError("unexpected SQLite sidecar appeared during maintenance")
+                raise CategorizedDeployError("sidecar_identity_changed")
             if any(label in disappeared for label in current):
-                raise DeployError("SQLite sidecar reappeared during maintenance")
+                raise CategorizedDeployError("sidecar_reappeared")
             for label, value in current.items():
                 original = initial_sidecars.get(label)
                 if original is None or value[:2] != original[:2]:
-                    raise DeployError("SQLite sidecar identity changed during maintenance")
+                    raise CategorizedDeployError("sidecar_identity_changed")
                 if value[2:6] != original[2:6] or value[8] != original[8]:
-                    raise DeployError("SQLite sidecar metadata changed during maintenance")
-                if previous is not None and label in previous and value != previous[label]:
-                    raise DeployError("SQLite sidecar changed while holders were stopped")
+                    raise CategorizedDeployError("sidecar_metadata_changed")
+                if value[6:8] != original[6:8] or value[9] != original[9]:
+                    raise CategorizedDeployError("sidecar_content_changed")
+                if previous is not None and label in previous:
+                    prior = previous[label]
+                    if value[:2] != prior[:2]:
+                        raise CategorizedDeployError("sidecar_identity_changed")
+                    if value[2:6] != prior[2:6] or value[8] != prior[8]:
+                        raise CategorizedDeployError("sidecar_metadata_changed")
+                    if value[6:8] != prior[6:8] or value[9] != prior[9]:
+                        raise CategorizedDeployError("sidecar_content_changed")
             if previous is not None:
                 disappeared.update(set(previous) - set(current))
+            if previous is None:
+                disappeared.update(set(initial_sidecars) - set(current))
             if not current:
-                if _database_open_holders(path, tracked):
-                    raise DeployError("unknown process still holds the Challenges database")
-                return
+                try:
+                    holders = _database_open_holders(path, tracked)
+                except CategorizedDeployError:
+                    raise
+                except DeployError as exc:
+                    raise CategorizedDeployError("holder_scan_failed") from exc
+                if holders:
+                    raise CategorizedDeployError("unknown_holder_present")
+                empty_observations += 1
+                if empty_observations >= 2:
+                    return
+            else:
+                empty_observations = 0
             previous = current
         if time.monotonic() >= deadline:
-            raise DeployError("SQLite sidecars remained after Challenge services stopped")
+            raise CategorizedDeployError("sidecar_disappearance_timeout")
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
@@ -1790,6 +1872,10 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
     try:
         _stop_for_migration(systemd, units)
         phase = "sidecar_quiescence"
+        # Re-read every controlled unit after the stop/wait calls.  In
+        # particular, a successful stop request alone is not evidence that
+        # the shared-UID admin workers have released SQLite.
+        _verify_migration_maintenance(systemd, units)
         _wait_for_no_sqlite_sidecars(database, systemd, units, sidecars_before_stop,
                                      main_identity=main_identity_before_stop)
         # SQLite may checkpoint committed WAL pages into the main file while
@@ -1872,7 +1958,8 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
                 "nginx_changed": False,
                 "configuration_version_published": False, "post_install": live}
     except BaseException as error:
-        diagnostic_category = (
+        diagnostic_category = (error.diagnostic_category
+            if phase == "sidecar_quiescence" and isinstance(error, CategorizedDeployError) else
             "unexpected_failure" if not isinstance(error, DeployError) else
             "maintenance_failure" if phase == "maintenance_stop" else
             "sidecar_quiescence_failure" if phase == "sidecar_quiescence" else

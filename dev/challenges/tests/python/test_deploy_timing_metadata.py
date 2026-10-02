@@ -1230,8 +1230,136 @@ class DeploymentTests(unittest.TestCase):
         for unit in deploy.CONTROLLED:
             systemd.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
         with mock.patch.object(deploy, "_database_open_holders", return_value={9876}):
-            with self.assertRaisesRegex(deploy.DeployError, "unknown process still holds"):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unknown_holder_present"):
                 deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, {}, timeout=0.01)
+
+    def test_sidecar_quiescence_conditions_have_fixed_safe_categories(self):
+        systemd = FakeSystemd()
+        snapshot = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        for unit in deploy.CONTROLLED:
+            systemd.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
+        main_identity = deploy._stat_identity(self.db.lstat())
+        stable_sidecar = (*main_identity, "a" * 64, "b" * 64)
+
+        def assert_category(category, baseline=None, sidecar_snapshots=None,
+                            holders=None, identity=None):
+            stack = contextlib.ExitStack()
+            with stack:
+                if holders == "failure":
+                    stack.enter_context(mock.patch.object(
+                        deploy, "_database_open_holders",
+                        side_effect=deploy.DeployError("private holder-scan detail")))
+                else:
+                    stack.enter_context(mock.patch.object(
+                        deploy, "_database_open_holders", return_value=holders or set()))
+                if sidecar_snapshots is not None:
+                    stack.enter_context(mock.patch.object(
+                        deploy, "_sidecar_state_snapshot", side_effect=sidecar_snapshots))
+                with self.assertRaisesRegex(deploy.DeployError,
+                                            f"diagnostic_category={category}") as caught:
+                    deploy._wait_for_no_sqlite_sidecars(
+                        self.db, systemd, snapshot, baseline or {}, main_identity=identity or main_identity,
+                        timeout=0.002, interval=0.001)
+                self.assertNotIn("private holder-scan detail", str(caught.exception))
+                self.assertNotIn(str(self.db), str(caught.exception))
+                self.assertNotIn("299961", str(caught.exception))
+                if category == "holder_scan_failed":
+                    self.assertIsInstance(caught.exception.__cause__, deploy.DeployError)
+
+        # A controlled admin process that remains active is distinguished from
+        # a process outside the captured service set.
+        systemd.states["osrs-drops-admin.service"].update(
+            ActiveState="active", SubState="running", MainPID="303")
+        assert_category("known_holder_still_active")
+        systemd.states["osrs-drops-admin.service"].update(
+            ActiveState="inactive", SubState="dead", MainPID="0")
+
+        assert_category("unknown_holder_present", holders={299961})
+        assert_category("holder_scan_failed", holders="failure")
+        assert_category("sidecar_disappearance_timeout", baseline={"-wal": stable_sidecar},
+                        sidecar_snapshots=[{"-wal": stable_sidecar}] * 5)
+
+        changed_identity = list(stable_sidecar)
+        changed_identity[1] += 1
+        assert_category("sidecar_identity_changed", baseline={"-wal": stable_sidecar},
+                        sidecar_snapshots=[{"-wal": tuple(changed_identity)}])
+        changed_metadata = list(stable_sidecar)
+        changed_metadata[4] = 0o600
+        assert_category("sidecar_metadata_changed", baseline={"-wal": stable_sidecar},
+                        sidecar_snapshots=[{"-wal": tuple(changed_metadata)}])
+        changed_content = list(stable_sidecar)
+        changed_content[9] = "c" * 64
+        assert_category("sidecar_content_changed", baseline={"-wal": stable_sidecar},
+                        sidecar_snapshots=[{"-wal": tuple(changed_content)}])
+        assert_category("sidecar_reappeared", baseline={"-wal": stable_sidecar},
+                        sidecar_snapshots=[{}, {"-wal": stable_sidecar}])
+
+        wrong_main_identity = list(main_identity)
+        wrong_main_identity[1] += 1
+        assert_category("database_identity_changed", identity=tuple(wrong_main_identity))
+
+    def test_sidecar_gate_failure_rolls_back_all_services_and_timers(self):
+        before_files = [deploy._sha_file(item[2]) for item in self.targets]
+        before_counts_conn = sqlite3.connect(self.db)
+        before_counts = deploy._table_counts(before_counts_conn)
+        before_counts_conn.close()
+        systemd = FakeSystemd()
+        before = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        with mock.patch.object(
+                deploy, "_wait_for_no_sqlite_sidecars",
+                side_effect=deploy.CategorizedDeployError("unknown_holder_present")):
+            with self.assertRaisesRegex(deploy.DeployError,
+                                        "phase=sidecar_quiescence diagnostic_category=unknown_holder_present") as caught:
+                self.apply(systemd=systemd)
+        self.assertIsInstance(caught.exception.__cause__, deploy.CategorizedDeployError)
+        self.assertEqual(before_files, [deploy._sha_file(item[2]) for item in self.targets])
+        conn = sqlite3.connect(self.db)
+        self.assertEqual("ok", conn.execute("PRAGMA integrity_check").fetchone()[0])
+        self.assertEqual(before_counts, deploy._table_counts(conn))
+        self.assertFalse(deploy._has_columns(self.db))
+        conn.close()
+        for unit in deploy.LONG_SERVICES:
+            state = systemd.show(unit)
+            self.assertEqual(("loaded", "active", "running"),
+                             (state["LoadState"], state["ActiveState"], state["SubState"]))
+            self.assertGreater(int(state["MainPID"]), 0)
+        for unit in deploy.TIMERS:
+            state = systemd.show(unit)
+            self.assertEqual((before[unit]["LoadState"], "active", "waiting"),
+                             (state["LoadState"], state["ActiveState"], state["SubState"]))
+
+    def test_admin_stop_return_is_rechecked_before_sidecar_wait(self):
+        admin = "osrs-drops-admin.service"
+
+        class AdminStopNoop(FakeSystemd):
+            def stop(self, unit):
+                if unit == admin:
+                    self.actions.append(("stop", unit))
+                    return
+                super().stop(unit)
+
+            def wait_inactive(self, unit, timeout=20):
+                if unit == admin:
+                    return
+                super().wait_inactive(unit, timeout)
+
+        systemd = AdminStopNoop()
+        with mock.patch.object(deploy, "_wait_for_no_sqlite_sidecars") as wait:
+            with self.assertRaisesRegex(
+                    deploy.DeployError,
+                    "phase=sidecar_quiescence diagnostic_category=known_holder_still_active"):
+                self.apply(systemd=systemd)
+            wait.assert_not_called()
+        admin_state = systemd.show(admin)
+        self.assertEqual(("loaded", "active", "running"),
+                         (admin_state["LoadState"], admin_state["ActiveState"], admin_state["SubState"]))
+        self.assertGreater(int(admin_state["MainPID"]), 0)
+        for unit in ("osrs-drops-api.service", "nocturne-challenge-intake.service"):
+            self.assertEqual(("active", "running"), tuple(
+                systemd.show(unit)[key] for key in ("ActiveState", "SubState")))
+        for unit in deploy.TIMERS:
+            self.assertEqual(("active", "waiting"), tuple(
+                systemd.show(unit)[key] for key in ("ActiveState", "SubState")))
 
     def test_unexpected_sidecar_appearance_and_post_stop_change_fail_closed(self):
         systemd = FakeSystemd()
@@ -1241,7 +1369,7 @@ class DeploymentTests(unittest.TestCase):
         wal = Path(str(self.db) + "-wal")
         wal.write_bytes(b"")
         wal.chmod(0o664)
-        with self.assertRaisesRegex(deploy.DeployError, "unexpected SQLite sidecar"):
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=sidecar_identity_changed"):
             deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, {}, timeout=0.01)
 
         initial = deploy._sidecar_state_snapshot(self.db)
@@ -1252,7 +1380,7 @@ class DeploymentTests(unittest.TestCase):
         with (mock.patch.object(deploy, "_sidecar_state_snapshot", side_effect=[initial, changed]),
               mock.patch.object(deploy.time, "monotonic", side_effect=[0.0, 0.2, 0.2]),
               mock.patch.object(deploy.time, "sleep")):
-            with self.assertRaisesRegex(deploy.DeployError, "sidecar changed while holders were stopped"):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=sidecar_content_changed"):
                 deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, initial,
                                                     timeout=1.0, interval=0.1)
 
@@ -1265,7 +1393,7 @@ class DeploymentTests(unittest.TestCase):
         changed_stat = list(st)
         changed_stat[1] += 1
         with mock.patch.object(deploy, "_db_lstat", return_value=os.stat_result(changed_stat)):
-            with self.assertRaisesRegex(deploy.DeployError, "identity changed during maintenance"):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_identity_changed"):
                 deploy._wait_for_no_sqlite_sidecars(
                     self.db, systemd, snapshot, {}, main_identity=deploy._stat_identity(st),
                     timeout=0.01, interval=0.001)
