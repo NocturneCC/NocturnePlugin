@@ -239,6 +239,32 @@ class ReadOnlyDatabaseProfileTests(unittest.TestCase):
         self.assertEqual({"integrity": "ok", "journal_mode": "wal", "locking_mode": "normal"},
                          deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal"))
 
+    def test_production_delete_steady_state_requires_no_sidecars_and_safe_profile(self):
+        self.create_db(journal="DELETE")
+        metadata = deploy._database_metadata(self.db)
+        self.assertEqual({"main"}, set(metadata))
+        profile = deploy._inspect_sqlite_profile(self.db)
+        self.assertEqual({"integrity": "ok", "journal_mode": "delete", "locking_mode": "normal"},
+                         profile)
+        deploy._validate_production_journal_profile(profile, metadata)
+
+        for sidecar in ("-wal", "-shm", "-journal"):
+            with self.subTest(sidecar=sidecar), self.assertRaisesRegex(
+                    deploy.DeployError, "diagnostic_category=unsupported_journal_mode"):
+                deploy._validate_production_journal_profile(profile, {**metadata, sidecar: ()})
+
+        wal_profile = {**profile, "journal_mode": "wal"}
+        deploy._validate_production_journal_profile(wal_profile, {**metadata, "-wal": ()})
+        deploy._validate_production_journal_profile(wal_profile, {**metadata, "-wal": (), "-shm": ()})
+
+        for unsafe_profile, category in (
+                ({**profile, "integrity": "corrupt"}, "integrity_failed"),
+                ({**profile, "locking_mode": "exclusive"}, "unsupported_locking_mode"),
+                ({**profile, "journal_mode": "truncate"}, "unsupported_journal_mode")):
+            with self.subTest(profile=unsafe_profile), self.assertRaisesRegex(
+                    deploy.DeployError, f"diagnostic_category={category}"):
+                deploy._validate_production_journal_profile(unsafe_profile, metadata)
+
     def test_missing_database_has_distinct_category(self):
         with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_missing"):
             deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal")

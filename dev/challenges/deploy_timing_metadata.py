@@ -1070,11 +1070,48 @@ def _db_facts(path: Path, config_module, *, expected_journal_mode: str | None = 
             if int(document.get("version_id", -1)) != 10:
                 raise DeployError("active config document is not version 10")
             _validate_legacy_defaults(document)
-            return {"integrity": profile["integrity"], "journal_mode": profile["journal_mode"], "active_version_id": 10,
+            return {"integrity": profile["integrity"], "journal_mode": profile["journal_mode"],
+                    "locking_mode": profile["locking_mode"], "active_version_id": 10,
                     "document": document, "counts": _table_counts(conn)}
         except sqlite3.Error as exc:
             category = _sqlite_error_category(exc, "malformed_result")
             raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+
+
+def _validate_production_journal_profile(facts: dict[str, Any],
+                                         metadata: dict[str, tuple[Any, ...]]) -> None:
+    """Accept the observed production modes without weakening sidecar checks."""
+    profile = facts
+    if profile.get("integrity") != "ok":
+        raise DeployError("database inspection failed diagnostic_category=integrity_failed")
+    if profile.get("locking_mode") != "normal":
+        raise DeployError("database inspection failed diagnostic_category=unsupported_locking_mode")
+    sidecars = {"-wal", "-shm", "-journal"}.intersection(metadata)
+    journal = profile.get("journal_mode")
+    if journal == "wal":
+        return
+    if journal == "delete" and not sidecars:
+        return
+    raise DeployError("database inspection failed diagnostic_category=unsupported_journal_mode")
+
+
+def _pre_migration_db_facts(path: Path, config_module) -> dict[str, Any]:
+    """Inspect the production DB under its approved WAL or quiescent DELETE profile.
+
+    The before/after metadata captures bind journal-mode policy to a stable
+    ordinary-file/ACL snapshot. A DELETE-mode database is supported only when
+    no WAL, SHM, or rollback-journal sidecar exists for that same snapshot.
+    Fixture databases retain the generic integrity/schema checks.
+    """
+    if path != DB:
+        return _db_facts(path, config_module)
+    metadata_before = _database_metadata(path)
+    facts = _db_facts(path, config_module)
+    metadata_after = _database_metadata(path)
+    if metadata_after != metadata_before:
+        raise DeployError("database inspection failed diagnostic_category=database_busy")
+    _validate_production_journal_profile(facts, metadata_before)
+    return facts
 
 
 def _legacy_projection(document: dict[str, Any]) -> dict[str, Any]:
@@ -1799,7 +1836,7 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
     systemd = systemd or Systemd()
     units = _unit_snapshot(systemd, CONTROLLED)
     config_module = _load_config_module(release)
-    facts = _db_facts(database, config_module, expected_journal_mode="wal" if database == DB else None)
+    facts = _pre_migration_db_facts(database, config_module)
     return {
         "status": "already_current" if file_state == "after" and _has_columns(database) else "dry_run",
         "target": commit,
@@ -1990,7 +2027,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         raise DeployError("plan/release identity changed before apply")
     state = _validate_file_prestate(items)
     config_module = _load_config_module(release)
-    before = _db_facts(database, config_module, expected_journal_mode="wal" if database == DB else None)
+    before = _pre_migration_db_facts(database, config_module)
     if before["active_version_id"] != 10:
         raise DeployError("active version changed before apply")
     schema_present = _has_columns(database)
