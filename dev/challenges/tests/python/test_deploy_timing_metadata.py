@@ -851,6 +851,7 @@ class FakeSystemd:
     def __init__(self, fail_start_once: str | None = None, *, fail_stop: str | None = None,
                  fail_drain: str | None = None):
         self.states = {}
+        self.actions = []
         self.fail_start_once = fail_start_once
         self.fail_stop = fail_stop
         self.fail_drain = fail_drain
@@ -864,11 +865,13 @@ class FakeSystemd:
         return dict(self.states[unit])
 
     def stop(self, unit):
+        self.actions.append(("stop", unit))
         if unit == self.fail_stop:
             raise deploy.DeployError("simulated service stop failure")
         self.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
 
     def start(self, unit):
+        self.actions.append(("start", unit))
         if unit == self.fail_start_once:
             self.fail_start_once = None
             raise deploy.DeployError("simulated service start failure")
@@ -1034,6 +1037,8 @@ class DeploymentTests(unittest.TestCase):
 
         def gate(path, systemd, snapshot, initial_sidecars, **kwargs):
             deploy._verify_migration_maintenance(systemd, snapshot)
+            for unit in deploy.LONG_SERVICES:
+                self.assertEqual("inactive", systemd.show(unit)["ActiveState"], unit)
             events.append("sidecar_gate")
             connection.close()
             return original_gate(path, systemd, snapshot, initial_sidecars, **kwargs)
@@ -1271,6 +1276,15 @@ class DeploymentTests(unittest.TestCase):
         conn.close()
         result = self.apply()
         self.assertEqual("installed", result["status"])
+        self.assertEqual(list(deploy.LONG_SERVICES), result["services_restarted"])
+        self.assertEqual(("stop", "osrs-drops-admin.service"),
+                         next(action for action in self.systemd.actions
+                              if action == ("stop", "osrs-drops-admin.service")))
+        self.assertIn(("start", "osrs-drops-admin.service"), self.systemd.actions)
+        admin_state = self.systemd.show("osrs-drops-admin.service")
+        self.assertEqual(("loaded", "active", "running"),
+                         (admin_state["LoadState"], admin_state["ActiveState"], admin_state["SubState"]))
+        self.assertGreater(int(admin_state["MainPID"]), 0)
         self.assertEqual(10, result["active_version_id"])
         self.assertFalse(result["configuration_version_published"])
         conn = sqlite3.connect(self.db)
@@ -1341,6 +1355,79 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual('{"revision":7}', conn.execute("SELECT draft_json FROM challenge_config_drafts WHERE draft_id=3").fetchone()[0])
         conn.close()
         self.assertTrue(all(failing.states[u]["ActiveState"] == "active" for u in deploy.LONG_SERVICES), failing.states)
+
+    def test_admin_initially_inactive_is_not_stopped_or_restarted(self):
+        admin = "osrs-drops-admin.service"
+        systemd = FakeSystemd()
+        systemd.states[admin].update(ActiveState="inactive", SubState="dead", MainPID="0")
+        plan = deploy.make_plan(commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
+                                release=self.release, database=self.db, systemd=systemd)
+        self.assertIn(admin, plan["stop_and_restart_if_active"])
+        self.assertNotIn(admin, plan["services_restarted_for_imports"])
+        result = self.apply(systemd=systemd)
+        self.assertEqual("installed", result["status"])
+        self.assertNotIn(admin, result["services_restarted"])
+        self.assertNotIn(("stop", admin), systemd.actions)
+        self.assertNotIn(("start", admin), systemd.actions)
+        self.assertEqual(("loaded", "inactive", "dead", "0"), tuple(
+            systemd.show(admin)[key] for key in ("LoadState", "ActiveState", "SubState", "MainPID")))
+
+    def test_admin_stop_failure_restores_captured_state(self):
+        admin = "osrs-drops-admin.service"
+        systemd = FakeSystemd(fail_stop=admin)
+        before = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        with self.assertRaisesRegex(deploy.DeployError,
+                                    "phase=maintenance_stop diagnostic_category=maintenance_failure"):
+            self.apply(systemd=systemd)
+        for unit, state in before.items():
+            after = systemd.show(unit)
+            self.assertEqual((state["LoadState"], state["ActiveState"], state["SubState"]),
+                             (after["LoadState"], after["ActiveState"], after["SubState"]))
+        self.assertIn(("start", "osrs-drops-api.service"), systemd.actions)
+        self.assertNotIn(("start", admin), systemd.actions)
+
+    def test_admin_restart_failure_rolls_back_database_files_and_services(self):
+        admin = "osrs-drops-admin.service"
+        before_files = [deploy._sha_file(item[2]) for item in self.targets]
+        before_conn = sqlite3.connect(self.db)
+        before_counts = deploy._table_counts(before_conn)
+        before_conn.close()
+        systemd = FakeSystemd(fail_start_once=admin)
+        with self.assertRaisesRegex(deploy.DeployError,
+                                    "phase=service_restoration diagnostic_category=service_restoration_failure"):
+            self.apply(systemd=systemd)
+        self.assertEqual(before_files, [deploy._sha_file(item[2]) for item in self.targets])
+        restored = sqlite3.connect(self.db)
+        self.assertEqual("ok", restored.execute("PRAGMA integrity_check").fetchone()[0])
+        self.assertEqual(before_counts, deploy._table_counts(restored))
+        self.assertEqual(10, restored.execute("SELECT config_version_id FROM challenge_config_versions WHERE status='active'").fetchone()[0])
+        self.assertFalse(set(deploy.NEW_COLUMNS).issubset({row[1] for row in restored.execute("PRAGMA table_info(challenge_config_bosses)")}))
+        restored.close()
+        for unit in deploy.LONG_SERVICES:
+            state = systemd.show(unit)
+            self.assertEqual(("loaded", "active", "running"),
+                             (state["LoadState"], state["ActiveState"], state["SubState"]))
+            self.assertGreater(int(state["MainPID"]), 0)
+        for unit in deploy.TIMERS:
+            self.assertEqual("active", systemd.show(unit)["ActiveState"])
+
+    def test_rollback_after_migration_restores_admin_if_previously_active(self):
+        admin = "osrs-drops-admin.service"
+        before_files = [deploy._sha_file(item[2]) for item in self.targets]
+
+        def fail(phase):
+            if phase == "migration_complete":
+                raise RuntimeError("private fixture detail")
+
+        with self.assertRaisesRegex(deploy.DeployError,
+                                    "phase=schema_migration diagnostic_category=unexpected_failure") as caught:
+            self.apply(failpoint=fail)
+        self.assertNotIn("private fixture detail", str(caught.exception))
+        self.assertEqual(before_files, [deploy._sha_file(item[2]) for item in self.targets])
+        self.assertFalse(deploy._has_columns(self.db))
+        self.assertEqual(("active", "running"), tuple(
+            self.systemd.show(admin)[key] for key in ("ActiveState", "SubState")))
+        self.assertGreater(int(self.systemd.show(admin)["MainPID"]), 0)
 
     def test_website_asset_failure_rolls_back(self):
         before = [deploy._sha_file(item[2]) for item in self.targets]

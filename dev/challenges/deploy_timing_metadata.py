@@ -45,7 +45,14 @@ NEW_COLUMNS = (
     "automatic_capture", "numeric_metric_key", "numeric_metric_label",
     "numeric_metric_unit",
 )
-LONG_SERVICES = ("osrs-drops-api.service", "nocturne-challenge-intake.service")
+LONG_SERVICES = (
+    "osrs-drops-api.service",
+    "nocturne-challenge-intake.service",
+    "osrs-drops-admin.service",
+)
+# API and intake are required live import consumers.  The admin API is also a
+# controlled database holder, but may legitimately be inactive before apply.
+REQUIRED_ACTIVE_SERVICES = ("osrs-drops-api.service", "nocturne-challenge-intake.service")
 WRITER_SERVICES = (
     "nocturne-challenge-shadow-sync.service",
     "nocturne-leaderboard-shadow-renderer.service",
@@ -1326,7 +1333,7 @@ def _unit_snapshot(systemd, units: tuple[str, ...]) -> dict[str, dict[str, str]]
                 raise DeployError(f"required Challenge consumer unit is absent: {unit}")
         elif state["ActiveState"] not in {"active", "inactive"}:
             raise DeployError(f"unit is failed or transitional: {unit}")
-        if unit in LONG_SERVICES and (state["ActiveState"] != "active" or state["SubState"] != "running" or int(state["MainPID"]) <= 0):
+        if unit in REQUIRED_ACTIVE_SERVICES and (state["ActiveState"] != "active" or state["SubState"] != "running" or int(state["MainPID"]) <= 0):
             raise DeployError(f"required import consumer is not active/running: {unit}")
         snapshot[unit] = state
     return snapshot
@@ -1344,7 +1351,7 @@ def _stop_for_migration(systemd, snapshot: dict[str, dict[str, str]]) -> None:
         state = snapshot[unit]
         if state["LoadState"] == "loaded" and state["ActiveState"] == "active" and state["SubState"] != "exited":
             systemd.wait_job_idle(unit)
-    # The API and intake are the final known SQLite import holders to stop.
+    # Long-lived SQLite import holders are the final known processes to stop.
     for unit in LONG_SERVICES:
         state = snapshot[unit]
         if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
@@ -1506,15 +1513,22 @@ def _restore_units(systemd, snapshot: dict[str, dict[str, str]]) -> None:
         state = snapshot.get(unit, {})
         if state.get("LoadState") == "loaded" and state.get("ActiveState") == "active":
             try:
-                systemd.start(unit)
-                systemd.wait_active(unit)
+                current = systemd.show(unit)
+                if not (current.get("LoadState") == "loaded" and current.get("ActiveState") == "active" and
+                        current.get("SubState") == "running" and current.get("MainPID", "0").isdigit() and
+                        int(current.get("MainPID", "0")) > 0):
+                    systemd.start(unit)
+                    systemd.wait_active(unit)
             except Exception:
                 failures.append(unit)
     for unit in TIMERS:
         state = snapshot.get(unit, {})
         if state.get("LoadState") == "loaded" and state.get("ActiveState") == "active":
             try:
-                systemd.start(unit)
+                current = systemd.show(unit)
+                if not (current.get("LoadState") == "loaded" and current.get("ActiveState") == "active" and
+                        current.get("SubState") == "waiting" and current.get("MainPID") in {None, "0"}):
+                    systemd.start(unit)
             except Exception:
                 failures.append(unit)
     if failures:
@@ -1577,7 +1591,7 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
         "pause_if_active": list(TIMERS),
         "drain_if_running": list(WRITER_SERVICES),
         "stop_and_restart_if_active": list(LONG_SERVICES),
-        "services_restarted_for_imports": list(LONG_SERVICES),
+        "services_restarted_for_imports": list(REQUIRED_ACTIVE_SERVICES),
         "nginx_changed": False,
         "announcement_version_published": False,
         "prepared_check_summary_sha256": _sha_bytes(prepared_output.encode()),
@@ -1772,21 +1786,26 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
     db_backup = backup_dir / "Challenges.db.sqlite-backup"
     item_backups: list[tuple[dict[str, Any], bytes, dict[str, Any]]] = []
     tx: Transaction | None = None
+    phase = "maintenance_stop"
     try:
         _stop_for_migration(systemd, units)
+        phase = "sidecar_quiescence"
         _wait_for_no_sqlite_sidecars(database, systemd, units, sidecars_before_stop,
                                      main_identity=main_identity_before_stop)
         # SQLite may checkpoint committed WAL pages into the main file while
         # the final known connection closes.  Revalidate semantic state after
         # that normal close, then capture the exact rollback image metadata.
+        phase = "database_revalidation"
         quiesced = _db_facts(database, config_module, expected_journal_mode=before["journal_mode"])
         if (quiesced["active_version_id"] != before["active_version_id"] or
                 quiesced["counts"] != before["counts"] or
                 _legacy_projection(quiesced["document"]) != _legacy_projection(before["document"])):
             raise DeployError("Challenges.db semantic state changed while services were quiescing")
+        phase = "backup_initialization"
         original_db_meta = capture_file(database)
         tx = Transaction(backup_dir, db_backup, before, original_db_meta, item_backups,
                          units, [], config_module, database)
+        phase = "backup_creation"
         item_backups = _backup_files(items, backup_dir)
         tx.item_backups = item_backups
         _backup_database(database, db_backup, _testing_owner_uid)
@@ -1801,10 +1820,12 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         if failpoint: failpoint("backup_complete")
         _write_tx_record(tx, commit, "backed_up")
         # Recapture all targets immediately before any mutation.
+        phase = "backup_verification"
         for item, _data, metadata in item_backups:
             fresh = capture_file(item["target"])
             if any(fresh[key] != metadata[key] for key in ("sha256", "uid", "gid", "mode", "size", "nlink", "acl_sha256")):
                 raise DeployError("live target changed after backup")
+        phase = "file_installation"
         backup_by_target = {str(item["target"]): (data, meta) for item, data, meta in item_backups}
         for item in items:
             data = _read_regular(item["source"])
@@ -1820,9 +1841,11 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
             if failpoint: failpoint(f"file:{item['target'].name}")
         # If interrupted immediately after SQLite commits, rollback must still
         # restore the already verified snapshot.
+        phase = "schema_migration"
         tx.db_changed = True
         _migrate(database, config_module, before, tx)
         if failpoint: failpoint("migration_complete")
+        phase = "post_migration_verification"
         after = _db_facts(database, config_module, expected_journal_mode="delete")
         if after["counts"] != before["counts"] or _legacy_projection(before["document"]) != _legacy_projection(after["document"]):
             raise DeployError("post-migration Challenge data preservation check failed")
@@ -1833,24 +1856,45 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
             check_conn.close()
         for item in items: _verify_installed(item["target"], item)
         if failpoint: failpoint("post_install_verify")
+        phase = "service_restoration"
         _restore_units(systemd, units)
         if failpoint: failpoint("services_restored")
+        phase = "live_behavior_verification"
         live = verify_live_behavior(after["document"])
+        phase = "transaction_commit_record"
         _write_tx_record(tx, commit, "committed")
         return {"status": "installed", "target": commit, "backup_record": str(backup_dir / "transaction.json"),
                 "active_version_id": 10, "database_integrity": after["integrity"],
                 "schema_columns_added_or_verified": list(NEW_COLUMNS),
-                "services_restarted": list(LONG_SERVICES), "nginx_changed": False,
+                "services_restarted": [unit for unit in LONG_SERVICES
+                                        if units[unit].get("LoadState") == "loaded" and
+                                        units[unit].get("ActiveState") == "active"],
+                "nginx_changed": False,
                 "configuration_version_published": False, "post_install": live}
     except BaseException as error:
+        diagnostic_category = (
+            "unexpected_failure" if not isinstance(error, DeployError) else
+            "maintenance_failure" if phase == "maintenance_stop" else
+            "sidecar_quiescence_failure" if phase == "sidecar_quiescence" else
+            "database_validation_failure" if phase in {"database_revalidation", "post_migration_verification"} else
+            "backup_failure" if phase.startswith("backup_") or phase == "backup_creation" else
+            "file_installation_failure" if phase == "file_installation" else
+            "migration_failure" if phase == "schema_migration" else
+            "service_restoration_failure" if phase == "service_restoration" else
+            "live_verification_failure" if phase == "live_behavior_verification" else
+            "transaction_record_failure")
         try:
             if tx is not None and tx.database_backup.exists() and tx.item_backups:
                 _restore_transaction(tx, systemd, commit)
             else:
                 _restore_units(systemd, units)
         except Exception as rollback_error:
-            raise DeployError(f"installation failed; rollback incomplete ({type(rollback_error).__name__})") from error
-        raise DeployError(f"installation failed and was rolled back ({type(error).__name__})") from error
+            raise DeployError(
+                f"installation failed; rollback incomplete phase={phase} diagnostic_category=rollback_failure"
+            ) from error
+        raise DeployError(
+            f"installation failed and was rolled back phase={phase} diagnostic_category={diagnostic_category}"
+        ) from error
 
 
 def _cli() -> int:
