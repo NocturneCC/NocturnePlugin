@@ -248,13 +248,68 @@ def _source_targets(release: Path, source_manifest: dict, release_manifest: dict
 
 
 def _prepared_check(release: Path, commit: str, runtime_root: Path) -> str:
-    checker = release / "dev/intake/immutable_runtime_check.py"
-    proc = _run(["/usr/bin/python3.14", "-B", str(checker), "--repo", str(REPO),
-                 "--runtime-root", str(runtime_root), "--commit", commit, "--python", "/usr/bin/python3.14"], timeout=60)
-    output = (proc.stdout + proc.stderr)[-12000:]
-    if proc.returncode or "status=prepared" not in proc.stdout:
-        raise DeployError("canonical immutable prepared check failed")
-    return output
+    if not FULL_SHA.fullmatch(commit):
+        raise DeployError("canonical immutable prepared check failed exit_status=not_run diagnostic_category=invalid_commit")
+    if runtime_root != RUNTIME:
+        raise DeployError("canonical immutable prepared check failed exit_status=not_run diagnostic_category=wrong_runtime_root")
+    if release != runtime_root / "releases" / commit:
+        raise DeployError("canonical immutable prepared check failed exit_status=not_run diagnostic_category=release_identity_mismatch")
+
+    # The supported operator interface is the immutable release's guarded
+    # wrapper, not a direct invocation of its implementation module. The
+    # wrapper binds the full commit, verifies the clean checkout, fixes the
+    # runtime root, and emits the canonical read-only result.
+    checker = release / "dev/intake/prepare_immutable_runtime.sh"
+    try:
+        proc = subprocess.run(
+            ["/bin/bash", str(checker), "--check", commit],
+            capture_output=True, text=True, timeout=90, check=False,
+            env={
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL": "C",
+                "GIT_OPTIONAL_LOCKS": "0",
+                # The checker runs Git as root against Simon's checkout.
+                # Supply the narrowly scoped trust exception to this process
+                # tree only; never depend on or mutate global Git config.
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": str(REPO),
+            },
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DeployError(
+            "canonical immutable prepared check failed exit_status=timeout diagnostic_category=checker_timeout"
+        ) from exc
+    except OSError as exc:
+        raise DeployError(
+            "canonical immutable prepared check failed exit_status=unavailable diagnostic_category=checker_launch_failed"
+        ) from exc
+
+    lines = proc.stdout.splitlines()
+    status_lines = [line for line in lines if line.startswith("status=")]
+    check_mode_lines = [line for line in lines if line.startswith("check_mode=")]
+    if proc.returncode != 0:
+        status = status_lines[0].partition("=")[2] if len(status_lines) == 1 else ""
+        category = {
+            "not_prepared": "not_prepared",
+            "recoverable_incomplete": "recoverable_incomplete",
+            "unsafe_blocking": "unsafe_blocking",
+            "prepared": "checker_nonzero_with_prepared_status",
+        }.get(status, "checker_nonzero_without_unique_status")
+        raise DeployError(
+            f"canonical immutable prepared check failed exit_status={proc.returncode} diagnostic_category={category}"
+        )
+    if len(status_lines) != 1 or status_lines[0] != "status=prepared":
+        category = "missing_status" if not status_lines else "duplicate_status" if len(status_lines) > 1 else "unexpected_status"
+        raise DeployError(
+            f"canonical immutable prepared check failed exit_status=0 diagnostic_category={category}"
+        )
+    if len(check_mode_lines) != 1 or check_mode_lines[0] != "check_mode=read_only":
+        category = "missing_check_mode" if not check_mode_lines else "duplicate_check_mode" if len(check_mode_lines) > 1 else "unexpected_check_mode"
+        raise DeployError(
+            f"canonical immutable prepared check failed exit_status=0 diagnostic_category={category}"
+        )
+    return proc.stdout[-12000:]
 
 
 def verify_extension_sources(release: Path, release_manifest: dict, source_manifest: dict) -> list[dict]:

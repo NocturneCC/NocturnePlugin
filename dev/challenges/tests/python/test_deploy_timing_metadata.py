@@ -72,6 +72,81 @@ class SystemdStateParsingTests(unittest.TestCase):
         self.assertEqual("0", state["MainPID"])
 
 
+class PreparedCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.commit = "a" * 40
+        self.release = self.root / "releases" / self.commit
+        checker = self.release / "dev/intake/prepare_immutable_runtime.sh"
+        checker.parent.mkdir(parents=True)
+        checker.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        self.runtime_patch = mock.patch.object(deploy, "RUNTIME", self.root)
+        self.runtime_patch.start()
+        self.addCleanup(self.runtime_patch.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    @staticmethod
+    def completed(stdout: str, stderr: str = "", status: int = 0):
+        return __import__("subprocess").CompletedProcess([], status, stdout, stderr)
+
+    def test_prepared_success_uses_exact_release_wrapper_interface(self):
+        stdout = "status=prepared\ncheck_mode=read_only\ndiagnostic_end\n"
+        with mock.patch.object(deploy.subprocess, "run", return_value=self.completed(stdout)) as run:
+            self.assertEqual(stdout, deploy._prepared_check(self.release, self.commit, self.root))
+        args, kwargs = run.call_args
+        self.assertEqual(["/bin/bash", str(self.release / "dev/intake/prepare_immutable_runtime.sh"),
+                          "--check", self.commit], args[0])
+        self.assertEqual(90, kwargs["timeout"])
+        self.assertEqual({
+            "PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
+            "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(deploy.REPO),
+        }, kwargs["env"])
+
+    def test_unprepared_target_reports_exit_and_safe_category(self):
+        stdout = "status=not_prepared\ncheck_mode=read_only\n"
+        with mock.patch.object(deploy.subprocess, "run", return_value=self.completed(stdout, status=3)):
+            with self.assertRaisesRegex(deploy.DeployError, "exit_status=3 diagnostic_category=not_prepared"):
+                deploy._prepared_check(self.release, self.commit, self.root)
+
+    def test_nonzero_checker_exit_fails_even_if_status_says_prepared(self):
+        stdout = "status=prepared\ncheck_mode=read_only\n"
+        with mock.patch.object(deploy.subprocess, "run", return_value=self.completed(stdout, status=1)):
+            with self.assertRaisesRegex(deploy.DeployError, "exit_status=1 diagnostic_category=checker_nonzero_with_prepared_status"):
+                deploy._prepared_check(self.release, self.commit, self.root)
+
+    def test_malformed_output_is_rejected(self):
+        for stdout, category in (
+            ("status=prepared\n", "missing_check_mode"),
+            ("status=prepared\ncheck_mode=other\n", "unexpected_check_mode"),
+            ("status=prepared\ncheck_mode=read_only\nstatus=prepared\n", "duplicate_status"),
+            ("check_mode=read_only\n", "missing_status"),
+        ):
+            with self.subTest(category=category), mock.patch.object(
+                    deploy.subprocess, "run", return_value=self.completed(stdout)):
+                with self.assertRaisesRegex(deploy.DeployError, f"diagnostic_category={category}"):
+                    deploy._prepared_check(self.release, self.commit, self.root)
+
+    def test_commit_and_runtime_root_must_match_bound_release(self):
+        with mock.patch.object(deploy.subprocess, "run") as run:
+            with self.assertRaisesRegex(deploy.DeployError, "release_identity_mismatch"):
+                deploy._prepared_check(self.release, "b" * 40, self.root)
+            with self.assertRaisesRegex(deploy.DeployError, "wrong_runtime_root"):
+                deploy._prepared_check(self.release, self.commit, self.root / "other")
+        run.assert_not_called()
+
+    def test_stderr_is_not_copied_into_failure_diagnostics(self):
+        marker = "private checker diagnostic fixture only"
+        stdout = "status=unsafe_blocking\ncheck_mode=read_only\n"
+        with mock.patch.object(deploy.subprocess, "run",
+                               return_value=self.completed(stdout, stderr=marker, status=1)):
+            with self.assertRaises(deploy.DeployError) as caught:
+                deploy._prepared_check(self.release, self.commit, self.root)
+        self.assertNotIn(marker, str(caught.exception))
+        self.assertIn("diagnostic_category=unsafe_blocking", str(caught.exception))
+
 class FakeConfig:
     @staticmethod
     def config_document(conn):
