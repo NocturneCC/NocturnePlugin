@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import contextlib
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -436,26 +438,237 @@ def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
-def _db_facts(path: Path, config_module) -> dict[str, Any]:
-    uri = f"file:{path}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=10)
-    conn.row_factory = sqlite3.Row
+def _sqlite_error_category(exc: sqlite3.Error, fallback: str) -> str:
+    code = getattr(exc, "sqlite_errorcode", None)
+    message = str(exc).lower()
+    if ((code is not None and (code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}) or
+            "database is locked" in message or "database is busy" in message):
+        return "database_busy"
+    return fallback
+
+
+def _database_metadata(path: Path) -> dict[str, tuple[Any, ...]]:
+    """Validate stable DB/sidecar nodes and capture private content fingerprints."""
     try:
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        journal = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-        if integrity != "ok" or journal != "delete":
-            raise DeployError("Challenges.db integrity/journal profile is unsupported")
-        active = conn.execute("SELECT config_version_id FROM challenge_config_versions WHERE status='active'").fetchall()
-        if len(active) != 1 or int(active[0][0]) != 10:
-            raise DeployError("active Challenge version identity is not version 10")
-        document = config_module.config_document(conn)
-        if int(document.get("version_id", -1)) != 10:
-            raise DeployError("active config document is not version 10")
-        _validate_legacy_defaults(document)
-        return {"integrity": integrity, "journal_mode": journal, "active_version_id": 10,
-                "document": document, "counts": _table_counts(conn)}
+        _safe_parent(path)
+    except (OSError, DeployError):
+        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+    nodes: dict[str, tuple[Any, ...]] = {}
+    paths = [("main", path), *((suffix, Path(str(path) + suffix))
+                               for suffix in ("-wal", "-shm", "-journal"))]
+    main_identity = None
+    for label, node in paths:
+        try:
+            before = node.lstat()
+        except FileNotFoundError:
+            if label == "main":
+                raise DeployError("database inspection failed diagnostic_category=database_missing") from None
+            continue
+        except OSError:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+        if (not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_nlink != 1):
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        if before.st_size > 512 * 1024 * 1024:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        identity = (before.st_dev, before.st_ino, before.st_uid, before.st_gid,
+                    stat.S_IMODE(before.st_mode), before.st_nlink, before.st_size, before.st_mtime_ns)
+        if label == "main":
+            main_identity = identity
+            if path == DB and (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) != (1001, 33, 0o664):
+                raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        elif main_identity is not None and identity[2:5] != main_identity[2:5]:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        try:
+            acl_digest = _acl_hash(_acl_text(node))
+        except (OSError, DeployError):
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+        try:
+            after = node.lstat()
+        except OSError:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+        after_identity = (after.st_dev, after.st_ino, after.st_uid, after.st_gid,
+                          stat.S_IMODE(after.st_mode), after.st_nlink, after.st_size, after.st_mtime_ns)
+        if identity != after_identity:
+            category = "database_busy" if identity[:6] == after_identity[:6] else "unsafe_metadata"
+            raise DeployError(f"database inspection failed diagnostic_category={category}")
+        if not stat.S_ISREG(after.st_mode):
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        nodes[label] = (*identity, acl_digest, _safe_file_digest(node, identity))
+    if "main" not in nodes:
+        raise DeployError("database inspection failed diagnostic_category=database_missing")
+    return nodes
+
+
+def _safe_file_digest(path: Path, identity: tuple[int, ...]) -> str:
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+    digest = hashlib.sha256()
+    try:
+        before = os.fstat(fd)
+        current = (before.st_dev, before.st_ino, before.st_uid, before.st_gid,
+                   stat.S_IMODE(before.st_mode), before.st_nlink, before.st_size, before.st_mtime_ns)
+        if current[:6] != identity[:6]:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        if current[6:] != identity[6:]:
+            raise DeployError("database inspection failed diagnostic_category=database_busy")
+        total = 0
+        while block := os.read(fd, 1024 * 1024):
+            total += len(block)
+            if total > 512 * 1024 * 1024:
+                raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            digest.update(block)
+        after = os.fstat(fd)
+        final = (after.st_dev, after.st_ino, after.st_uid, after.st_gid,
+                 stat.S_IMODE(after.st_mode), after.st_nlink, after.st_size, after.st_mtime_ns)
+        try:
+            named = path.lstat()
+        except OSError:
+            raise DeployError("database inspection failed diagnostic_category=database_busy") from None
+        named_identity = (named.st_dev, named.st_ino, named.st_uid, named.st_gid,
+                         stat.S_IMODE(named.st_mode), named.st_nlink, named.st_size,
+                         named.st_mtime_ns)
+        if current[:6] != final[:6] or current[:6] != named_identity[:6]:
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        if current[6:] != final[6:] or current[6:] != named_identity[6:]:
+            raise DeployError("database inspection failed diagnostic_category=database_busy")
+        return digest.hexdigest()
     finally:
-        conn.close()
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def _readonly_database_snapshot(path: Path):
+    """Yield a WAL-aware mode=ro connection over a stable private byte snapshot.
+
+    SQLite's direct mode=ro WAL reader updates transient lock bytes in the live
+    -shm sidecar. A private main/WAL copy keeps inspection byte-for-byte
+    non-mutating while SQLite still applies committed WAL data (no immutable=1).
+    """
+    before = _database_metadata(path)
+    if "-journal" in before:
+        raise DeployError("database inspection failed diagnostic_category=database_busy")
+    with tempfile.TemporaryDirectory(prefix="nocturne-challenge-db-inspect-", dir="/tmp") as directory:
+        root = Path(directory)
+        root_st = root.lstat()
+        if (not stat.S_ISDIR(root_st.st_mode) or stat.S_ISLNK(root_st.st_mode) or
+                root_st.st_uid != os.geteuid() or stat.S_IMODE(root_st.st_mode) != 0o700):
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+        _require_basic_acl(root)
+        snapshot = root / path.name
+        for label, suffix in (("main", ""), ("-wal", "-wal")):
+            if label not in before:
+                continue
+            source = path if not suffix else Path(str(path) + suffix)
+            destination = Path(str(snapshot) + suffix)
+            src_fd = None
+            dst_fd = None
+            copied = hashlib.sha256()
+            try:
+                src_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                dst_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                 getattr(os, "O_NOFOLLOW", 0), 0o600)
+                os.fchmod(dst_fd, 0o600)
+                opened = os.fstat(src_fd)
+                expected = before[label][:8]
+                actual = (opened.st_dev, opened.st_ino, opened.st_uid, opened.st_gid,
+                          stat.S_IMODE(opened.st_mode), opened.st_nlink, opened.st_size, opened.st_mtime_ns)
+                if actual != expected:
+                    raise DeployError("database inspection failed diagnostic_category=database_busy")
+                total = 0
+                while block := os.read(src_fd, 1024 * 1024):
+                    total += len(block)
+                    if total > 512 * 1024 * 1024:
+                        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+                    copied.update(block)
+                    view = memoryview(block)
+                    while view:
+                        view = view[os.write(dst_fd, view):]
+                after = os.fstat(src_fd)
+                after_identity = (after.st_dev, after.st_ino, after.st_uid, after.st_gid,
+                                  stat.S_IMODE(after.st_mode), after.st_nlink, after.st_size, after.st_mtime_ns)
+                if after_identity != expected or copied.hexdigest() != before[label][9]:
+                    raise DeployError("database inspection failed diagnostic_category=database_busy")
+                os.fsync(dst_fd)
+                copied_st = os.fstat(dst_fd)
+                if (not stat.S_ISREG(copied_st.st_mode) or copied_st.st_nlink != 1 or
+                        copied_st.st_uid != os.geteuid() or stat.S_IMODE(copied_st.st_mode) != 0o600):
+                    raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            except OSError as exc:
+                category = "database_busy" if exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE} else "unsafe_metadata"
+                raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+            finally:
+                if src_fd is not None:
+                    os.close(src_fd)
+                if dst_fd is not None:
+                    os.close(dst_fd)
+        if _database_metadata(path) != before:
+            raise DeployError("database inspection failed diagnostic_category=database_busy")
+        uri = snapshot.as_uri() + "?mode=ro"
+        try:
+            conn = sqlite3.connect(uri, uri=True, timeout=10)
+        except sqlite3.Error as exc:
+            category = _sqlite_error_category(exc, "malformed_result")
+            raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def _inspect_sqlite_connection(conn: sqlite3.Connection,
+                               expected_journal_mode: str | None = None) -> dict[str, str]:
+    def one_text(sql: str) -> str:
+        try:
+            rows = conn.execute(sql).fetchall()
+        except sqlite3.Error as exc:
+            category = _sqlite_error_category(exc, "malformed_result")
+            raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+        if len(rows) != 1 or len(rows[0]) != 1 or not isinstance(rows[0][0], str):
+            raise DeployError("database inspection failed diagnostic_category=malformed_result")
+        return rows[0][0].lower()
+
+    try:
+        rows = conn.execute("PRAGMA integrity_check").fetchall()
+    except sqlite3.Error as exc:
+        category = _sqlite_error_category(exc, "integrity_failed")
+        raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+    if len(rows) != 1 or len(rows[0]) != 1:
+        raise DeployError("database inspection failed diagnostic_category=malformed_result")
+    if rows[0][0] != "ok":
+        raise DeployError("database inspection failed diagnostic_category=integrity_failed")
+    journal = one_text("PRAGMA journal_mode")
+    if expected_journal_mode is not None and journal != expected_journal_mode:
+        raise DeployError("database inspection failed diagnostic_category=unsupported_journal_mode")
+    locking = one_text("PRAGMA locking_mode")
+    if locking != "normal":
+        raise DeployError("database inspection failed diagnostic_category=unsupported_locking_mode")
+    return {"integrity": "ok", "journal_mode": journal, "locking_mode": locking}
+
+
+def _inspect_sqlite_profile(path: Path, *, expected_journal_mode: str | None = None) -> dict[str, str]:
+    with _readonly_database_snapshot(path) as conn:
+        return _inspect_sqlite_connection(conn, expected_journal_mode)
+
+
+def _db_facts(path: Path, config_module, *, expected_journal_mode: str | None = None) -> dict[str, Any]:
+    with _readonly_database_snapshot(path) as conn:
+        profile = _inspect_sqlite_connection(conn, expected_journal_mode)
+        conn.row_factory = sqlite3.Row
+        try:
+            active = conn.execute("SELECT config_version_id FROM challenge_config_versions WHERE status='active'").fetchall()
+            if len(active) != 1 or int(active[0][0]) != 10:
+                raise DeployError("active Challenge version identity is not version 10")
+            document = config_module.config_document(conn)
+            if int(document.get("version_id", -1)) != 10:
+                raise DeployError("active config document is not version 10")
+            _validate_legacy_defaults(document)
+            return {"integrity": profile["integrity"], "journal_mode": profile["journal_mode"], "active_version_id": 10,
+                    "document": document, "counts": _table_counts(conn)}
+        except sqlite3.Error as exc:
+            category = _sqlite_error_category(exc, "malformed_result")
+            raise DeployError(f"database inspection failed diagnostic_category={category}") from None
 
 
 def _legacy_projection(document: dict[str, Any]) -> dict[str, Any]:
@@ -858,11 +1071,8 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
     file_state = _validate_file_prestate(items)
     systemd = systemd or Systemd()
     units = _unit_snapshot(systemd, CONTROLLED)
-    db_st = database.lstat()
-    if not stat.S_ISREG(db_st.st_mode) or stat.S_ISLNK(db_st.st_mode) or db_st.st_nlink != 1:
-        raise DeployError("Challenges.db is not an ordinary single-link file")
     config_module = _load_config_module(release)
-    facts = _db_facts(database, config_module)
+    facts = _db_facts(database, config_module, expected_journal_mode="wal" if database == DB else None)
     return {
         "status": "already_current" if file_state == "after" and _has_columns(database) else "dry_run",
         "target": commit,
@@ -887,12 +1097,9 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
 
 
 def _has_columns(path: Path) -> bool:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
-    try:
+    with _readonly_database_snapshot(path) as conn:
         columns = {r[1] for r in conn.execute("PRAGMA table_info(challenge_config_bosses)")}
         return set(NEW_COLUMNS).issubset(columns)
-    finally:
-        conn.close()
 
 
 @dataclass
@@ -1026,7 +1233,8 @@ def _restore_transaction(tx: Transaction, systemd, commit: str) -> None:
             restored_meta = capture_file(tx.database_path)
             if restored_meta["sha256"] != _sha_file(tx.database_backup):
                 raise DeployError("restored database differs from verified SQLite backup")
-        restored = _db_facts(tx.database_path, tx.config_module)
+        restored = _db_facts(tx.database_path, tx.config_module,
+                             expected_journal_mode=tx.database_before.get("journal_mode"))
         if (restored["active_version_id"] != tx.database_before["active_version_id"] or
                 restored["counts"] != tx.database_before["counts"] or
                 _legacy_projection(restored["document"]) != _legacy_projection(tx.database_before["document"])):
@@ -1055,7 +1263,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         raise DeployError("plan/release identity changed before apply")
     state = _validate_file_prestate(items)
     config_module = _load_config_module(release)
-    before = _db_facts(database, config_module)
+    before = _db_facts(database, config_module, expected_journal_mode="wal" if database == DB else None)
     if before["active_version_id"] != 10:
         raise DeployError("active version changed before apply")
     if state == "after" and _has_columns(database):
@@ -1087,7 +1295,8 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         _backup_database(database, db_backup, _testing_owner_uid)
         if not _same_file_metadata(capture_file(database), original_db_meta):
             raise DeployError("Challenges.db changed during transactional backup")
-        backup_facts = _db_facts(db_backup, config_module)
+        backup_facts = _db_facts(db_backup, config_module,
+                                 expected_journal_mode=before.get("journal_mode"))
         if (backup_facts["active_version_id"] != before["active_version_id"] or
                 backup_facts["counts"] != before["counts"] or
                 _legacy_projection(backup_facts["document"]) != _legacy_projection(before["document"])):
@@ -1117,7 +1326,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         tx.db_changed = True
         _migrate(database, config_module, before, tx)
         if failpoint: failpoint("migration_complete")
-        after = _db_facts(database, config_module)
+        after = _db_facts(database, config_module, expected_journal_mode="delete")
         if after["counts"] != before["counts"] or _legacy_projection(before["document"]) != _legacy_projection(after["document"]):
             raise DeployError("post-migration Challenge data preservation check failed")
         check_conn = sqlite3.connect(database)

@@ -139,6 +139,160 @@ class GitCheckoutGateTests(unittest.TestCase):
                 self.assertNotIn("private stderr detail", str(caught.exception))
 
 
+class ReadOnlyDatabaseProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / "Challenges.db"
+
+    def create_db(self, journal="WAL"):
+        conn = sqlite3.connect(self.db)
+        conn.execute(f"PRAGMA journal_mode={journal}")
+        conn.execute("CREATE TABLE sample(value TEXT)")
+        conn.commit()
+        conn.close()
+        self.db.chmod(0o664)
+
+    def profile(self, *, expected="wal", fake_rows=None, fake_error=None):
+        if fake_rows is None and fake_error is None:
+            return deploy._inspect_sqlite_profile(self.db, expected_journal_mode=expected)
+
+        class Cursor:
+            def __init__(self, rows=None, error=None):
+                self.rows, self.error = rows, error
+
+            def fetchall(self):
+                if self.error:
+                    raise self.error
+                return self.rows
+
+        class Connection:
+            def execute(_self, sql):
+                if "integrity_check" in sql:
+                    return Cursor(fake_rows if fake_rows is not None else [("ok",)], fake_error)
+                if "journal_mode" in sql:
+                    return Cursor([("wal",)])
+                return Cursor([("normal",)])
+
+            def close(_self):
+                pass
+
+        with mock.patch.object(deploy.sqlite3, "connect", return_value=Connection()):
+            return deploy._inspect_sqlite_profile(self.db, expected_journal_mode=expected)
+
+    def test_wal_aware_read_only_sees_committed_wal_that_immutable_misses(self):
+        setup = sqlite3.connect(self.db)
+        setup.execute("CREATE TABLE sample(value TEXT)")
+        setup.commit()
+        setup.close()
+        writer = sqlite3.connect(self.db)
+        self.addCleanup(writer.close)
+        self.assertEqual("wal", writer.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("INSERT INTO sample VALUES('committed-in-wal')")
+        writer.commit()
+        self.db.chmod(0o664)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(self.db) + suffix)
+            self.assertTrue(sidecar.is_file())
+            sidecar.chmod(0o664)
+
+        def snapshot():
+            paths = [self.db, Path(str(self.db) + "-wal"), Path(str(self.db) + "-shm")]
+            return {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(),
+                                path.stat().st_ino, path.stat().st_size, stat.S_IMODE(path.stat().st_mode),
+                                path.stat().st_uid, path.stat().st_gid, path.stat().st_nlink)
+                    for path in paths}
+
+        before = snapshot()
+        profile = deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal")
+        self.assertEqual({"integrity": "ok", "journal_mode": "wal", "locking_mode": "normal"}, profile)
+        with deploy._readonly_database_snapshot(self.db) as ro:
+            self.assertEqual(1, ro.execute("SELECT COUNT(*) FROM sample").fetchone()[0])
+        immutable = sqlite3.connect(self.db.as_uri() + "?mode=ro&immutable=1", uri=True)
+        try:
+            self.assertEqual(0, immutable.execute("SELECT COUNT(*) FROM sample").fetchone()[0])
+        finally:
+            immutable.close()
+        self.assertEqual(before, snapshot(), "read-only dry-run inspection changed DB or sidecar state")
+
+    def test_healthy_wal_normal_integrity_profile_passes(self):
+        self.create_db()
+        self.assertEqual({"integrity": "ok", "journal_mode": "wal", "locking_mode": "normal"},
+                         deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal"))
+
+    def test_missing_database_has_distinct_category(self):
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_missing"):
+            deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal")
+
+    def test_unsafe_nodes_and_sidecars_are_rejected(self):
+        self.create_db(journal="DELETE")
+        link = self.root / "alias.db"
+        link.symlink_to(self.db)
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata"):
+            deploy._inspect_sqlite_profile(link)
+        extra = self.root / "hardlink.db"
+        os.link(self.db, extra)
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata"):
+            deploy._inspect_sqlite_profile(self.db)
+        extra.unlink()
+
+        self.db.chmod(0o600)
+        with mock.patch.object(deploy, "DB", self.db):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata"):
+                deploy._inspect_sqlite_profile(self.db)
+
+    def test_present_sidecar_must_match_main_owner_group_and_mode(self):
+        self.create_db()
+        wal = Path(str(self.db) + "-wal")
+        wal.write_bytes(b"fixture")
+        wal.chmod(0o600)
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata"):
+            deploy._database_metadata(self.db)
+
+    def test_integrity_journal_locking_and_malformed_profiles_fail_closed(self):
+        self.create_db()
+        def assert_profile_failure(category, integrity=None, journal="wal", locking="normal"):
+            if integrity is None:
+                integrity = [("ok",)]
+            class Cursor:
+                def __init__(self, rows): self.rows = rows
+                def fetchall(self): return self.rows
+            class Connection:
+                def execute(_self, sql):
+                    if "integrity_check" in sql: return Cursor(integrity)
+                    if "journal_mode" in sql: return Cursor([(journal,)])
+                    return Cursor([(locking,)])
+                def close(_self): pass
+            with mock.patch.object(deploy.sqlite3, "connect", return_value=Connection()):
+                with self.assertRaisesRegex(deploy.DeployError, f"diagnostic_category={category}"):
+                    deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal")
+
+        assert_profile_failure("integrity_failed", integrity=[("corrupt",)])
+        assert_profile_failure("malformed_result", integrity=[("ok",), ("extra",)])
+        assert_profile_failure("unsupported_journal_mode", journal="delete")
+        assert_profile_failure("unsupported_locking_mode", locking="exclusive")
+        assert_profile_failure("malformed_result", integrity=[])
+
+    def test_busy_error_is_bounded_and_sanitized(self):
+        self.create_db()
+        observed = {}
+        class Connection:
+            def execute(self, _sql): raise sqlite3.OperationalError("database is locked: private detail")
+            def close(self): pass
+        def connect(db_uri, **kwargs):
+            observed.update(uri=db_uri, kwargs=kwargs)
+            return Connection()
+        with mock.patch.object(deploy.sqlite3, "connect", side_effect=connect):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_busy") as caught:
+                deploy._inspect_sqlite_profile(self.db, expected_journal_mode="wal")
+        self.assertNotIn("private detail", str(caught.exception))
+        self.assertTrue(observed["uri"].startswith("file:") and observed["uri"].endswith("?mode=ro"))
+        self.assertNotIn("immutable=1", observed["uri"])
+        self.assertEqual(10, observed["kwargs"]["timeout"])
+
+
 class PreparedCheckTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
