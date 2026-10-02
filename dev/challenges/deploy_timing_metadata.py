@@ -623,7 +623,15 @@ class Systemd:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self.show(unit)
-            if state["ActiveState"] == "inactive" and state["SubState"] == "dead" and state["MainPID"] == "0":
+            # systemd does not define MainPID for timer units.  The parser
+            # intentionally accepts that documented shape; keep this waiter
+            # consistent while retaining the stricter service requirement.
+            main_pid = state.get("MainPID")
+            if not unit.endswith(".timer") and main_pid is None:
+                raise DeployError(f"service MainPID is missing while waiting inactive: {unit}")
+            pid_is_safe = main_pid in {None, "0"} if unit.endswith(".timer") else main_pid == "0"
+            if (state["ActiveState"] == "inactive" and state["SubState"] == "dead" and
+                    pid_is_safe):
                 return
             time.sleep(.2)
         raise DeployError(f"unit did not become inactive: {unit}")

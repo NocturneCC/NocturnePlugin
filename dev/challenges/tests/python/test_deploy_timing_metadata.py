@@ -63,6 +63,22 @@ class SystemdStateParsingTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(deploy.DeployError):
                 self.show("nocturne-challenge-shadow-sync.timer", output)
 
+    def test_wait_inactive_accepts_timer_without_mainpid_but_not_service_without_it(self):
+        class TimerOnlySystemd(deploy.Systemd):
+            def __init__(self, state):
+                self.state = state
+
+            def show(self, _unit):
+                return dict(self.state)
+
+        timer = TimerOnlySystemd({"Id": "challenge.timer", "LoadState": "loaded",
+                                  "ActiveState": "inactive", "SubState": "dead"})
+        timer.wait_inactive("challenge.timer", timeout=0.02)
+        service = TimerOnlySystemd({"Id": "challenge.service", "LoadState": "loaded",
+                                    "ActiveState": "inactive", "SubState": "dead"})
+        with self.assertRaisesRegex(deploy.DeployError, "MainPID is missing"):
+            service.wait_inactive("challenge.service", timeout=0.02)
+
     def test_service_still_requires_valid_mainpid(self):
         unit = "nocturne-challenge-intake.service"
         for pid in (None, "bad", "-1"):
@@ -1040,6 +1056,104 @@ class DeploymentTests(unittest.TestCase):
                 systemd=self.systemd, _testing_owner_uid=os.geteuid())
         self.assertEqual("installed", result["status"])
         self.assertEqual(["sidecar_gate", "backup", "migration"], events)
+
+    def test_full_apply_accepts_real_wal_metadata_and_timer_without_mainpid(self):
+        class SystemdWithoutTimerMainPID(FakeSystemd):
+            # Exercise the production waiter rather than the permissive fake
+            # waiter: systemd omits MainPID for timer units on this host.
+            wait_inactive = deploy.Systemd.wait_inactive
+
+            def show(self, unit):
+                state = dict(self.states[unit])
+                if unit.endswith(".timer"):
+                    state.pop("MainPID", None)
+                return state
+
+            def stop(self, unit):
+                super().stop(unit)
+                if unit.endswith(".timer"):
+                    self.states[unit].pop("MainPID", None)
+
+        events = []
+        connection = sqlite3.connect(self.db)
+        self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        connection.execute("INSERT INTO challenge_submissions VALUES(2)")
+        connection.commit()
+        for suffix in ("-wal", "-shm"):
+            Path(str(self.db) + suffix).chmod(0o664)
+        # Use the real metadata routine/return shape (main plus optional
+        # sidecars, each with identity, raw ACL digest, and content digest).
+        metadata = deploy._database_metadata(self.db)
+        self.assertEqual({"main", "-wal", "-shm"}, set(metadata))
+        self.assertTrue(all(len(value) == 10 for value in metadata.values()))
+        plan = self.make_plan()
+        original_gate = deploy._wait_for_no_sqlite_sidecars
+        original_backup = deploy._backup_files
+        original_migrate = deploy._migrate
+
+        def gate(*args, **kwargs):
+            events.append("sidecar_gate")
+            connection.close()
+            return original_gate(*args, **kwargs)
+
+        def backup(*args, **kwargs):
+            events.append("backup")
+            return original_backup(*args, **kwargs)
+
+        def migrate(*args, **kwargs):
+            events.append("migration")
+            return original_migrate(*args, **kwargs)
+
+        systemd = SystemdWithoutTimerMainPID()
+        with (mock.patch.object(deploy, "_wait_for_no_sqlite_sidecars", side_effect=gate),
+              mock.patch.object(deploy, "_backup_files", side_effect=backup),
+              mock.patch.object(deploy, "_migrate", side_effect=migrate)):
+            result = deploy.apply_install(
+                plan, commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
+                database=self.db, backup_root=self.backup_root, release=self.release,
+                systemd=systemd, _testing_owner_uid=os.geteuid())
+        self.assertEqual("installed", result["status"])
+        self.assertEqual(["sidecar_gate", "backup", "migration"], events)
+
+    def test_prebackup_failure_restores_units_and_leaves_schema_files_unchanged(self):
+        connection = sqlite3.connect(self.db)
+        self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        connection.execute("INSERT INTO challenge_submissions VALUES(2)")
+        connection.commit()
+        for suffix in ("-wal", "-shm"):
+            Path(str(self.db) + suffix).chmod(0o664)
+        plan = self.make_plan()
+        database_sha = deploy._sha_file(self.db)
+        sidecar_shas = {suffix: deploy._sha_file(Path(str(self.db) + suffix))
+                        for suffix in ("-wal", "-shm")}
+        targets = [target for _rel, _src, target, _sha, _meta in self.targets]
+        target_shas = [deploy._sha_file(target) for target in targets]
+        before_units = {unit: self.systemd.show(unit) for unit in deploy.CONTROLLED}
+        with mock.patch.object(deploy, "_wait_for_no_sqlite_sidecars",
+                               side_effect=deploy.DeployError("fixture pre-backup gate failure")):
+            with self.assertRaisesRegex(deploy.DeployError, "rolled back"):
+                deploy.apply_install(
+                    plan, commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
+                    database=self.db, backup_root=self.backup_root, release=self.release,
+                    systemd=self.systemd, _testing_owner_uid=os.geteuid())
+        self.assertEqual(database_sha, deploy._sha_file(self.db))
+        self.assertEqual(sidecar_shas, {suffix: deploy._sha_file(Path(str(self.db) + suffix))
+                                        for suffix in ("-wal", "-shm")})
+        self.assertEqual(target_shas, [deploy._sha_file(target) for target in targets])
+        self.assertFalse(deploy._has_columns(self.db))
+        for unit, state in before_units.items():
+            after = self.systemd.show(unit)
+            self.assertEqual(state["LoadState"], after["LoadState"])
+            self.assertEqual(state["ActiveState"], after["ActiveState"])
+            self.assertEqual(state["SubState"], after["SubState"])
+            if unit.endswith(".timer"):
+                self.assertEqual(state["MainPID"], after["MainPID"])
+            elif unit in deploy.LONG_SERVICES and state["ActiveState"] == "active":
+                self.assertGreater(int(after["MainPID"]), 0)
+        transaction_dirs = list(self.backup_root.glob(f"{FIXTURE_COMMIT}/*"))
+        self.assertEqual(1, len(transaction_dirs))
+        self.assertEqual([], list(transaction_dirs[0].iterdir()))
+        connection.close()
 
     def test_persistent_sidecar_aborts_before_database_mutation_and_restores_units(self):
         self.db.chmod(0o664)
