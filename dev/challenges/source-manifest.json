@@ -4,8 +4,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "b922884def09a0f6a3862caef6ca866d1a9204441e6dedfb151ab53b83d34bc1",
-      "size": 7847,
+      "sha256": "1bd6e8b418b99481d19242567c8c523e6bd8a7b1d3e00862f462ae8cde35bac8",
+      "size": 11680,
       "source": null,
       "type": "regular"
     },
@@ -70,6 +70,15 @@
       "sha256": "35abf7614191d04563ebe3c3cd44a66fb8ba22e4f74b56b368fa0453f7157040",
       "size": 4989,
       "source": "/srv/projects/nocturne-bot/utils/midgardChallengeIntake.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/deploy_timing_metadata.py",
+      "sha256": "86353d8fc8ecc701823f59b607d03971387d33ebb02a454df8d547ecf3ab28a0",
+      "size": 54134,
+      "source": null,
       "type": "regular"
     },
     {
@@ -371,6 +380,15 @@
       "sha256": "7fb12810a5cc427a347bb7e0dc7578325662e28d43ab472a126198f6cc91afdb",
       "size": 5719,
       "source": "/srv/projects/nocturne-services/tests/test_challenge_shadow.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_deploy_timing_metadata.py",
+      "sha256": "95b1b417976305a4dddde632ab451829e02d1fb57b9de12bf25b8fd06e1b5317",
+      "size": 18424,
+      "source": null,
       "type": "regular"
     },
     {
@@ -1315,8 +1333,8 @@
         "mode": "0775",
         "nlink": 1,
         "path": "/srv/projects/api/admin_app.py",
-        "sha256": "189d18bf52616c8df0ffe797952d70836b5129fe57e9ce92328575b51f1b76cc",
-        "size": 246728,
+        "sha256": "cf56b1acf4a6d68f31d1b0c7c7cdbf7644c12943c8a80248eb5d11b10f303b0c",
+        "size": 247491,
         "type": "regular",
         "uid": 1000
       },
@@ -1347,8 +1365,8 @@
         "mode": "0664",
         "nlink": 1,
         "path": "/srv/projects/website/admin.html",
-        "sha256": "2a85f1cbbeca38d1149c2650505bd496ab5fc6e23c5a40e01341c6b2fd7760fc",
-        "size": 32353,
+        "sha256": "8e0210f53694cef46216ee4102784c9822af0de565c7577cd995b223fd7f27dd",
+        "size": 32686,
         "type": "regular",
         "uid": 1001
       },
@@ -1367,8 +1385,8 @@
         "mode": "0775",
         "nlink": 1,
         "path": "/srv/projects/nocturne-services/api.py",
-        "sha256": "9a587d5dfc5f260d12503ae90199346c1780bc9be555e8a26382b7f123acb091",
-        "size": 268954,
+        "sha256": "eecc596775ebe51e42dd3df69cda5a4fd5211231b9d2e9d75230778a66860602",
+        "size": 269146,
         "type": "regular",
         "uid": 1001
       },

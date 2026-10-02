@@ -129,3 +129,73 @@ The active `Challenges.db` remains the sole published-config state. Updates
 must continue through the admin draft → validate → diff → explicit publish
 workflow. Do not edit the LKG or active database directly as part of source
 adoption.
+
+### Timing-metadata deployment support
+
+`deploy_timing_metadata.py` is a guarded, default-dry-run installer for the
+repository-owned timing/capture fields. It must be run only from a clean,
+published `development` checkout whose exact commit is also prepared as
+`/srv/nocturne-plugin/releases/<commit>`. The tool accepts the full commit SHA;
+it verifies the prepared release and its release/source manifests again before
+apply. The commit containing this tool is a direct child of the timing-metadata
+source baseline `4a48efec3149dd66e55fb02371e2aaeaf966a31f`. Preparing or applying
+that later tool commit is a separate operator action; this source commit does
+neither.
+
+The only installed source files are the immutable-release copies of:
+
+- `dev/challenges/service/challenge_config.py` →
+  `/srv/projects/nocturne-services/challenge_config.py`
+- `dev/challenges/website/challenge-admin.html` →
+  `/srv/projects/website/challenge-admin.html`
+- `dev/challenges/website/challenge-admin-state.js` →
+  `/srv/projects/website/challenge-admin-state.js`
+
+The live files must still match their pinned source-manifest SHA-256, owner,
+group, mode, single-link and ACL profile. Replacement is same-directory,
+atomic, fsynced, and preserves each file's existing ownership, mode and ACL.
+The tool does not change Nginx, systemd unit files, routes, the plugin `current`
+link, or the Challenge LKG cache.
+
+`challenge_config.py` is imported by `osrs-drops-api.service` (through
+`challenge_config_api.py`) and `nocturne-challenge-intake.service` (through
+`challenge_intake_api.py`). Those two long-running consumers are the only
+services restarted to load the changed Python module. During the additive
+SQLite migration, the tool pauses the active timers for the Challenge shadow
+sync, leaderboard shadow renderer, and CSV sheet sync, drains any currently
+running one-shot jobs, and stops API/intake. It restores only the previously
+active API/intake services and timers. The admin app does not import the changed
+module and is not restarted; its short read-only SQLite operations are allowed
+to drain against SQLite's exclusive migration lock. Nginx is not restarted.
+The shadow-sync and sheet-sync jobs are not rerun by the installer; their
+originally active timers resume afterward and load the installed module on
+their next ordinary run.
+
+Before migration the installer uses SQLite's online backup API to create and
+verify a private, transactionally consistent `Challenges.db` backup under
+`/var/backups/challenge-timing-metadata/<commit>/<transaction>/`. The migration
+is limited to `ALTER TABLE challenge_config_bosses ADD COLUMN <field> TEXT` for
+the seven nullable timing/capture fields; it performs no row updates, inserts,
+publication, draft rewrite, or LKG write. It verifies integrity, active version
+10, its normalized legacy defaults (`unconfigured`/`manual_only`), every user
+table's row count, and the semantic active document. Any failed install,
+migration, service start, or read-only runtime check restores the backed-up
+database and all three file snapshots before restoring the prior unit state.
+Backups are retained for operator review; the tool never prunes them.
+
+Dry-run and apply interfaces (the placeholder must be a full exact SHA):
+
+```sh
+sudo /usr/bin/python3.14 -B \
+  /srv/nocturne-plugin/releases/<commit>/dev/challenges/deploy_timing_metadata.py \
+  --dry-run --commit <commit>
+
+sudo /usr/bin/python3.14 -B \
+  /srv/nocturne-plugin/releases/<commit>/dev/challenges/deploy_timing_metadata.py \
+  --apply --commit <commit>
+```
+
+The expected brief service interruption is limited to the two Challenge API
+consumers and the three scheduled Challenge writers while SQLite schema DDL is
+performed. The installer must report `status=already_current` on a repeat
+without rewriting files or creating another backup.

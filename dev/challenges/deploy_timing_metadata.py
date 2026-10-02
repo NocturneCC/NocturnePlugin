@@ -1,0 +1,1111 @@
+#!/usr/bin/env python3
+"""Guarded installer for Challenge timing metadata.
+
+Default invocation is a read-only plan.  --apply is deliberately a separate,
+root-only operation and is intended to be run from its matching immutable
+release after that release has been prepared.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import fcntl
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+EXPECTED_PARENT = "4a48efec3149dd66e55fb02371e2aaeaf966a31f"
+REPO = Path("/srv/projects/nocturne-plugin-intake")
+RUNTIME = Path("/srv/nocturne-plugin")
+DB = Path("/srv/projects/database/Challenges.db")
+BACKUP_ROOT = Path("/var/backups/challenge-timing-metadata")
+SOURCE_MANIFEST = Path("dev/challenges/source-manifest.json")
+FILES = (
+    ("dev/challenges/service/challenge_config.py", Path("/srv/projects/nocturne-services/challenge_config.py")),
+    ("dev/challenges/website/challenge-admin.html", Path("/srv/projects/website/challenge-admin.html")),
+    ("dev/challenges/website/challenge-admin-state.js", Path("/srv/projects/website/challenge-admin-state.js")),
+)
+NEW_COLUMNS = (
+    "timing_scope", "timing_segment_key", "timing_segment_label",
+    "automatic_capture", "numeric_metric_key", "numeric_metric_label",
+    "numeric_metric_unit",
+)
+LONG_SERVICES = ("osrs-drops-api.service", "nocturne-challenge-intake.service")
+WRITER_SERVICES = (
+    "nocturne-challenge-shadow-sync.service",
+    "nocturne-leaderboard-shadow-renderer.service",
+    "nocturne-challenge-sheet-sync.service",
+)
+TIMERS = (
+    "nocturne-challenge-shadow-sync.timer",
+    "nocturne-leaderboard-shadow-renderer.timer",
+    "nocturne-challenge-sheet-sync.timer",
+)
+CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+LOCK_PATH = Path("/run/lock/nocturne-challenge-timing-deploy.lock")
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+def _sha_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha_file(path: Path) -> str:
+    h = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise DeployError(f"unsafe file node: {path}")
+        while block := os.read(fd, 1024 * 1024):
+            h.update(block)
+    finally:
+        os.close(fd)
+    return h.hexdigest()
+
+
+def _read_regular(path: Path, maximum: int = 32 * 1024 * 1024) -> bytes:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_nlink != 1 or before.st_size > maximum:
+        raise DeployError(f"unsafe or oversized regular file: {path}")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino, opened.st_uid, opened.st_gid, opened.st_mode, opened.st_nlink) != (
+                before.st_dev, before.st_ino, before.st_uid, before.st_gid, before.st_mode, before.st_nlink):
+            raise DeployError(f"file changed while opening: {path}")
+        chunks = []
+        total = 0
+        while block := os.read(fd, min(1024 * 1024, maximum + 1 - total)):
+            chunks.append(block)
+            total += len(block)
+            if total > maximum:
+                raise DeployError(f"file exceeded read bound: {path}")
+        after = os.fstat(fd)
+        named = path.lstat()
+        if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, after.st_size) or (
+                after.st_dev, after.st_ino, after.st_uid, after.st_gid, after.st_mode, after.st_nlink) != (
+                named.st_dev, named.st_ino, named.st_uid, named.st_gid, named.st_mode, named.st_nlink):
+            raise DeployError(f"file changed while reading: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _run(argv: list[str], *, timeout: int = 15, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(argv, input=input_text, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=timeout, check=False,
+                              env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DeployError(f"command failed safely: {Path(argv[0]).name}") from exc
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = _run(["/usr/bin/git", "-c", f"safe.directory={repo}", "-C", str(repo), *args])
+    if proc.returncode:
+        raise DeployError(f"git {args[0]} failed ({proc.returncode})")
+    return proc.stdout.strip()
+
+
+def verify_git(repo: Path, commit: str) -> None:
+    if not FULL_SHA.fullmatch(commit):
+        raise DeployError("deployment commit must be a full lowercase SHA")
+    branch = _git(repo, "branch", "--show-current")
+    head = _git(repo, "rev-parse", "HEAD")
+    remote = _git(repo, "rev-parse", "origin/development")
+    parent = _git(repo, "rev-parse", f"{commit}^")
+    status = _git(repo, "status", "--porcelain=v1", "--untracked-files=all")
+    if branch != "development" or head != commit or remote != commit or parent != EXPECTED_PARENT or status:
+        raise DeployError("checkout must be clean development with HEAD=origin/development=target")
+
+
+def _safe_parent(path: Path) -> None:
+    if not path.is_absolute() or ".." in path.parts:
+        raise DeployError(f"unsafe absolute target path: {path}")
+    current = Path(path.anchor)
+    for part in path.parts[1:-1]:
+        current /= part
+        st = current.lstat()
+        if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode):
+            raise DeployError(f"unsafe target parent: {current}")
+
+
+def _acl_text(path: Path) -> str:
+    proc = _run(["/usr/bin/getfacl", "--absolute-names", str(path)])
+    if proc.returncode:
+        raise DeployError(f"ACL inspection failed: {path}")
+    return proc.stdout
+
+
+def _acl_hash(text: str) -> str:
+    lines = [line.rstrip() for line in text.splitlines()
+             if line.strip() and not line.startswith("#")]
+    return _sha_bytes(("\n".join(lines) + "\n").encode())
+
+
+def capture_file(path: Path) -> dict[str, Any]:
+    _safe_parent(path)
+    st = path.lstat()
+    if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1:
+        raise DeployError(f"unsafe live file node: {path}")
+    digest = _sha_file(path)
+    after_hash = path.lstat()
+    if (st.st_dev, st.st_ino, st.st_uid, st.st_gid, st.st_mode, st.st_nlink) != (
+            after_hash.st_dev, after_hash.st_ino, after_hash.st_uid, after_hash.st_gid,
+            after_hash.st_mode, after_hash.st_nlink):
+        raise DeployError(f"file changed during metadata capture: {path}")
+    acl = _acl_text(path)
+    final = path.lstat()
+    if (st.st_dev, st.st_ino, st.st_uid, st.st_gid, st.st_mode, st.st_nlink) != (
+            final.st_dev, final.st_ino, final.st_uid, final.st_gid, final.st_mode, final.st_nlink):
+        raise DeployError(f"file changed during ACL capture: {path}")
+    return {"sha256": digest, "uid": st.st_uid, "gid": st.st_gid,
+            "mode": f"{stat.S_IMODE(st.st_mode):04o}", "nlink": st.st_nlink,
+            "size": st.st_size, "acl_sha256": _acl_hash(acl), "acl_text": acl}
+
+
+def _same_file_metadata(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    keys = ("sha256", "uid", "gid", "mode", "nlink", "size", "acl_sha256")
+    return all(left.get(key) == right.get(key) for key in keys)
+
+
+def _load_manifest(release: Path, commit: str, runtime_root: Path = RUNTIME) -> tuple[dict, dict]:
+    if release != runtime_root / "releases" / commit:
+        raise DeployError("release path is not the exact target release")
+    manifest_path = release / "RELEASE-MANIFEST.json"
+    manifest_st = manifest_path.lstat()
+    if not stat.S_ISREG(manifest_st.st_mode) or stat.S_ISLNK(manifest_st.st_mode):
+        raise DeployError("release manifest is not an ordinary file")
+    manifest = json.loads(_read_regular(manifest_path, 4 * 1024 * 1024))
+    if (manifest.get("purpose") != "nocturne-immutable-runtime-v1" or manifest.get("commit") != commit
+            or not isinstance(manifest.get("files"), dict)):
+        raise DeployError("release manifest identity/schema mismatch")
+    for rel, expected in manifest["files"].items():
+        relpath = Path(rel)
+        if relpath.is_absolute() or ".." in relpath.parts or not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
+            raise DeployError("unsafe release manifest entry")
+        candidate = release / relpath
+        if _sha_file(candidate) != expected:
+            raise DeployError(f"release file digest mismatch: {rel}")
+    sm_path = release / SOURCE_MANIFEST
+    if _sha_file(sm_path) != manifest["files"].get(SOURCE_MANIFEST.as_posix()):
+        raise DeployError("Challenge source manifest is not bound to the release")
+    sm = json.loads(_read_regular(sm_path, 16 * 1024 * 1024))
+    return manifest, sm
+
+
+def _bundle_records(source_manifest: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    bundles = source_manifest.get("bundle_files")
+    live = source_manifest.get("live_sources")
+    if not isinstance(bundles, list) or not isinstance(live, list):
+        raise DeployError("Challenge source manifest schema is incomplete")
+    by_path = {r.get("path"): r for r in bundles if isinstance(r, dict)}
+    live_by_path = {r.get("path"): r for r in live if isinstance(r, dict)}
+    if len(by_path) != len(bundles) or len(live_by_path) != len(live):
+        raise DeployError("duplicate source manifest path")
+    return by_path, live_by_path
+
+
+def _source_targets(release: Path, source_manifest: dict, release_manifest: dict) -> list[dict]:
+    bundle, live = _bundle_records(source_manifest)
+    result = []
+    for rel, target in FILES:
+        b = bundle.get(rel)
+        if not b or b.get("type") != "regular" or b.get("source_relationship") != "repository_owned_extension":
+            raise DeployError(f"repository-owned extension is not declared: {rel}")
+        expected_live = live.get(str(target))
+        if not expected_live or expected_live.get("type") != "regular":
+            raise DeployError(f"live baseline metadata is missing: {target}")
+        digest = b.get("sha256")
+        if release_manifest["files"].get(rel) != digest:
+            raise DeployError(f"release/source manifest mismatch: {rel}")
+        source = release / rel
+        if _sha_file(source) != digest:
+            raise DeployError(f"immutable source digest mismatch: {rel}")
+        result.append({"source_relative": rel, "source": source, "target": target,
+                       "after_sha256": digest, "after_size": int(b.get("size", -1)),
+                       "before": expected_live})
+    return result
+
+
+def _prepared_check(release: Path, commit: str, runtime_root: Path) -> str:
+    checker = release / "dev/intake/immutable_runtime_check.py"
+    proc = _run(["/usr/bin/python3.14", "-B", str(checker), "--repo", str(REPO),
+                 "--runtime-root", str(runtime_root), "--commit", commit, "--python", "/usr/bin/python3.14"], timeout=60)
+    output = (proc.stdout + proc.stderr)[-12000:]
+    if proc.returncode or "status=prepared" not in proc.stdout:
+        raise DeployError("canonical immutable prepared check failed")
+    return output
+
+
+def verify_extension_sources(release: Path, release_manifest: dict, source_manifest: dict) -> list[dict]:
+    return _source_targets(release, source_manifest, release_manifest)
+
+
+def _systemd_show(unit: str) -> dict[str, str]:
+    fields = ("Id", "LoadState", "ActiveState", "SubState", "Result", "MainPID")
+    proc = _run(["/usr/bin/systemctl", "show", unit, *(f"--property={x}" for x in fields)])
+    if proc.returncode:
+        raise DeployError(f"cannot inspect service state: {unit}")
+    result: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if not sep or key not in fields or key in result:
+            raise DeployError(f"ambiguous systemd state: {unit}")
+        result[key] = value
+    is_timer = unit.endswith(".timer")
+    required = set(fields) - {"Result"}
+    if is_timer:
+        required.discard("MainPID")
+    if not required.issubset(result) or result.get("Id") != unit:
+        raise DeployError(f"incomplete systemd state: {unit}")
+    if "MainPID" in result and not result["MainPID"].isdigit():
+        raise DeployError(f"malformed MainPID: {unit}")
+    if is_timer and result.get("MainPID", "0") != "0":
+        raise DeployError(f"timer unexpectedly has a process: {unit}")
+    if not is_timer and "MainPID" not in result:
+        raise DeployError(f"service MainPID is missing: {unit}")
+    if result["LoadState"] == "not-found":
+        if result["ActiveState"] != "inactive" or result["SubState"] != "dead":
+            raise DeployError(f"absent unit has an ambiguous state: {unit}")
+        return result
+    if result["LoadState"] != "loaded":
+        raise DeployError(f"unit not loaded: {unit}")
+    if result["ActiveState"] not in {"active", "inactive", "failed"}:
+        raise DeployError(f"unit state transitional: {unit}")
+    if result["ActiveState"] == "inactive" and result["SubState"] != "dead":
+        raise DeployError(f"inactive unit has an unexpected substate: {unit}")
+    if is_timer and result["ActiveState"] == "active" and result["SubState"] != "waiting":
+        raise DeployError(f"active timer has an unexpected substate: {unit}")
+    if result["ActiveState"] == "failed":
+        raise DeployError(f"unit is failed: {unit}")
+    return result
+
+
+class Systemd:
+    def show(self, unit: str) -> dict[str, str]:
+        return _systemd_show(unit)
+
+    def stop(self, unit: str) -> None:
+        proc = _run(["/usr/bin/systemctl", "stop", unit], timeout=30)
+        if proc.returncode:
+            raise DeployError(f"systemctl stop failed: {unit}")
+
+    def start(self, unit: str) -> None:
+        proc = _run(["/usr/bin/systemctl", "start", unit], timeout=30)
+        if proc.returncode:
+            raise DeployError(f"systemctl start failed: {unit}")
+
+    def wait_inactive(self, unit: str, timeout: float = 20) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.show(unit)
+            if state["ActiveState"] == "inactive" and state["SubState"] == "dead" and state["MainPID"] == "0":
+                return
+            time.sleep(.2)
+        raise DeployError(f"unit did not become inactive: {unit}")
+
+    def wait_active(self, unit: str, timeout: float = 30) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.show(unit)
+            if state["ActiveState"] == "active" and state["SubState"] == "running" and int(state["MainPID"]) > 0:
+                return
+            time.sleep(.25)
+        raise DeployError(f"unit did not become active: {unit}")
+
+    def wait_job_idle(self, unit: str, timeout: float = 40) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.show(unit)
+            if state["ActiveState"] == "inactive" and state["SubState"] == "dead" and state["MainPID"] == "0":
+                return
+            if state["ActiveState"] == "active" and state["SubState"] == "exited" and state["MainPID"] == "0":
+                return
+            if state["ActiveState"] == "failed":
+                raise DeployError(f"writer job failed before migration: {unit}")
+            time.sleep(.2)
+        raise DeployError(f"writer job did not finish before migration: {unit}")
+
+
+def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    counts = {}
+    for name in sorted(tables):
+        quoted = '"' + name.replace('"', '""') + '"'
+        try:
+            counts[name] = int(conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0])
+        except sqlite3.Error as exc:
+            raise DeployError("could not snapshot Challenge table row counts") from exc
+    required = {"challenge_config_versions", "challenge_config_bosses"}
+    if not required.issubset(tables):
+        raise DeployError("Challenge config schema is incomplete")
+    return counts
+
+
+def _db_facts(path: Path, config_module) -> dict[str, Any]:
+    uri = f"file:{path}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        journal = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if integrity != "ok" or journal != "delete":
+            raise DeployError("Challenges.db integrity/journal profile is unsupported")
+        active = conn.execute("SELECT config_version_id FROM challenge_config_versions WHERE status='active'").fetchall()
+        if len(active) != 1 or int(active[0][0]) != 10:
+            raise DeployError("active Challenge version identity is not version 10")
+        document = config_module.config_document(conn)
+        if int(document.get("version_id", -1)) != 10:
+            raise DeployError("active config document is not version 10")
+        _validate_legacy_defaults(document)
+        return {"integrity": integrity, "journal_mode": journal, "active_version_id": 10,
+                "document": document, "counts": _table_counts(conn)}
+    finally:
+        conn.close()
+
+
+def _legacy_projection(document: dict[str, Any]) -> dict[str, Any]:
+    value = copy.deepcopy(document)
+    for boss in value.get("bosses", []):
+        for key in NEW_COLUMNS:
+            boss.pop(key, None)
+    return value
+
+
+def _validate_legacy_defaults(document: dict[str, Any]) -> None:
+    for activity in document.get("bosses", []):
+        metric = str(activity.get("metric_type", "time")).lower()
+        if metric in {"time", "duration", "completion_time"}:
+            if activity.get("timing_scope") != "unconfigured" or activity.get("automatic_capture") != "manual_only":
+                raise DeployError("legacy time activity did not normalize to unconfigured/manual_only")
+        elif metric == "numeric" and activity.get("automatic_capture") != "manual_only":
+            raise DeployError("legacy numeric activity did not remain manual_only")
+
+
+def _schema_columns(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    return {row["name"]: row for row in conn.execute("PRAGMA table_info(challenge_config_bosses)")}
+
+
+def _validate_new_columns(conn: sqlite3.Connection) -> None:
+    columns = _schema_columns(conn)
+    for name in NEW_COLUMNS:
+        row = columns.get(name)
+        if row is None or str(row["type"]).upper() != "TEXT" or int(row["notnull"]) != 0 or row["dflt_value"] is not None:
+            raise DeployError(f"metadata column is not additive nullable TEXT: {name}")
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_private(path: Path, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _verify_private_file(path: Path, owner_uid: int = 0) -> None:
+    owner_gid = 0 if owner_uid == 0 else os.getegid()
+    st = path.lstat()
+    if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1 or
+            st.st_uid != owner_uid or st.st_gid != owner_gid or stat.S_IMODE(st.st_mode) != 0o600):
+        raise DeployError(f"unsafe private transaction file: {path.name}")
+
+
+def _ensure_private_dir(path: Path, owner_uid: int = 0) -> None:
+    owner_gid = 0 if owner_uid == 0 else os.getegid()
+    if path.exists():
+        st = path.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_uid != owner_uid or
+                st.st_gid != owner_gid or stat.S_IMODE(st.st_mode) != 0o700 or st.st_nlink < 2 or os.path.ismount(path)):
+            raise DeployError(f"unsafe backup directory: {path}")
+        _require_basic_acl(path)
+        return
+    path.mkdir(mode=0o700)
+    os.chown(path, owner_uid, os.getegid() if owner_uid != 0 else 0)
+    os.chmod(path, 0o700)
+    _require_basic_acl(path)
+    _fsync_dir(path.parent)
+
+
+def _require_basic_acl(path: Path) -> None:
+    text = _acl_text(path)
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("default:"):
+            raise DeployError(f"default ACL forbidden on private backup node: {path}")
+        if line.startswith("user:") and not line.startswith("user::"):
+            raise DeployError(f"named ACL forbidden on private backup node: {path}")
+        if line.startswith("group:") and not line.startswith("group::"):
+            raise DeployError(f"named ACL forbidden on private backup node: {path}")
+        if line.startswith("mask::"):
+            raise DeployError(f"extended ACL mask forbidden on private backup node: {path}")
+
+
+def _atomic_replace(path: Path, data: bytes, meta: dict[str, Any]) -> None:
+    parent = path.parent
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.timing-", dir=parent)
+    temp = Path(temporary)
+    try:
+        os.fchown(fd, int(meta["uid"]), int(meta["gid"]))
+        os.fchmod(fd, int(str(meta["mode"]), 8))
+        with os.fdopen(fd, "wb", closefd=False) as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(fd)
+        proc = _run(["/usr/bin/setfacl", "--set-file=-", str(temp)], input_text=meta["acl_text"])
+        if proc.returncode:
+            raise DeployError("cannot reproduce captured ACL on temporary file")
+        os.fsync(fd)
+        os.replace(temp, path)
+        _fsync_dir(parent)
+        actual = capture_file(path)
+        if (actual["sha256"] != _sha_bytes(data) or actual["uid"] != meta["uid"] or
+                actual["gid"] != meta["gid"] or actual["mode"] != meta["mode"] or
+                actual["nlink"] != 1 or actual["acl_sha256"] != meta["acl_sha256"]):
+            raise DeployError(f"installed file metadata/content mismatch: {path}")
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if temp.exists():
+            temp.unlink()
+
+
+def _backup_database(source: Path, destination: Path, owner_uid: int = 0) -> None:
+    if os.path.lexists(destination):
+        raise DeployError("SQLite backup destination already exists")
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=15)
+    dst = sqlite3.connect(destination, timeout=15)
+    try:
+        src.backup(dst, pages=256, sleep=.05)
+        dst.commit()
+        if dst.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise DeployError("SQLite backup integrity verification failed")
+    finally:
+        dst.close()
+        src.close()
+    os.chmod(destination, 0o600)
+    os.chown(destination, owner_uid, os.getegid() if owner_uid != 0 else 0)
+    st = destination.lstat()
+    if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1 or
+            st.st_uid != owner_uid or stat.S_IMODE(st.st_mode) != 0o600):
+        raise DeployError("SQLite backup file metadata is unsafe")
+    _require_basic_acl(destination)
+    fd = os.open(destination, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _fsync_dir(destination.parent)
+
+
+def _copy_restore_database(backup: Path, target: Path, original: dict[str, Any]) -> None:
+    for suffix in ("-journal", "-wal", "-shm"):
+        if os.path.lexists(Path(str(target) + suffix)):
+            raise DeployError("database sidecar prevents safe rollback")
+    backup_stat = backup.lstat()
+    if (not stat.S_ISREG(backup_stat.st_mode) or stat.S_ISLNK(backup_stat.st_mode) or
+            backup_stat.st_nlink != 1 or stat.S_IMODE(backup_stat.st_mode) != 0o600 or
+            backup_stat.st_uid not in {0, int(original["uid"])}):
+        raise DeployError("database rollback backup metadata is unsafe")
+    _require_basic_acl(backup)
+    backup_fd = os.open(backup, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    if os.fstat(backup_fd).st_ino != backup_stat.st_ino or os.fstat(backup_fd).st_dev != backup_stat.st_dev:
+        os.close(backup_fd)
+        raise DeployError("database rollback backup changed before read")
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.restore-", dir=target.parent)
+    temp = Path(temporary)
+    try:
+        os.fchown(fd, int(original["uid"]), int(original["gid"]))
+        os.fchmod(fd, int(original["mode"], 8))
+        with os.fdopen(fd, "wb", closefd=False) as stream, os.fdopen(backup_fd, "rb", closefd=False) as source:
+            shutil.copyfileobj(source, stream, 1024 * 1024)
+            stream.flush()
+            os.fsync(fd)
+        acl = _run(["/usr/bin/setfacl", "--set-file=-", str(temp)], input_text=original["acl_text"])
+        if acl.returncode:
+            raise DeployError("cannot restore database ACL")
+        os.fsync(fd)
+        os.replace(temp, target)
+        _fsync_dir(target.parent)
+        if _sha_file(target) != _sha_file(backup):
+            raise DeployError("restored database digest verification failed")
+    finally:
+        try:
+            os.close(backup_fd)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if temp.exists():
+            temp.unlink()
+
+
+def _load_config_module(release: Path):
+    source = release / "dev/challenges/service/challenge_config.py"
+    sys.path.insert(0, str(source.parent))
+    spec = importlib.util.spec_from_file_location("challenge_config_deploy_target", source)
+    if spec is None or spec.loader is None:
+        raise DeployError("cannot load target Challenge config module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _http_json(url: str, *, expected: set[int] = {200}, maximum: int = 2 * 1024 * 1024) -> tuple[int, dict[str, Any] | None]:
+    import urllib.error
+    import urllib.request
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, response, code, message, headers, new_url):
+            return None
+    request = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(request, timeout=4)
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        exc.close()
+        if status not in expected:
+            raise DeployError(f"local endpoint returned unexpected HTTP {status}")
+        return status, None
+    except (OSError, TimeoutError) as exc:
+        raise DeployError("local service health request failed") from exc
+    with response:
+        status = int(response.status)
+        if status not in expected:
+            raise DeployError(f"local endpoint returned unexpected HTTP {status}")
+        body = response.read(maximum + 1)
+        if len(body) > maximum:
+            raise DeployError("local health response exceeded bound")
+        if status != 200:
+            return status, None
+        try:
+            payload = json.loads(body)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise DeployError("local health response was not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise DeployError("local health response shape is invalid")
+        return status, payload
+
+
+def verify_live_behavior(expected_document: dict[str, Any]) -> dict[str, Any]:
+    """Read-only bounded probes; response contents are never emitted."""
+    _status, intake_health = _http_json("http://127.0.0.1:5011/health")
+    if not intake_health or intake_health.get("ok") is not True:
+        raise DeployError("Challenge intake health response failed")
+    _status, public_config = _http_json("http://127.0.0.1:5002/api/challenges/config/active")
+    if not public_config or public_config.get("version_id") != 10:
+        raise DeployError("public active Challenge config is not version 10")
+    if not isinstance(public_config.get("bosses"), list):
+        raise DeployError("public active Challenge config response is invalid")
+    normalized_public = {key: value for key, value in public_config.items() if key != "ok"}
+    if normalized_public.get("version_id") != 10 or not isinstance(normalized_public.get("bosses"), list):
+        raise DeployError("public active config identity/schema is invalid")
+    if normalized_public != expected_document:
+        raise DeployError("public active config differs from the preserved version 10 document")
+    _validate_legacy_defaults(normalized_public)
+    _status, leaderboard = _http_json("http://127.0.0.1:5002/api/leaderboards/modes")
+    if not leaderboard or leaderboard.get("ok") is not True:
+        raise DeployError("Challenge leaderboard read verification failed")
+    # Deliberately test the existing auth gate without presenting or revealing
+    # a cookie: the focused API/admin suite exercises the authenticated path.
+    admin_status, _ = _http_json(
+        "http://127.0.0.1:5003/admin/api/challenges/config/published",
+        expected={200, 302, 401, 403},
+    )
+    if admin_status == 200:
+        raise DeployError("admin API unexpectedly permitted an unauthenticated request")
+    if expected_document.get("version_id") != 10:
+        raise DeployError("expected active Challenge version identity is invalid")
+    return {"intake_health": "ok", "public_active_config": "ok",
+            "active_version_id": 10, "leaderboard_read": "ok",
+            "admin_auth_gate": "protected", "manual_submission": "unchanged; no submission sent"}
+
+
+def _migrate(path: Path, config_module, before: dict[str, Any], tx: "Transaction") -> None:
+    conn = sqlite3.connect(path, timeout=20, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout=20000")
+        conn.execute("BEGIN EXCLUSIVE")
+        if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "delete":
+            raise DeployError("Challenges.db journal mode changed during migration")
+        columns = _schema_columns(conn)
+        for name in NEW_COLUMNS:
+            if name not in columns:
+                conn.execute(f'ALTER TABLE challenge_config_bosses ADD COLUMN "{name}" TEXT')
+        _validate_new_columns(conn)
+        after_doc = config_module.config_document(conn)
+        if int(after_doc.get("version_id", -1)) != 10:
+            raise DeployError("active version changed during migration")
+        _validate_legacy_defaults(after_doc)
+        if _legacy_projection(before["document"]) != _legacy_projection(after_doc):
+            raise DeployError("active version 10 changed semantically")
+        if _table_counts(conn) != before["counts"]:
+            raise DeployError("Challenge row counts changed during metadata migration")
+        conn.commit()
+        tx.database_after_meta = capture_file(path)
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _unit_snapshot(systemd, units: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    snapshot = {}
+    for unit in units:
+        state = systemd.show(unit)
+        if state["LoadState"] == "not-found":
+            # An absent optional writer/timer is an explicit safe predecessor state.
+            if unit in LONG_SERVICES:
+                raise DeployError(f"required Challenge consumer unit is absent: {unit}")
+        elif state["ActiveState"] not in {"active", "inactive"}:
+            raise DeployError(f"unit is failed or transitional: {unit}")
+        if unit in LONG_SERVICES and (state["ActiveState"] != "active" or state["SubState"] != "running" or int(state["MainPID"]) <= 0):
+            raise DeployError(f"required import consumer is not active/running: {unit}")
+        snapshot[unit] = state
+    return snapshot
+
+
+def _stop_for_migration(systemd, snapshot: dict[str, dict[str, str]]) -> None:
+    # Suspend timers first so no Challenge writer can launch during the DDL.
+    for unit in TIMERS:
+        state = snapshot[unit]
+        if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
+            systemd.stop(unit)
+            systemd.wait_inactive(unit)
+    # Stop persistent consumers and any already-running writer one-shots.
+    for unit in LONG_SERVICES:
+        state = snapshot[unit]
+        if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
+            systemd.stop(unit)
+            systemd.wait_inactive(unit)
+    for unit in WRITER_SERVICES:
+        state = snapshot[unit]
+        if state["LoadState"] == "loaded" and state["ActiveState"] == "active" and state["SubState"] != "exited":
+            systemd.wait_job_idle(unit)
+
+
+def _restore_units(systemd, snapshot: dict[str, dict[str, str]]) -> None:
+    failures = []
+    # Services first, then timers, preserving only originally active units.
+    for unit in LONG_SERVICES:
+        state = snapshot.get(unit, {})
+        if state.get("LoadState") == "loaded" and state.get("ActiveState") == "active":
+            try:
+                systemd.start(unit)
+                systemd.wait_active(unit)
+            except Exception:
+                failures.append(unit)
+    for unit in TIMERS:
+        state = snapshot.get(unit, {})
+        if state.get("LoadState") == "loaded" and state.get("ActiveState") == "active":
+            try:
+                systemd.start(unit)
+            except Exception:
+                failures.append(unit)
+    if failures:
+        raise DeployError("could not restore original Challenge unit state")
+
+
+def _verify_installed(path: Path, item: dict[str, Any]) -> None:
+    state = capture_file(path)
+    baseline = item["before"]
+    if (state["sha256"] != item["after_sha256"] or state["uid"] != baseline["uid"] or
+            state["gid"] != baseline["gid"] or state["mode"] != baseline["mode"] or
+            state["size"] != item["after_size"] or state["nlink"] != 1 or
+            state["acl_sha256"] != baseline["acl_sha256"]):
+        raise DeployError(f"installed target verification failed: {path}")
+
+
+def _validate_file_prestate(items: list[dict[str, Any]]) -> str:
+    states = []
+    for item in items:
+        actual = capture_file(item["target"])
+        expected = item["before"]
+        expected_size = expected.get("size") if actual["sha256"] == expected.get("sha256") else item["after_size"]
+        if (actual["uid"] != expected.get("uid") or actual["gid"] != expected.get("gid") or
+                actual["mode"] != expected.get("mode") or actual["nlink"] != expected.get("nlink") or
+                actual["size"] != expected_size or actual["acl_sha256"] != expected.get("acl_sha256")):
+            raise DeployError(f"live target metadata drift: {item['target']}")
+        if actual["sha256"] not in {expected.get("sha256"), item["after_sha256"]}:
+            raise DeployError(f"live target content drift: {item['target']}")
+        states.append("after" if actual["sha256"] == item["after_sha256"] else "before")
+    if len(set(states)) != 1:
+        raise DeployError("mixed old/new live file set; recover before retrying")
+    return states[0]
+
+
+def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
+              database: Path = DB, release: Path | None = None, systemd=None) -> dict[str, Any]:
+    verify_git(repo, commit)
+    release = release or runtime_root / "releases" / commit
+    rel_manifest, source_manifest = _load_manifest(release, commit, runtime_root)
+    items = verify_extension_sources(release, rel_manifest, source_manifest)
+    prepared_output = _prepared_check(release, commit, runtime_root)
+    file_state = _validate_file_prestate(items)
+    systemd = systemd or Systemd()
+    units = _unit_snapshot(systemd, CONTROLLED)
+    db_st = database.lstat()
+    if not stat.S_ISREG(db_st.st_mode) or stat.S_ISLNK(db_st.st_mode) or db_st.st_nlink != 1:
+        raise DeployError("Challenges.db is not an ordinary single-link file")
+    config_module = _load_config_module(release)
+    facts = _db_facts(database, config_module)
+    return {
+        "status": "already_current" if file_state == "after" and _has_columns(database) else "dry_run",
+        "target": commit,
+        "release_manifest_sha256": _sha_file(release / "RELEASE-MANIFEST.json"),
+        "prepared": True,
+        "source_files": [{"release_path": x["source_relative"], "target": str(x["target"]),
+                          "before_sha256": x["before"]["sha256"], "after_sha256": x["after_sha256"]} for x in items],
+        "file_set": file_state,
+        "active_version_id": facts["active_version_id"],
+        "database_integrity": facts["integrity"],
+        "schema_columns_present": _has_columns(database),
+        "service_units": {name: {k: v for k, v in state.items() if k != "Result"}
+                          for name, state in units.items()},
+        "pause_if_active": list(TIMERS),
+        "drain_if_running": list(WRITER_SERVICES),
+        "stop_and_restart_if_active": list(LONG_SERVICES),
+        "services_restarted_for_imports": list(LONG_SERVICES),
+        "nginx_changed": False,
+        "announcement_version_published": False,
+        "prepared_check_summary_sha256": _sha_bytes(prepared_output.encode()),
+    }
+
+
+def _has_columns(path: Path) -> bool:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+    try:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(challenge_config_bosses)")}
+        return set(NEW_COLUMNS).issubset(columns)
+    finally:
+        conn.close()
+
+
+@dataclass
+class Transaction:
+    backup_dir: Path
+    database_backup: Path
+    database_before: dict[str, Any]
+    original_db_meta: dict[str, Any]
+    item_backups: list[tuple[dict[str, Any], bytes, dict[str, Any]]]
+    units: dict[str, dict[str, str]]
+    installed: list[dict[str, Any]]
+    config_module: Any
+    database_path: Path
+    db_changed: bool = False
+    database_after_meta: dict[str, Any] | None = None
+
+
+def _create_backup_dir(root: Path, commit: str, owner_uid: int = 0) -> Path:
+    _ensure_private_dir(root, owner_uid)
+    commit_dir = root / commit
+    if not commit_dir.exists():
+        commit_dir.mkdir(mode=0o700)
+        os.chown(commit_dir, owner_uid, os.getegid() if owner_uid != 0 else 0)
+        os.chmod(commit_dir, 0o700)
+        _fsync_dir(root)
+    _ensure_private_dir(commit_dir, owner_uid)
+    txn = commit_dir / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:12])
+    txn.mkdir(mode=0o700)
+    os.chown(txn, owner_uid, os.getegid() if owner_uid != 0 else 0)
+    os.chmod(txn, 0o700)
+    _ensure_private_dir(txn, owner_uid)
+    _fsync_dir(commit_dir)
+    return txn
+
+
+def _deployment_lock(path: Path = LOCK_PATH) -> int:
+    st_parent = path.parent.lstat()
+    if (not stat.S_ISDIR(st_parent.st_mode) or stat.S_ISLNK(st_parent.st_mode) or
+            st_parent.st_uid != 0 or stat.S_IMODE(st_parent.st_mode) & 0o022):
+        raise DeployError("deployment lock parent is unsafe")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    st = os.fstat(fd)
+    if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != 0 or
+            stat.S_IMODE(st.st_mode) != 0o600):
+        os.close(fd)
+        raise DeployError("deployment lock file is unsafe")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        raise DeployError("another Challenge timing deployment is active") from exc
+    return fd
+
+
+def _backup_files(items: list[dict[str, Any]], backup_dir: Path) -> list[tuple[dict[str, Any], bytes, dict[str, Any]]]:
+    backups = []
+    records = []
+    for index, item in enumerate(items):
+        state = capture_file(item["target"])
+        data = _read_regular(item["target"], max(state["size"] + 1, 1))
+        if _sha_bytes(data) != state["sha256"]:
+            raise DeployError("target changed while creating backup")
+        backup_path = backup_dir / f"file-{index}.backup"
+        _write_private(backup_path, data)
+        _verify_private_file(backup_path, os.geteuid())
+        backups.append((item, data, state))
+        records.append({"target": str(item["target"]), "backup": backup_path.name,
+                        "sha256": state["sha256"], "uid": state["uid"], "gid": state["gid"],
+                        "mode": state["mode"], "nlink": state["nlink"], "acl_sha256": state["acl_sha256"],
+                        "acl_text": state["acl_text"]})
+    _write_private(backup_dir / "file-backups.json", json.dumps(records, sort_keys=True, separators=(",", ":")).encode())
+    _verify_private_file(backup_dir / "file-backups.json", os.geteuid())
+    _fsync_dir(backup_dir)
+    return backups
+
+
+def _write_tx_record(tx: Transaction, commit: str, state: str) -> None:
+    record = {"schema": 1, "target": commit, "state": state,
+              "database_backup_sha256": _sha_file(tx.database_backup),
+              "database_before": {"sha256": tx.original_db_meta["sha256"],
+                                  "uid": tx.original_db_meta["uid"], "gid": tx.original_db_meta["gid"],
+                                  "mode": tx.original_db_meta["mode"], "nlink": tx.original_db_meta["nlink"],
+                                  "acl_sha256": tx.original_db_meta["acl_sha256"],
+                                  "acl_text": tx.original_db_meta["acl_text"],
+                                  "integrity": tx.database_before["integrity"],
+                                  "active_version_id": tx.database_before["active_version_id"],
+                                  "table_counts": tx.database_before["counts"]},
+              "prior_units": tx.units,
+              "files": [{"target": str(item["target"]), "before_sha256": meta["sha256"],
+                         "after_sha256": item["after_sha256"], "uid": meta["uid"],
+                         "gid": meta["gid"], "mode": meta["mode"], "nlink": meta["nlink"],
+                         "acl_sha256": meta["acl_sha256"], "acl_text": meta["acl_text"]}
+                        for item, _data, meta in tx.item_backups]}
+    path = tx.backup_dir / "transaction.json"
+    temp = tx.backup_dir / ".transaction.tmp"
+    if temp.exists():
+        raise DeployError("unexpected transaction record temporary exists")
+    _write_private(temp, json.dumps(record, sort_keys=True, separators=(",", ":")).encode())
+    _verify_private_file(temp, os.geteuid())
+    os.replace(temp, path)
+    _fsync_dir(tx.backup_dir)
+
+
+def _restore_transaction(tx: Transaction, systemd, commit: str) -> None:
+    # Do not replace a database/file while a process may still have it open.
+    for unit in (*TIMERS, *LONG_SERVICES, *WRITER_SERVICES):
+        state = systemd.show(unit)
+        if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
+            systemd.stop(unit)
+            systemd.wait_inactive(unit)
+    database_state = None
+    if tx.db_changed:
+        database_state = capture_file(tx.database_path)
+        if (not _same_file_metadata(database_state, tx.original_db_meta) and
+                not (tx.database_after_meta and _same_file_metadata(database_state, tx.database_after_meta))):
+            raise DeployError("database changed outside the guarded migration; refusing rollback overwrite")
+    restore_files: list[tuple[dict[str, Any], bytes, dict[str, Any]]] = []
+    for item, data, meta in reversed(tx.item_backups):
+        current = capture_file(item["target"])
+        if _same_file_metadata(current, meta):
+            continue
+        if (current["sha256"] != item["after_sha256"] or current["uid"] != meta["uid"] or
+                current["gid"] != meta["gid"] or current["mode"] != meta["mode"] or
+                current["nlink"] != 1 or current["acl_sha256"] != meta["acl_sha256"] or
+                current["size"] != item["after_size"]):
+            raise DeployError("live file changed outside the guarded install; refusing rollback overwrite")
+        restore_files.append((item, data, meta))
+    if tx.db_changed:
+        if database_state and not _same_file_metadata(database_state, tx.original_db_meta):
+            _copy_restore_database(tx.database_backup, tx.database_path, tx.original_db_meta)
+            restored_meta = capture_file(tx.database_path)
+            if restored_meta["sha256"] != _sha_file(tx.database_backup):
+                raise DeployError("restored database differs from verified SQLite backup")
+        restored = _db_facts(tx.database_path, tx.config_module)
+        if (restored["active_version_id"] != tx.database_before["active_version_id"] or
+                restored["counts"] != tx.database_before["counts"] or
+                _legacy_projection(restored["document"]) != _legacy_projection(tx.database_before["document"])):
+            raise DeployError("restored database does not match transaction pre-state")
+    for item, data, meta in restore_files:
+        _atomic_replace(item["target"], data, meta)
+    _restore_units(systemd, tx.units)
+    _write_tx_record(tx, commit, "rolled_back")
+
+
+def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
+                  runtime_root: Path = RUNTIME, database: Path = DB,
+                  backup_root: Path = BACKUP_ROOT, release: Path | None = None,
+                  systemd=None, failpoint: Callable[[str], None] | None = None,
+                  _testing_owner_uid: int = 0) -> dict[str, Any]:
+    if os.geteuid() != 0 and _testing_owner_uid == 0:
+        raise DeployError("--apply requires root")
+    if database != DB and _testing_owner_uid == 0:
+        raise DeployError("production database path is fixed")
+    systemd = systemd or Systemd()
+    release = release or runtime_root / "releases" / commit
+    rel_manifest, source_manifest = _load_manifest(release, commit, runtime_root)
+    items = verify_extension_sources(release, rel_manifest, source_manifest)
+    verify_git(repo, commit)
+    if plan.get("target") != commit or plan.get("release_manifest_sha256") != _sha_file(release / "RELEASE-MANIFEST.json"):
+        raise DeployError("plan/release identity changed before apply")
+    state = _validate_file_prestate(items)
+    config_module = _load_config_module(release)
+    before = _db_facts(database, config_module)
+    if before["active_version_id"] != 10:
+        raise DeployError("active version changed before apply")
+    if state == "after" and _has_columns(database):
+        check_conn = sqlite3.connect(database)
+        try:
+            _validate_new_columns(check_conn)
+        finally:
+            check_conn.close()
+        return {"status": "already_current", "target": commit, "active_version_id": 10,
+                "database_integrity": before["integrity"], "nginx_changed": False,
+                "configuration_version_published": False}
+    if state == "after" or _has_columns(database):
+        raise DeployError("partial file/schema state requires operator recovery")
+    original_db_meta = capture_file(database)
+    sidecars = [Path(str(database) + suffix) for suffix in ("-journal", "-wal", "-shm")]
+    if any(os.path.lexists(path) for path in sidecars):
+        raise DeployError("SQLite sidecar present before migration")
+    units = _unit_snapshot(systemd, CONTROLLED)
+    backup_dir = _create_backup_dir(backup_root, commit, _testing_owner_uid)
+    db_backup = backup_dir / "Challenges.db.sqlite-backup"
+    item_backups: list[tuple[dict[str, Any], bytes, dict[str, Any]]] = []
+    tx = Transaction(backup_dir, db_backup, before, original_db_meta, item_backups, units, [], config_module, database)
+    try:
+        _stop_for_migration(systemd, units)
+        if not _same_file_metadata(capture_file(database), original_db_meta):
+            raise DeployError("Challenges.db changed while services were quiescing")
+        item_backups = _backup_files(items, backup_dir)
+        tx.item_backups = item_backups
+        _backup_database(database, db_backup, _testing_owner_uid)
+        if not _same_file_metadata(capture_file(database), original_db_meta):
+            raise DeployError("Challenges.db changed during transactional backup")
+        backup_facts = _db_facts(db_backup, config_module)
+        if (backup_facts["active_version_id"] != before["active_version_id"] or
+                backup_facts["counts"] != before["counts"] or
+                _legacy_projection(backup_facts["document"]) != _legacy_projection(before["document"])):
+            raise DeployError("transactional SQLite backup does not match pre-migration state")
+        if failpoint: failpoint("backup_complete")
+        _write_tx_record(tx, commit, "backed_up")
+        # Recapture all targets immediately before any mutation.
+        for item, _data, metadata in item_backups:
+            fresh = capture_file(item["target"])
+            if any(fresh[key] != metadata[key] for key in ("sha256", "uid", "gid", "mode", "size", "nlink", "acl_sha256")):
+                raise DeployError("live target changed after backup")
+        backup_by_target = {str(item["target"]): (data, meta) for item, data, meta in item_backups}
+        for item in items:
+            data = _read_regular(item["source"])
+            if _sha_bytes(data) != item["after_sha256"]:
+                raise DeployError("immutable source changed during apply")
+            old_data, old_meta = backup_by_target[str(item["target"])]
+            fresh = capture_file(item["target"])
+            if any(fresh[key] != old_meta[key] for key in ("sha256", "uid", "gid", "mode", "size", "nlink", "acl_sha256")):
+                raise DeployError("target changed immediately before replacement")
+            _atomic_replace(item["target"], data, {**item["before"], "acl_text": old_meta["acl_text"]})
+            tx.installed.append(item)
+            _verify_installed(item["target"], item)
+            if failpoint: failpoint(f"file:{item['target'].name}")
+        # If interrupted immediately after SQLite commits, rollback must still
+        # restore the already verified snapshot.
+        tx.db_changed = True
+        _migrate(database, config_module, before, tx)
+        if failpoint: failpoint("migration_complete")
+        after = _db_facts(database, config_module)
+        if after["counts"] != before["counts"] or _legacy_projection(before["document"]) != _legacy_projection(after["document"]):
+            raise DeployError("post-migration Challenge data preservation check failed")
+        check_conn = sqlite3.connect(database)
+        try:
+            _validate_new_columns(check_conn)
+        finally:
+            check_conn.close()
+        for item in items: _verify_installed(item["target"], item)
+        if failpoint: failpoint("post_install_verify")
+        _restore_units(systemd, units)
+        if failpoint: failpoint("services_restored")
+        live = verify_live_behavior(after["document"])
+        _write_tx_record(tx, commit, "committed")
+        return {"status": "installed", "target": commit, "backup_record": str(backup_dir / "transaction.json"),
+                "active_version_id": 10, "database_integrity": after["integrity"],
+                "schema_columns_added_or_verified": list(NEW_COLUMNS),
+                "services_restarted": list(LONG_SERVICES), "nginx_changed": False,
+                "configuration_version_published": False, "post_install": live}
+    except BaseException as error:
+        try:
+            if tx.database_backup.exists() and tx.item_backups:
+                _restore_transaction(tx, systemd, commit)
+            else:
+                _restore_units(systemd, units)
+        except Exception as rollback_error:
+            raise DeployError(f"installation failed; rollback incomplete ({type(rollback_error).__name__})") from error
+        raise DeployError(f"installation failed and was rolled back ({type(error).__name__})") from error
+
+
+def _cli() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="read-only plan (default)")
+    mode.add_argument("--apply", action="store_true", help="perform guarded installation; root required")
+    parser.add_argument("--commit", required=True, help="exact full SHA of the clean prepared release")
+    args = parser.parse_args()
+    try:
+        plan = make_plan(commit=args.commit)
+        if args.apply:
+            if os.geteuid() != 0:
+                raise DeployError("--apply requires root")
+            lock_fd = _deployment_lock()
+            try:
+                # Re-plan under the lock so no stale preflight snapshot is used.
+                plan = make_plan(commit=args.commit)
+                result = apply_install(plan, commit=args.commit)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+        else:
+            result = plan
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
+    except DeployError as exc:
+        print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True, separators=(",", ":")))
+        return 2
+    except Exception as exc:
+        print(json.dumps({"status": "blocked", "error": f"unexpected_{type(exc).__name__}"},
+                         sort_keys=True, separators=(",", ":")))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())
