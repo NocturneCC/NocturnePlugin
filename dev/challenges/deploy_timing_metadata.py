@@ -60,6 +60,8 @@ CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 LOCK_PATH = Path("/run/nocturne-challenge-timing-deploy.lock")
 MAX_ACL_OUTPUT_BYTES = 16 * 1024
+SIDECAR_DRAIN_TIMEOUT_SECONDS = 10.0
+SIDECAR_DRAIN_INTERVAL_SECONDS = 0.1
 
 
 class DeployError(RuntimeError):
@@ -1273,6 +1275,13 @@ def _migrate(path: Path, config_module, before: dict[str, Any], tx: "Transaction
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA busy_timeout=20000")
+        # The production database is kept in WAL mode while services run.  Only
+        # after the caller has stopped every known holder, verified the bounded
+        # sidecar drain, and taken the transaction backup may SQLite switch it
+        # to DELETE mode for the schema transaction.
+        journal_mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+        if not journal_mode or str(journal_mode[0]).lower() != "delete":
+            raise DeployError("Challenges.db could not enter migration journal mode")
         conn.execute("BEGIN EXCLUSIVE")
         if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "delete":
             raise DeployError("Challenges.db journal mode changed during migration")
@@ -1322,16 +1331,164 @@ def _stop_for_migration(systemd, snapshot: dict[str, dict[str, str]]) -> None:
         if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
             systemd.stop(unit)
             systemd.wait_inactive(unit)
-    # Stop persistent consumers and any already-running writer one-shots.
+    # Drain one-shot jobs before stopping the long-lived import holders.
+    for unit in WRITER_SERVICES:
+        state = snapshot[unit]
+        if state["LoadState"] == "loaded" and state["ActiveState"] == "active" and state["SubState"] != "exited":
+            systemd.wait_job_idle(unit)
+    # The API and intake are the final known SQLite import holders to stop.
     for unit in LONG_SERVICES:
         state = snapshot[unit]
         if state["LoadState"] == "loaded" and state["ActiveState"] == "active":
             systemd.stop(unit)
             systemd.wait_inactive(unit)
-    for unit in WRITER_SERVICES:
-        state = snapshot[unit]
-        if state["LoadState"] == "loaded" and state["ActiveState"] == "active" and state["SubState"] != "exited":
-            systemd.wait_job_idle(unit)
+
+
+def _verify_migration_maintenance(systemd, snapshot: dict[str, dict[str, str]]) -> None:
+    """Require every captured Challenge unit to be safely paused or drained."""
+    for unit, before in snapshot.items():
+        current = systemd.show(unit)
+        if current.get("LoadState") != before.get("LoadState"):
+            raise DeployError("Challenge unit load state changed during maintenance")
+        if before.get("LoadState") == "not-found":
+            if current.get("ActiveState") != "inactive" or current.get("SubState") != "dead":
+                raise DeployError("absent Challenge unit has an unsafe maintenance state")
+            continue
+        pid = current.get("MainPID")
+        if unit.endswith(".timer"):
+            if (current.get("ActiveState") != "inactive" or current.get("SubState") != "dead" or
+                    pid not in {None, "0"}):
+                raise DeployError("Challenge timer did not become safely inactive")
+        elif unit in LONG_SERVICES:
+            if (current.get("ActiveState") != "inactive" or current.get("SubState") != "dead" or
+                    pid != "0"):
+                raise DeployError("Challenge import service did not become safely inactive")
+        elif unit in WRITER_SERVICES:
+            safe_idle = (current.get("ActiveState"), current.get("SubState"), pid) in {
+                ("inactive", "dead", "0"), ("active", "exited", "0")}
+            if not safe_idle:
+                raise DeployError("Challenge one-shot service did not drain safely")
+        else:
+            raise DeployError("unexpected unit in Challenge maintenance snapshot")
+
+
+def _sidecar_state_snapshot(path: Path) -> dict[str, tuple[Any, ...]]:
+    """Capture only validated sidecar identity/metadata while waiting for close."""
+    main = _db_lstat(path)
+    result: dict[str, tuple[Any, ...]] = {}
+    for label, suffix in (("-journal", "-journal"), ("-wal", "-wal"), ("-shm", "-shm")):
+        node = Path(str(path) + suffix)
+        try:
+            st = _db_lstat(node)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise DeployError("database maintenance sidecar state is ambiguous") from None
+        if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_nlink != 1 or
+                st.st_size > 512 * 1024 * 1024 or
+                (st.st_dev, st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) !=
+                (main.st_dev, main.st_uid, main.st_gid, stat.S_IMODE(main.st_mode))):
+            raise DeployError("database maintenance sidecar metadata is unsafe")
+        try:
+            acl_text = _acl_text(node)
+            acl_digest = (_validate_db_sidecar_acl(acl_text) if path == DB else _acl_hash(acl_text))
+        except (OSError, ValueError, DeployError):
+            raise DeployError("database maintenance sidecar ACL is unsafe") from None
+        result[label] = (*_stat_identity(st), acl_digest)
+    return result
+
+
+def _database_open_holders(path: Path, identities: set[tuple[int, int]]) -> set[int]:
+    """Find processes holding any captured DB/sidecar inode through /proc/fd."""
+    holders: set[int] = set()
+    try:
+        processes = list(os.scandir("/proc"))
+    except OSError:
+        raise DeployError("cannot verify database holders after maintenance") from None
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        pid = int(process.name)
+        fd_directory = f"/proc/{process.name}/fd"
+        try:
+            descriptors = list(os.scandir(fd_directory))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except PermissionError:
+            raise DeployError("cannot verify database holders after maintenance") from None
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.ESRCH}:
+                continue
+            raise DeployError("cannot verify database holders after maintenance") from None
+        for descriptor in descriptors:
+            try:
+                opened = os.stat(descriptor.path)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except PermissionError:
+                raise DeployError("cannot verify database holders after maintenance") from None
+            except OSError as exc:
+                if exc.errno in {errno.ENOENT, errno.ESRCH}:
+                    continue
+                raise DeployError("cannot verify database holders after maintenance") from None
+            if (opened.st_dev, opened.st_ino) in identities:
+                holders.add(pid)
+                break
+    return holders
+
+
+def _wait_for_no_sqlite_sidecars(path: Path, systemd, snapshot: dict[str, dict[str, str]],
+                                 initial_sidecars: dict[str, tuple[Any, ...]], *,
+                                 main_identity: tuple[int, ...] | None = None,
+                                 timeout: float | None = None,
+                                 interval: float | None = None) -> None:
+    """Wait boundedly for normal SQLite close; never unlink sidecars."""
+    timeout = SIDECAR_DRAIN_TIMEOUT_SECONDS if timeout is None else timeout
+    interval = SIDECAR_DRAIN_INTERVAL_SECONDS if interval is None else interval
+    deadline = time.monotonic() + timeout
+    previous: dict[str, tuple[Any, ...]] | None = None
+    disappeared: set[str] = set()
+    main = _db_lstat(path)
+    expected_main = main_identity[:6] if main_identity is not None else _stat_identity(main)[:6]
+    if _stat_identity(main)[:6] != expected_main:
+        raise DeployError("Challenges.db identity changed during maintenance")
+    tracked = {(main.st_dev, main.st_ino)}
+    tracked.update((value[0], value[1]) for value in initial_sidecars.values())
+    while True:
+        _verify_migration_maintenance(systemd, snapshot)
+        if _stat_identity(_db_lstat(path))[:6] != expected_main:
+            raise DeployError("Challenges.db identity changed during maintenance")
+        try:
+            current = _sidecar_state_snapshot(path)
+        except DeployError as exc:
+            # A sidecar being unlinked by the already stopped final SQLite
+            # connection can race this metadata sample; retry only that class.
+            if "state is ambiguous" not in str(exc):
+                raise
+            current = None
+        if current is not None:
+            if set(current) - set(initial_sidecars):
+                raise DeployError("unexpected SQLite sidecar appeared during maintenance")
+            if any(label in disappeared for label in current):
+                raise DeployError("SQLite sidecar reappeared during maintenance")
+            for label, value in current.items():
+                original = initial_sidecars.get(label)
+                if original is None or value[:2] != original[:2]:
+                    raise DeployError("SQLite sidecar identity changed during maintenance")
+                if value[2:6] != original[2:6] or value[8] != original[8]:
+                    raise DeployError("SQLite sidecar metadata changed during maintenance")
+                if previous is not None and label in previous and value != previous[label]:
+                    raise DeployError("SQLite sidecar changed while holders were stopped")
+            if previous is not None:
+                disappeared.update(set(previous) - set(current))
+            if not current:
+                if _database_open_holders(path, tracked):
+                    raise DeployError("unknown process still holds the Challenges database")
+                return
+            previous = current
+        if time.monotonic() >= deadline:
+            raise DeployError("SQLite sidecars remained after Challenge services stopped")
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 def _restore_units(systemd, snapshot: dict[str, dict[str, str]]) -> None:
@@ -1600,19 +1757,28 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
                 "configuration_version_published": False}
     if state == "after" or _has_columns(database):
         raise DeployError("partial file/schema state requires operator recovery")
-    original_db_meta = capture_file(database)
-    sidecars = [Path(str(database) + suffix) for suffix in ("-journal", "-wal", "-shm")]
-    if any(os.path.lexists(path) for path in sidecars):
-        raise DeployError("SQLite sidecar present before migration")
+    main_identity_before_stop = _stat_identity(_db_lstat(database))
+    sidecars_before_stop = _sidecar_state_snapshot(database)
     units = _unit_snapshot(systemd, CONTROLLED)
     backup_dir = _create_backup_dir(backup_root, commit, _testing_owner_uid)
     db_backup = backup_dir / "Challenges.db.sqlite-backup"
     item_backups: list[tuple[dict[str, Any], bytes, dict[str, Any]]] = []
-    tx = Transaction(backup_dir, db_backup, before, original_db_meta, item_backups, units, [], config_module, database)
+    tx: Transaction | None = None
     try:
         _stop_for_migration(systemd, units)
-        if not _same_file_metadata(capture_file(database), original_db_meta):
-            raise DeployError("Challenges.db changed while services were quiescing")
+        _wait_for_no_sqlite_sidecars(database, systemd, units, sidecars_before_stop,
+                                     main_identity=main_identity_before_stop)
+        # SQLite may checkpoint committed WAL pages into the main file while
+        # the final known connection closes.  Revalidate semantic state after
+        # that normal close, then capture the exact rollback image metadata.
+        quiesced = _db_facts(database, config_module, expected_journal_mode=before["journal_mode"])
+        if (quiesced["active_version_id"] != before["active_version_id"] or
+                quiesced["counts"] != before["counts"] or
+                _legacy_projection(quiesced["document"]) != _legacy_projection(before["document"])):
+            raise DeployError("Challenges.db semantic state changed while services were quiescing")
+        original_db_meta = capture_file(database)
+        tx = Transaction(backup_dir, db_backup, before, original_db_meta, item_backups,
+                         units, [], config_module, database)
         item_backups = _backup_files(items, backup_dir)
         tx.item_backups = item_backups
         _backup_database(database, db_backup, _testing_owner_uid)
@@ -1670,7 +1836,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
                 "configuration_version_published": False, "post_install": live}
     except BaseException as error:
         try:
-            if tx.database_backup.exists() and tx.item_backups:
+            if tx is not None and tx.database_backup.exists() and tx.item_backups:
                 _restore_transaction(tx, systemd, commit)
             else:
                 _restore_units(systemd, units)

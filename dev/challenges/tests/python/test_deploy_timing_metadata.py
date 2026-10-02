@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import importlib.util
 import json
 import os
@@ -717,6 +718,23 @@ class DeploymentLockTests(unittest.TestCase):
                     deploy._deployment_lock(deploy.LOCK_PATH)
                 close_file.assert_called_once_with(17)
 
+    def test_cli_acquires_lock_before_apply_entrypoint(self):
+        events = []
+        plan = {"target": FIXTURE_COMMIT}
+        output = __import__("io").StringIO()
+        with (mock.patch.object(sys, "argv", ["deploy_timing_metadata.py", "--apply", "--commit", FIXTURE_COMMIT]),
+              mock.patch.object(deploy, "make_plan", side_effect=lambda **_kwargs: events.append("plan") or plan),
+              mock.patch.object(deploy, "_deployment_lock", side_effect=lambda: events.append("lock") or 19),
+              mock.patch.object(deploy, "apply_install", side_effect=lambda *_args, **_kwargs: events.append("apply") or {"status": "installed"}),
+              mock.patch.object(deploy.os, "geteuid", return_value=0),
+              mock.patch.object(deploy.fcntl, "flock") as flock,
+              mock.patch.object(deploy.os, "close") as close_file,
+              contextlib.redirect_stdout(output)):
+            self.assertEqual(0, deploy._cli(), output.getvalue())
+        self.assertEqual(["plan", "lock", "plan", "apply"], events)
+        flock.assert_called_once_with(19, deploy.fcntl.LOCK_UN)
+        close_file.assert_called_once_with(19)
+
 
 class PreparedCheckTests(unittest.TestCase):
     def setUp(self):
@@ -814,9 +832,12 @@ class FakeConfig:
 
 
 class FakeSystemd:
-    def __init__(self, fail_start_once: str | None = None):
+    def __init__(self, fail_start_once: str | None = None, *, fail_stop: str | None = None,
+                 fail_drain: str | None = None):
         self.states = {}
         self.fail_start_once = fail_start_once
+        self.fail_stop = fail_stop
+        self.fail_drain = fail_drain
         for unit in deploy.CONTROLLED:
             timer = unit.endswith(".timer")
             self.states[unit] = {"Id": unit, "LoadState": "loaded", "ActiveState": "active",
@@ -827,6 +848,8 @@ class FakeSystemd:
         return dict(self.states[unit])
 
     def stop(self, unit):
+        if unit == self.fail_stop:
+            raise deploy.DeployError("simulated service stop failure")
         self.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
 
     def start(self, unit):
@@ -847,6 +870,8 @@ class FakeSystemd:
             raise deploy.DeployError("not active")
 
     def wait_job_idle(self, unit, timeout=40):
+        if unit == self.fail_drain:
+            raise deploy.DeployError("simulated one-shot drain failure")
         state = self.states[unit]
         if state["ActiveState"] == "active" and state["SubState"] == "running":
             state.update(ActiveState="inactive", SubState="dead", MainPID="0")
@@ -911,6 +936,7 @@ class DeploymentTests(unittest.TestCase):
             INSERT INTO leaderboard_observations VALUES(8);
         """)
         conn.commit(); conn.close()
+        self.db.chmod(0o664)
         self.backup_root = self.root / "backups"
         self.systemd = FakeSystemd()
         self.patches = [
@@ -919,6 +945,7 @@ class DeploymentTests(unittest.TestCase):
             mock.patch.object(deploy, "_prepared_check", return_value="status=prepared\n"),
             mock.patch.object(deploy, "_load_config_module", return_value=FakeConfig),
             mock.patch.object(deploy, "_http_json", side_effect=self.fake_http),
+            mock.patch.object(deploy, "_database_open_holders", return_value=set()),
         ]
         for p in self.patches: p.start()
         self.addCleanup(self.cleanup)
@@ -960,6 +987,169 @@ class DeploymentTests(unittest.TestCase):
         self.assertFalse(self.backup_root.exists())
         self.assertEqual(before_files, [deploy._sha_file(item[2]) for item in self.targets])
         self.assertEqual(db_before, deploy._sha_file(self.db))
+
+    def test_healthy_active_wal_database_is_accepted_by_premaintenance_plan(self):
+        connection = sqlite3.connect(self.db)
+        self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        connection.execute("INSERT INTO challenge_submissions VALUES(2)")
+        connection.commit()
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(self.db) + suffix)
+            self.assertTrue(sidecar.is_file())
+            sidecar.chmod(0o664)
+        plan = self.make_plan()
+        self.assertEqual("dry_run", plan["status"])
+        self.assertEqual("ok", plan["database_integrity"])
+        connection.close()
+
+    def test_sidecar_gate_runs_after_lock_timers_drain_and_import_services(self):
+        events = []
+        self.db.chmod(0o664)
+        connection = sqlite3.connect(self.db)
+        self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        connection.execute("INSERT INTO challenge_submissions VALUES(2)")
+        connection.commit()
+        for suffix in ("-wal", "-shm"):
+            Path(str(self.db) + suffix).chmod(0o664)
+        plan = self.make_plan()
+        original_gate = deploy._wait_for_no_sqlite_sidecars
+        original_backups = deploy._backup_files
+        original_migrate = deploy._migrate
+
+        def gate(path, systemd, snapshot, initial_sidecars, **kwargs):
+            deploy._verify_migration_maintenance(systemd, snapshot)
+            events.append("sidecar_gate")
+            connection.close()
+            return original_gate(path, systemd, snapshot, initial_sidecars, **kwargs)
+
+        def backups(*args, **kwargs):
+            events.append("backup")
+            return original_backups(*args, **kwargs)
+
+        def migrate(*args, **kwargs):
+            events.append("migration")
+            return original_migrate(*args, **kwargs)
+
+        with (mock.patch.object(deploy, "_database_open_holders", return_value=set()),
+              mock.patch.object(deploy, "_wait_for_no_sqlite_sidecars", side_effect=gate),
+              mock.patch.object(deploy, "_backup_files", side_effect=backups),
+              mock.patch.object(deploy, "_migrate", side_effect=migrate)):
+            result = deploy.apply_install(
+                plan, commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
+                database=self.db, backup_root=self.backup_root, release=self.release,
+                systemd=self.systemd, _testing_owner_uid=os.geteuid())
+        self.assertEqual("installed", result["status"])
+        self.assertEqual(["sidecar_gate", "backup", "migration"], events)
+
+    def test_persistent_sidecar_aborts_before_database_mutation_and_restores_units(self):
+        self.db.chmod(0o664)
+        connection = sqlite3.connect(self.db)
+        self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower())
+        connection.execute("INSERT INTO challenge_submissions VALUES(2)")
+        connection.commit()
+        for suffix in ("-wal", "-shm"):
+            Path(str(self.db) + suffix).chmod(0o664)
+        plan = self.make_plan()
+        wal = Path(str(self.db) + "-wal")
+        db_before = deploy._sha_file(self.db)
+        wal_before = deploy._sha_file(wal)
+        unit_states_before = {unit: self.systemd.show(unit) for unit in deploy.CONTROLLED}
+        original_unlink = Path.unlink
+        original_os_unlink = os.unlink
+
+        def forbid_sidecar_unlink(path, *args, **kwargs):
+            if path in {wal, Path(str(self.db) + "-shm"), Path(str(self.db) + "-journal")}:
+                raise AssertionError("maintenance must never unlink SQLite sidecars")
+            return original_unlink(path, *args, **kwargs)
+
+        def forbid_os_sidecar_unlink(path, *args, **kwargs):
+            if Path(path) in {wal, Path(str(self.db) + "-shm"), Path(str(self.db) + "-journal")}:
+                raise AssertionError("maintenance must never unlink SQLite sidecars")
+            return original_os_unlink(path, *args, **kwargs)
+
+        with (mock.patch.object(deploy, "SIDECAR_DRAIN_TIMEOUT_SECONDS", 0.002),
+              mock.patch.object(deploy, "SIDECAR_DRAIN_INTERVAL_SECONDS", 0.001),
+              mock.patch.object(Path, "unlink", forbid_sidecar_unlink),
+              mock.patch.object(os, "unlink", forbid_os_sidecar_unlink)):
+            with self.assertRaisesRegex(deploy.DeployError, "rolled back"):
+                deploy.apply_install(
+                    plan, commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
+                    database=self.db, backup_root=self.backup_root, release=self.release,
+                    systemd=self.systemd, _testing_owner_uid=os.geteuid())
+        self.assertEqual(db_before, deploy._sha_file(self.db))
+        self.assertEqual(wal_before, deploy._sha_file(wal))
+        self.assertTrue(wal.exists())
+        for unit, before in unit_states_before.items():
+            after = self.systemd.show(unit)
+            self.assertEqual(before["LoadState"], after["LoadState"])
+            self.assertEqual(before["ActiveState"], after["ActiveState"])
+            self.assertEqual(before["SubState"], after["SubState"])
+        connection.close()
+
+    def test_stop_and_drain_failures_restore_captured_active_state(self):
+        scenarios = (
+            ("stop", FakeSystemd(fail_stop=deploy.LONG_SERVICES[0])),
+            ("drain", FakeSystemd(fail_drain=deploy.WRITER_SERVICES[0])),
+        )
+        scenarios[1][1].states[deploy.WRITER_SERVICES[0]].update(
+            ActiveState="active", SubState="running", MainPID="303")
+        for label, systemd in scenarios:
+            with self.subTest(label=label):
+                before = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+                with mock.patch.object(deploy, "_wait_for_no_sqlite_sidecars") as sidecar_gate:
+                    with self.assertRaisesRegex(deploy.DeployError, "rolled back"):
+                        self.apply(systemd=systemd)
+                    sidecar_gate.assert_not_called()
+                for unit, prior in before.items():
+                    after = systemd.show(unit)
+                    self.assertEqual(prior["ActiveState"], after["ActiveState"])
+                    self.assertEqual(prior["SubState"], after["SubState"])
+
+    def test_unknown_database_holder_blocks_after_sidecars_disappear(self):
+        systemd = FakeSystemd()
+        snapshot = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        for unit in deploy.CONTROLLED:
+            systemd.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
+        with mock.patch.object(deploy, "_database_open_holders", return_value={9876}):
+            with self.assertRaisesRegex(deploy.DeployError, "unknown process still holds"):
+                deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, {}, timeout=0.01)
+
+    def test_unexpected_sidecar_appearance_and_post_stop_change_fail_closed(self):
+        systemd = FakeSystemd()
+        snapshot = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        for unit in deploy.CONTROLLED:
+            systemd.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
+        wal = Path(str(self.db) + "-wal")
+        wal.write_bytes(b"")
+        wal.chmod(0o664)
+        with self.assertRaisesRegex(deploy.DeployError, "unexpected SQLite sidecar"):
+            deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, {}, timeout=0.01)
+
+        initial = deploy._sidecar_state_snapshot(self.db)
+        changed = dict(initial)
+        value = list(changed["-wal"])
+        value[6] += 1
+        changed["-wal"] = tuple(value)
+        with (mock.patch.object(deploy, "_sidecar_state_snapshot", side_effect=[initial, changed]),
+              mock.patch.object(deploy.time, "monotonic", side_effect=[0.0, 0.2, 0.2]),
+              mock.patch.object(deploy.time, "sleep")):
+            with self.assertRaisesRegex(deploy.DeployError, "sidecar changed while holders were stopped"):
+                deploy._wait_for_no_sqlite_sidecars(self.db, systemd, snapshot, initial,
+                                                    timeout=1.0, interval=0.1)
+
+    def test_main_database_identity_cannot_change_after_service_stop(self):
+        systemd = FakeSystemd()
+        snapshot = {unit: systemd.show(unit) for unit in deploy.CONTROLLED}
+        for unit in deploy.CONTROLLED:
+            systemd.states[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
+        st = self.db.lstat()
+        changed_stat = list(st)
+        changed_stat[1] += 1
+        with mock.patch.object(deploy, "_db_lstat", return_value=os.stat_result(changed_stat)):
+            with self.assertRaisesRegex(deploy.DeployError, "identity changed during maintenance"):
+                deploy._wait_for_no_sqlite_sidecars(
+                    self.db, systemd, snapshot, {}, main_identity=deploy._stat_identity(st),
+                    timeout=0.01, interval=0.001)
 
     def test_clean_install_is_additive_and_version_10_is_preserved(self):
         conn = sqlite3.connect(self.db)
