@@ -383,6 +383,18 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             deploy._validate_acl_profile(text.replace("user:1003:rw-", "user:1002:rwx"), expected)
 
+    def test_numeric_getfacl_digest_matches_initial_adopted_named_manifest_fingerprint(self):
+        numeric = (
+            "user::rw-\nuser:1003:rwx\t#effective:rw-\n"
+            "group::rwx\t#effective:rw-\nmask::rw-\nother::r--\n")
+        named = numeric.replace("user:1003:", "user:glob:")
+        expected = "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89"
+        self.assertEqual(expected, deploy._acl_hash(numeric))
+        self.assertEqual(expected, deploy._acl_hash(named))
+        # Name-resolved identities remain invalid input to the strict parser.
+        with self.assertRaises(ValueError):
+            deploy._acl_entries(named)
+
     def test_authoritative_live_file_metadata_passes_the_static_predicates(self):
         """The supplied settled live profile itself is not an unsafe node."""
         canonical = deploy.DB
@@ -520,6 +532,27 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
                         deploy.DeployError,
                         "diagnostic_category=unsafe_metadata node=ancestry"):
                     deploy._db_ancestry_snapshot(deploy.DB)
+
+    def test_initially_adopted_challenge_config_hash_is_accepted_prestate(self):
+        manifest = json.loads((deploy.REPO / "dev/challenges/source-manifest.json").read_text())
+        before = next(item for item in manifest["live_sources"]
+                      if item["path"] == "/srv/projects/nocturne-services/challenge_config.py")
+        self.assertEqual(
+            "81421a75ca6cccc1a08011e8a9f02fa43833d9534ad2f58ab9f3181c3de5f0e5",
+            before["sha256"])
+        target_record = next(item for item in manifest["bundle_files"]
+                             if item["path"] == "dev/challenges/service/challenge_config.py")
+        actual = {"sha256": before["sha256"], "uid": before["uid"], "gid": before["gid"],
+                  "mode": before["mode"], "size": before["size"], "nlink": before["nlink"],
+                  "acl_sha256": before["acl_sha256"]}
+        item = {"target": Path(before["path"]), "before": before,
+                "after_sha256": target_record["sha256"], "after_size": target_record["size"]}
+        with mock.patch.object(deploy, "capture_file", return_value=actual):
+            self.assertEqual("before", deploy._validate_file_prestate([item]))
+        with mock.patch.object(deploy, "capture_file", return_value={
+                **actual, "sha256": "0" * 64, "size": target_record["size"]}):
+            with self.assertRaisesRegex(deploy.DeployError, "live target content drift"):
+                deploy._validate_file_prestate([item])
 
     def test_unexpected_writable_ancestry_and_acl_mutation_fail_closed(self):
         for kwargs in ({"unsafe_projects": True}, {"mutate_acl": True}):

@@ -80,6 +80,7 @@ _DB_FILE_ACL = {
     "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
     "mask::": "rw-", "other::": "r--",
 }
+_LEGACY_ACL_USER_LABELS = {1000: "randal", 1003: "glob"}
 
 
 def _sha_bytes(data: bytes) -> str:
@@ -338,8 +339,17 @@ def _acl_text(path: Path) -> str:
 
 
 def _acl_hash(text: str) -> str:
-    lines = [line.rstrip() for line in text.splitlines()
-             if line.strip() and not line.startswith("#")]
+    lines = []
+    for line in text.splitlines():
+        line = line.rstrip()
+        if not line.strip() or line.startswith("#"):
+            continue
+        # The adopted source manifest predates numeric getfacl output and
+        # fingerprints these fixed UIDs by their established account labels.
+        # Normalize only for the digest; ACL validation remains numeric-only.
+        for uid, label in _LEGACY_ACL_USER_LABELS.items():
+            line = re.sub(rf"(^|default:)user:{uid}:", rf"\g<1>user:{label}:", line)
+        lines.append(line)
     return _sha_bytes(("\n".join(lines) + "\n").encode())
 
 

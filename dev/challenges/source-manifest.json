@@ -76,8 +76,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/deploy_timing_metadata.py",
-      "sha256": "8e5f3e336268ba58af72c52cd2b1008e5b9581f31047eedb9125a8473cf163a9",
-      "size": 81836,
+      "sha256": "51983e00a1f00390bf98edf196b9543c5509987d39ec219fffd4edf3f285f447",
+      "size": 82330,
       "source": null,
       "type": "regular"
     },
@@ -386,8 +386,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_timing_metadata.py",
-      "sha256": "b0925a4344729f15caaae89bf97d7019e7aec445b20f1b3311eb2dae7244ef7f",
-      "size": 47629,
+      "sha256": "4326ceab500363ec3a2feb57fe09bcfc90b13f1261b61f16e3e2ec5dcdcd0a9d",
+      "size": 49783,
       "source": null,
       "type": "regular"
     },
