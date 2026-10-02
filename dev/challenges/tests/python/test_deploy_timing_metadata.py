@@ -371,23 +371,23 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_busy node=wal"):
                 deploy._database_metadata(self.db)
 
-    def test_established_named_file_acl_is_accepted_and_fingerprinted(self):
+    def test_established_numeric_file_acl_is_accepted_and_fingerprinted(self):
         expected = {
             "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
             "mask::": "rw-", "other::": "r--",
         }
-        text = "user::rw-\nuser:glob:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+        text = "user::rw-\nuser:1003:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
         self.assertEqual(deploy._acl_hash(text), deploy._validate_acl_profile(text, expected))
         with self.assertRaises(ValueError):
             deploy._validate_acl_profile(text + "default:user::rw-\n", expected)
         with self.assertRaises(ValueError):
-            deploy._validate_acl_profile(text.replace("user:glob:rw-", "user:1002:rwx"), expected)
+            deploy._validate_acl_profile(text.replace("user:1003:rw-", "user:1002:rwx"), expected)
 
     def test_authoritative_live_file_metadata_passes_the_static_predicates(self):
         """The supplied settled live profile itself is not an unsafe node."""
         canonical = deploy.DB
         fake = os.stat_result((stat.S_IFREG | 0o664, 42, 9, 1, 1001, 33, 8175616, 0, 0, 0))
-        acl = "user::rw-\nuser:glob:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+        acl = "user::rw-\nuser:1003:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
         def lstat(path):
             if path == canonical:
                 return fake
@@ -404,21 +404,23 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
         self.assertEqual(0o664, metadata["main"][4])
 
     @staticmethod
-    def ancestry_acl(named_users, group_acl):
-        access = ["user::rwx", *(f"user:{uid}:rwx" for uid in sorted(named_users)),
+    def ancestry_acl(access_users, default_users, group_acl):
+        access = ["user::rwx", *(f"user:{uid}:rwx" for uid in sorted(access_users)),
                   f"group::{group_acl}", "mask::rwx", "other::r-x"]
-        default = [f"default:{line}" for line in access]
+        default_base = ["user::rwx", *(f"user:{uid}:rwx" for uid in sorted(default_users)),
+                        f"group::{group_acl}", "mask::rwx", "other::r-x"]
+        default = [f"default:{line}" for line in default_base]
         return "\n".join(access + default) + "\n"
 
     def ancestry_fixture(self, *, unsafe_projects=False, mutate_acl=False):
         nodes = list(deploy._DB_ANCESTRY)
         acl_by_node = {
             Path("/srv"): "user::rwx\ngroup::r-x\nother::r-x\n",
-            Path("/srv/projects"): self.ancestry_acl({1003}, "r-x"),
-            Path("/srv/projects/database"): self.ancestry_acl({1000, 1003}, "rwx"),
+            Path("/srv/projects"): self.ancestry_acl({1003}, {1003}, "r-x"),
+            Path("/srv/projects/database"): self.ancestry_acl({1000, 1003}, {1003}, "rwx"),
         }
         stats = {}
-        for index, (node, (uid, gid, mode, _named, _group_acl)) in enumerate(deploy._DB_ANCESTRY.items(), 1):
+        for index, (node, (uid, gid, mode, _access_users, _default_users, _group_acl)) in enumerate(deploy._DB_ANCESTRY.items(), 1):
             if unsafe_projects and node == Path("/srv/projects"):
                 mode = 0o0777
             stats[node] = os.stat_result((stat.S_IFDIR | mode, index, 1, 3, uid, gid, 4096, 0, 0, 0))
@@ -441,6 +443,52 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
             result = deploy._db_ancestry_snapshot(deploy.DB)
         self.assertEqual(3, len(result))
         self.assertTrue(all(len(item[-1]) == 64 for item in result))
+
+    def test_literal_getfacl_numeric_profiles_parse_and_match_authoritative_ancestry(self):
+        literal = {
+            Path("/srv"): "user::rwx\ngroup::r-x\nother::r-x\n",
+            Path("/srv/projects"): (
+                "user::rwx\nuser:1003:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n"
+                "default:user::rwx\ndefault:user:1003:rwx\ndefault:group::r-x\n"
+                "default:mask::rwx\ndefault:other::r-x\n"),
+            Path("/srv/projects/database"): (
+                "user::rwx\nuser:1000:rwx\nuser:1003:rwx\ngroup::rwx\nmask::rwx\nother::r-x\n"
+                "default:user::rwx\ndefault:user:1003:rwx\ndefault:group::rwx\n"
+                "default:mask::rwx\ndefault:other::r-x\n"),
+        }
+        lstat_patch, _ = self.ancestry_fixture()
+        with lstat_patch, mock.patch.object(deploy, "_acl_text", side_effect=literal.__getitem__):
+            self.assertEqual(3, len(deploy._db_ancestry_snapshot(deploy.DB)))
+        parsed = deploy._acl_entries(literal[Path("/srv/projects/database")])
+        self.assertEqual("rwx", parsed["user:1000:"])
+        self.assertEqual("rwx", parsed["default:user:1003:"])
+        self.assertEqual("rwx", parsed["default:user::"])
+
+    def test_authoritative_ancestry_acl_rejections_are_fail_closed(self):
+        projects = Path("/srv/projects")
+        database = Path("/srv/projects/database")
+        good = {
+            Path("/srv"): "user::rwx\ngroup::r-x\nother::r-x\n",
+            projects: self.ancestry_acl({1003}, {1003}, "r-x"),
+            database: self.ancestry_acl({1000, 1003}, {1003}, "rwx"),
+        }
+        invalid_profiles = {
+            "unknown UID": good[projects].replace("user:1003:rwx", "user:9999:rwx"),
+            "duplicate entry": good[projects] + "user:1003:rwx\n",
+            "malformed default": good[projects].replace("default:user:1003:rwx", "default:user:1003"),
+            "excess permission": good[projects].replace("default:group::r-x", "default:group::rwx"),
+            "missing required named access": good[projects].replace("user:1003:rwx\n", ""),
+        }
+        for label, bad_projects_acl in invalid_profiles.items():
+            acl_values = dict(good)
+            acl_values[projects] = bad_projects_acl
+            lstat_patch, _ = self.ancestry_fixture()
+            with self.subTest(label=label), lstat_patch, mock.patch.object(
+                    deploy, "_acl_text", side_effect=acl_values.__getitem__):
+                with self.assertRaisesRegex(
+                        deploy.DeployError,
+                        "diagnostic_category=unsafe_metadata node=ancestry"):
+                    deploy._db_ancestry_snapshot(deploy.DB)
 
     def test_unexpected_writable_ancestry_and_acl_mutation_fail_closed(self):
         for kwargs in ({"unsafe_projects": True}, {"mutate_acl": True}):

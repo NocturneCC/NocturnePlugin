@@ -68,9 +68,12 @@ class DeployError(RuntimeError):
 # Explicitly approved live Challenges.db ancestry and ACL principals.  This is
 # intentionally narrower than a generic “writable parent is okay” rule.
 _DB_ANCESTRY = {
-    Path("/srv"): (0, 0, 0o755, frozenset(), None),
-    Path("/srv/projects"): (1000, 33, 0o2775, frozenset({1003}), "r-x"),
-    Path("/srv/projects/database"): (1000, 33, 0o2775, frozenset({1000, 1003}), "rwx"),
+    # Access and default ACLs are intentionally recorded independently.  The
+    # database directory grants randal access to the existing tree without
+    # inheriting that grant onto newly created children.
+    Path("/srv"): (0, 0, 0o755, frozenset(), frozenset(), None),
+    Path("/srv/projects"): (1000, 33, 0o2775, frozenset({1003}), frozenset({1003}), "r-x"),
+    Path("/srv/projects/database"): (1000, 33, 0o2775, frozenset({1000, 1003}), frozenset({1003}), "rwx"),
 }
 _DB_FILE_ACL = {
     "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
@@ -188,8 +191,8 @@ def _acl_entries(text: str) -> dict[str, str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        # getfacl emits access entries as user::rwx/user:name:rwx and
-        # inherited entries with a default: prefix.
+        # getfacl -cpn emits numeric access entries as user::rwx or
+        # user:<uid>:rwx, and default entries with a default: prefix.
         if line.startswith("default:"):
             line = line[len("default:"):]
             prefix = "default:"
@@ -200,11 +203,7 @@ def _acl_entries(text: str) -> dict[str, str]:
             key, perms = f"{prefix}{parts[0]}::", parts[2]
         elif len(parts) == 3 and parts[0] in {"user", "group"}:
             identity = parts[1]
-            if identity == "randal":
-                identity = "1000"
-            elif identity == "glob":
-                identity = "1003"
-            if not identity.isdecimal():
+            if not re.fullmatch(r"[0-9]+", identity):
                 raise ValueError("unapproved ACL identity")
             key, perms = f"{prefix}{parts[0]}:{identity}:", parts[2]
         else:
@@ -237,7 +236,7 @@ def _db_ancestry_snapshot(path: Path) -> tuple[tuple[Any, ...], ...]:
     if path != DB:
         return ()
     snapshot = []
-    for node, (uid, gid, mode, named_users, group_acl) in _DB_ANCESTRY.items():
+    for node, (uid, gid, mode, access_users, default_users, group_acl) in _DB_ANCESTRY.items():
         try:
             before = _db_lstat(node)
             if (not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode) or
@@ -253,12 +252,16 @@ def _db_ancestry_snapshot(path: Path) -> tuple[tuple[Any, ...], ...]:
                         prefix_sets[scope].add(int(entry.split(":")[1]))
                     elif entry.startswith("group:") and not entry.startswith("group::"):
                         raise ValueError("unapproved named group ACL")
-                if prefix_sets["access"] != set(named_users) or prefix_sets["default"] != set(named_users):
+                if (prefix_sets["access"] != set(access_users) or
+                        prefix_sets["default"] != set(default_users)):
                     raise ValueError("ACL identity set mismatch")
                 base = {"user::": "rwx", "group::": group_acl, "mask::": "rwx", "other::": "r-x"}
                 expected = dict(base)
-                expected.update({f"user:{identity}:": "rwx" for identity in named_users})
-                expected_default = {f"default:{key}": value for key, value in expected.items()}
+                expected.update({f"user:{identity}:": "rwx" for identity in access_users})
+                default_base = {"user::": "rwx", "group::": group_acl,
+                                "mask::": "rwx", "other::": "r-x"}
+                default_base.update({f"user:{identity}:": "rwx" for identity in default_users})
+                expected_default = {f"default:{key}": value for key, value in default_base.items()}
                 if entries != {**expected, **expected_default}:
                     raise ValueError("ACL permission profile mismatch")
                 acl_digest = _acl_hash(acl_text)
