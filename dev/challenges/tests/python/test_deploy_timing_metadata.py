@@ -294,6 +294,21 @@ class ReadOnlyDatabaseProfileTests(unittest.TestCase):
 
 
 class DatabaseMetadataSafetyTests(unittest.TestCase):
+    SIDECAR_ACL_EXPLICIT = (
+        "user::rw-\n"
+        "user:1003:rw-\n"
+        "group::rw-\n"
+        "mask::rw-\n"
+        "other::r--\n"
+    )
+    SIDECAR_ACL_INHERITED = (
+        "user::rw-\n"
+        "user:1003:rwx\t#effective:rw-\n"
+        "group::rwx\t#effective:rw-\n"
+        "mask::rw-\n"
+        "other::r--\n"
+    )
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -304,6 +319,20 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
         conn.commit()
         conn.close()
         self.db.chmod(0o664)
+
+    def capture_as_production_db(self, acl_text):
+        def lstat(path):
+            current = path.lstat()
+            return os.stat_result((current.st_mode, current.st_ino, current.st_dev,
+                                   current.st_nlink, 1001, 33, current.st_size,
+                                   current.st_atime, current.st_mtime, current.st_ctime))
+
+        with (mock.patch.object(deploy, "DB", self.db),
+              mock.patch.object(deploy, "_db_ancestry_snapshot", return_value=()),
+              mock.patch.object(deploy, "_db_lstat", side_effect=lstat),
+              mock.patch.object(deploy, "_acl_text", side_effect=acl_text),
+              mock.patch.object(deploy, "_safe_file_digest", return_value="a" * 64)):
+            return deploy._database_metadata(self.db)
 
     def test_optional_sidecars_safely_absent(self):
         captured = deploy._database_metadata(self.db)
@@ -382,6 +411,63 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
             deploy._validate_acl_profile(text + "default:user::rw-\n", expected)
         with self.assertRaises(ValueError):
             deploy._validate_acl_profile(text.replace("user:1003:rw-", "user:1002:rwx"), expected)
+
+    def test_literal_database_wal_shm_acl_profiles_use_effective_permissions(self):
+        for acl in (self.SIDECAR_ACL_EXPLICIT, self.SIDECAR_ACL_INHERITED):
+            with self.subTest(acl=acl):
+                digest = deploy._validate_db_sidecar_acl(acl)
+                self.assertEqual(hashlib.sha256(acl.encode("utf-8")).hexdigest(), digest)
+        parsed = deploy._acl_entries(self.SIDECAR_ACL_INHERITED)
+        self.assertEqual("rwx", parsed["user:1003:"])
+        self.assertEqual("rwx", parsed["group::"])
+
+    def test_sidecar_acl_rejects_effective_execute_and_unknown_principals(self):
+        effective_execute = self.SIDECAR_ACL_INHERITED.replace(
+            "mask::rw-", "mask::rwx").replace(
+            "#effective:rw-", "#effective:rwx")
+        unknown_user = self.SIDECAR_ACL_INHERITED.replace("user:1003:rwx", "user:1002:rwx")
+        for label, acl in (("effective execute", effective_execute), ("unknown user", unknown_user)):
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                deploy._validate_db_sidecar_acl(acl)
+
+    def test_zero_length_wal_and_shm_accept_literal_inherited_acl_profile(self):
+        wal = Path(str(self.db) + "-wal")
+        shm = Path(str(self.db) + "-shm")
+        wal.touch()
+        wal.chmod(0o664)
+        shm.write_bytes(bytes(32768))
+        shm.chmod(0o664)
+        main_acl = "user::rw-\nuser:1003:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+
+        def acl_text(path):
+            return main_acl if path == self.db else self.SIDECAR_ACL_INHERITED
+
+        captured = self.capture_as_production_db(acl_text)
+        self.assertTrue({"main", "-wal", "-shm"}.issubset(captured))
+        self.assertEqual(0, captured["-wal"][6])
+        self.assertEqual(32768, captured["-shm"][6])
+        expected_fingerprint = deploy._raw_numeric_acl_hash(self.SIDECAR_ACL_INHERITED)
+        self.assertEqual(expected_fingerprint, captured["-wal"][8])
+        self.assertEqual(expected_fingerprint, captured["-shm"][8])
+
+    def test_sidecar_raw_acl_fingerprint_detects_profile_change_during_capture(self):
+        wal = Path(str(self.db) + "-wal")
+        wal.write_bytes(b"")
+        wal.chmod(0o664)
+        calls = 0
+        main_acl = "user::rw-\nuser:1003:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+
+        def acl_text(path):
+            nonlocal calls
+            if path == self.db:
+                return main_acl
+            if path == wal:
+                calls += 1
+                return self.SIDECAR_ACL_INHERITED if calls == 1 else self.SIDECAR_ACL_EXPLICIT
+            raise FileNotFoundError
+
+        with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata node=wal"):
+            self.capture_as_production_db(acl_text)
 
     def test_numeric_getfacl_digest_matches_initial_adopted_named_manifest_fingerprint(self):
         numeric = (

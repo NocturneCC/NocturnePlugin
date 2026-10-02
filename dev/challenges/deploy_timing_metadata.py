@@ -189,10 +189,20 @@ def _safe_parent(path: Path) -> None:
 
 def _acl_entries(text: str) -> dict[str, str]:
     entries: dict[str, str] = {}
+    effective_annotations: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        if "#" in line:
+            line, comment = line.split("#", 1)
+            match = re.fullmatch(r"\s*effective:([r-][w-][x-])\s*", comment)
+            if not match:
+                raise ValueError("malformed ACL effective-permission annotation")
+            annotated_effective = match.group(1)
+        else:
+            annotated_effective = None
+        line = line.strip()
         # getfacl -cpn emits numeric access entries as user::rwx or
         # user:<uid>:rwx, and default entries with a default: prefix.
         if line.startswith("default:"):
@@ -213,6 +223,18 @@ def _acl_entries(text: str) -> dict[str, str]:
         if key in entries or not re.fullmatch(r"[r-][w-][x-]", perms):
             raise ValueError("duplicate or malformed ACL entry")
         entries[key] = perms
+        if annotated_effective is not None:
+            if key.startswith("default:") or key in {"user::", "mask::", "other::"}:
+                raise ValueError("effective annotation on unsupported ACL entry")
+            effective_annotations[key] = annotated_effective
+    mask = entries.get("mask::")
+    for key, annotated in effective_annotations.items():
+        permissions = entries[key]
+        if mask is None:
+            raise ValueError("effective ACL annotation missing mask")
+        effective = "".join(bit if bit in mask else "-" for bit in permissions)
+        if annotated != effective:
+            raise ValueError("ACL effective-permission annotation mismatch")
     return entries
 
 
@@ -351,6 +373,40 @@ def _acl_hash(text: str) -> str:
             line = re.sub(rf"(^|default:)user:{uid}:", rf"\g<1>user:{label}:", line)
         lines.append(line)
     return _sha_bytes(("\n".join(lines) + "\n").encode())
+
+
+def _raw_numeric_acl_hash(text: str) -> str:
+    """Fingerprint the exact numeric ACL snapshot, including effective comments."""
+    return _sha_bytes(text.encode("utf-8"))
+
+
+_DB_SIDECAR_ACL_PROFILES = (
+    {
+        "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
+        "mask::": "rw-", "other::": "r--",
+    },
+    {
+        "user::": "rw-", "user:1003:": "rwx", "group::": "rwx",
+        "mask::": "rw-", "other::": "r--",
+    },
+)
+
+
+def _validate_db_sidecar_acl(text: str) -> str:
+    """Accept only the explicit or safely masked inherited live WAL/SHM ACL."""
+    entries = _acl_entries(text)
+    if entries not in _DB_SIDECAR_ACL_PROFILES:
+        raise ValueError("sidecar ACL profile mismatch")
+    mask = entries["mask::"]
+    if mask != "rw-":
+        raise ValueError("sidecar ACL mask mismatch")
+    for key, permissions in entries.items():
+        if key in {"user::", "mask::", "other::"}:
+            continue
+        effective = "".join(bit if bit in mask else "-" for bit in permissions)
+        if effective != "rw-":
+            raise ValueError("sidecar ACL effective permissions mismatch")
+    return _raw_numeric_acl_hash(text)
 
 
 def capture_file(path: Path) -> dict[str, Any]:
@@ -670,8 +726,10 @@ def _database_metadata(path: Path) -> dict[str, tuple[Any, ...]]:
             raise fail("unsafe_metadata", node_class)
         try:
             acl_text = acl_for(node, node_class)
-            if path == DB:
+            if path == DB and label == "main":
                 acl_digest = _validate_acl_profile(acl_text, _DB_FILE_ACL)
+            elif path == DB:
+                acl_digest = _validate_db_sidecar_acl(acl_text)
             else:
                 acl_digest = _acl_hash(acl_text)
         except DeployError as exc:
@@ -694,7 +752,9 @@ def _database_metadata(path: Path) -> dict[str, tuple[Any, ...]]:
             if _stat_identity(post_read) != identity:
                 raise fail("database_busy", node_class)
             acl_after = acl_for(node, node_class)
-            if _acl_hash(acl_after) != acl_digest:
+            acl_after_digest = (_acl_hash(acl_after) if label == "main" or path != DB
+                                else _raw_numeric_acl_hash(acl_after))
+            if acl_after_digest != acl_digest:
                 raise fail("unsafe_metadata", node_class)
         except DeployError as exc:
             match = re.search(r"diagnostic_category=(database_busy|unsafe_metadata)", str(exc))
