@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-EXPECTED_PARENT = "4a48efec3149dd66e55fb02371e2aaeaf966a31f"
 REPO = Path("/srv/projects/nocturne-plugin-intake")
 RUNTIME = Path("/srv/nocturne-plugin")
 DB = Path("/srv/projects/database/Challenges.db")
@@ -120,22 +119,41 @@ def _run(argv: list[str], *, timeout: int = 15, input_text: str | None = None) -
 
 
 def _git(repo: Path, *args: str) -> str:
-    proc = _run(["/usr/bin/git", "-c", f"safe.directory={repo}", "-C", str(repo), *args])
+    argv = ["/usr/bin/git", "-C", str(repo), "-c", f"safe.directory={repo}", *args]
+    try:
+        proc = _run(argv)
+    except Exception as exc:
+        raise DeployError("checkout gate failed diagnostic_category=git_launch_failed") from exc
     if proc.returncode:
-        raise DeployError(f"git {args[0]} failed ({proc.returncode})")
-    return proc.stdout.strip()
+        raise DeployError("checkout gate failed diagnostic_category=git_launch_failed")
+    return proc.stdout
+
+
+def _git_single_line(output: str) -> str:
+    if not isinstance(output, str) or not output.endswith("\n") or output.count("\n") != 1:
+        raise DeployError("checkout gate failed diagnostic_category=malformed_output")
+    return output[:-1]
 
 
 def verify_git(repo: Path, commit: str) -> None:
     if not FULL_SHA.fullmatch(commit):
-        raise DeployError("deployment commit must be a full lowercase SHA")
-    branch = _git(repo, "branch", "--show-current")
-    head = _git(repo, "rev-parse", "HEAD")
-    remote = _git(repo, "rev-parse", "origin/development")
-    parent = _git(repo, "rev-parse", f"{commit}^")
+        raise DeployError("checkout gate failed diagnostic_category=malformed_output")
+    branch = _git_single_line(_git(repo, "branch", "--show-current"))
+    if branch != "development":
+        raise DeployError("checkout gate failed diagnostic_category=wrong_branch")
     status = _git(repo, "status", "--porcelain=v1", "--untracked-files=all")
-    if branch != "development" or head != commit or remote != commit or parent != EXPECTED_PARENT or status:
-        raise DeployError("checkout must be clean development with HEAD=origin/development=target")
+    if status:
+        raise DeployError("checkout gate failed diagnostic_category=dirty_worktree")
+    head = _git_single_line(_git(repo, "rev-parse", "HEAD"))
+    if not FULL_SHA.fullmatch(head):
+        raise DeployError("checkout gate failed diagnostic_category=malformed_output")
+    if head != commit:
+        raise DeployError("checkout gate failed diagnostic_category=head_mismatch")
+    remote = _git_single_line(_git(repo, "rev-parse", "origin/development"))
+    if not FULL_SHA.fullmatch(remote):
+        raise DeployError("checkout gate failed diagnostic_category=malformed_output")
+    if remote != commit:
+        raise DeployError("checkout gate failed diagnostic_category=origin_mismatch")
 
 
 def _safe_parent(path: Path) -> None:

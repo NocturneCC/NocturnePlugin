@@ -72,6 +72,73 @@ class SystemdStateParsingTests(unittest.TestCase):
         self.assertEqual("0", state["MainPID"])
 
 
+class GitCheckoutGateTests(unittest.TestCase):
+    commit = "d" * 40
+    other = "e" * 40
+
+    def run_gate(self, outputs):
+        remaining = iter(outputs)
+        with mock.patch.object(deploy.subprocess, "run", side_effect=lambda *args, **kwargs: next(remaining)) as run:
+            deploy.verify_git(deploy.REPO, self.commit)
+        return run
+
+    @staticmethod
+    def result(stdout="", returncode=0):
+        return __import__("subprocess").CompletedProcess([], returncode, stdout, "redacted stderr fixture")
+
+    def test_valid_exact_state_uses_root_safe_directory_argv(self):
+        run = self.run_gate([self.result("development\n"), self.result(""),
+                             self.result(self.commit + "\n"), self.result(self.commit + "\n")])
+        expected_args = [
+            ["/usr/bin/git", "-C", str(deploy.REPO), "-c", f"safe.directory={deploy.REPO}", "branch", "--show-current"],
+            ["/usr/bin/git", "-C", str(deploy.REPO), "-c", f"safe.directory={deploy.REPO}", "status", "--porcelain=v1", "--untracked-files=all"],
+            ["/usr/bin/git", "-C", str(deploy.REPO), "-c", f"safe.directory={deploy.REPO}", "rev-parse", "HEAD"],
+            ["/usr/bin/git", "-C", str(deploy.REPO), "-c", f"safe.directory={deploy.REPO}", "rev-parse", "origin/development"],
+        ]
+        self.assertEqual(expected_args, [call.args[0] for call in run.call_args_list])
+        for call in run.call_args_list:
+            self.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, call.kwargs["env"])
+
+    def test_wrong_branch_is_classified(self):
+        with mock.patch.object(deploy.subprocess, "run", return_value=self.result("feature\n")):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=wrong_branch"):
+                deploy.verify_git(deploy.REPO, self.commit)
+
+    def test_dirty_porcelain_is_classified(self):
+        with mock.patch.object(deploy.subprocess, "run", side_effect=[self.result("development\n"), self.result(" M file\n")]):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=dirty_worktree"):
+                deploy.verify_git(deploy.REPO, self.commit)
+
+    def test_head_mismatch_is_classified(self):
+        with mock.patch.object(deploy.subprocess, "run", side_effect=[self.result("development\n"), self.result(""),
+                                                                         self.result(self.other + "\n")]):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=head_mismatch"):
+                deploy.verify_git(deploy.REPO, self.commit)
+
+    def test_origin_mismatch_is_classified(self):
+        with mock.patch.object(deploy.subprocess, "run", side_effect=[self.result("development\n"), self.result(""),
+                                                                         self.result(self.commit + "\n"),
+                                                                         self.result(self.other + "\n")]):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=origin_mismatch"):
+                deploy.verify_git(deploy.REPO, self.commit)
+
+    def test_malformed_command_output_is_classified_without_echo(self):
+        for outputs in (([self.result("development\nextra\n")]),
+                        ([self.result("development\n"), self.result(""), self.result("not-a-sha\n")])):
+            with self.subTest(outputs=outputs), mock.patch.object(deploy.subprocess, "run", side_effect=outputs):
+                with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=malformed_output") as caught:
+                    deploy.verify_git(deploy.REPO, self.commit)
+                self.assertNotIn("not-a-sha", str(caught.exception))
+
+    def test_git_launch_and_nonzero_failures_are_sanitized(self):
+        for failure in (OSError("private stderr detail"), self.result(returncode=128)):
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                    deploy.subprocess, "run", side_effect=failure):
+                with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=git_launch_failed") as caught:
+                    deploy.verify_git(deploy.REPO, self.commit)
+                self.assertNotIn("private stderr detail", str(caught.exception))
+
+
 class PreparedCheckTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
