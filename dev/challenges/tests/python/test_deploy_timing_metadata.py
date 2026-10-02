@@ -1266,6 +1266,131 @@ class DeploymentTests(unittest.TestCase):
         return deploy.make_plan(commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
                                 release=self.release, database=self.db, systemd=self.systemd)
 
+    def use_label_predecessor_fixture(self):
+        """Create the exact allowed file-state shape with a fixture-bound hash."""
+        for index in (0, 2):
+            _rel, source, target, _digest, _meta = self.targets[index]
+            target.write_bytes(source.read_bytes())
+        rel, _source, target, _digest, _meta = self.targets[1]
+        target.write_bytes(b"safe-predecessor-admin-page\n")
+        metadata = deploy.capture_file(target)
+        production = deploy.SAFE_LIVE_FILE_PREDECESSORS[
+            "/srv/projects/website/challenge-admin.html"]
+        fixture_profile = {
+            **production,
+            "source_relative": rel,
+            "sha256": metadata["sha256"],
+            "uid": metadata["uid"],
+            "gid": metadata["gid"],
+            "mode": metadata["mode"],
+            "nlink": metadata["nlink"],
+            "size": metadata["size"],
+        }
+        profiles = dict(deploy.SAFE_LIVE_FILE_PREDECESSORS)
+        profiles[str(target)] = fixture_profile
+        patcher = mock.patch.object(deploy, "SAFE_LIVE_FILE_PREDECESSORS", profiles)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return target, fixture_profile
+
+    def add_timing_columns(self):
+        conn = sqlite3.connect(self.db)
+        for name in deploy.NEW_COLUMNS:
+            conn.execute(f'ALTER TABLE challenge_config_bosses ADD COLUMN "{name}" TEXT')
+        conn.commit()
+        conn.close()
+
+    def test_label_predecessor_dry_run_and_original_baseline_remain_accepted(self):
+        predecessor = deploy.SAFE_LIVE_FILE_PREDECESSORS[
+            "/srv/projects/website/challenge-admin.html"]
+        self.assertEqual("00b976807ee137ffeaffc3e9b417d96c6bf7bff2", predecessor["commit"])
+        self.assertEqual("3d0eb1a5a96455a94ad230c1bf1645f89de5639b9dee2e70d831e1a09031b06c",
+                         predecessor["sha256"])
+        self.assertEqual((1001, 33, "0664", 1, 45431), tuple(
+            predecessor[key] for key in ("uid", "gid", "mode", "nlink", "size")))
+        target, _profile = self.use_label_predecessor_fixture()
+        original_files = [deploy._sha_file(item[2]) for item in self.targets]
+        plan = self.make_plan()
+        self.assertEqual("dry_run", plan["status"])
+        self.assertEqual("predecessor", plan["file_set"])
+        self.assertFalse(self.backup_root.exists())
+        self.assertEqual(original_files, [deploy._sha_file(item[2]) for item in self.targets])
+        self.assertEqual(b"safe-predecessor-admin-page\n", target.read_bytes())
+
+        # The original all-baseline profile remains accepted as well.
+        for index, (_rel, _source, original_target, _digest, _meta) in enumerate(self.targets):
+            original_target.write_text(f"live-before-{index}\n", encoding="utf-8")
+        baseline_plan = self.make_plan()
+        self.assertEqual("before", baseline_plan["file_set"])
+
+    def test_label_predecessor_apply_and_repeat_are_idempotent(self):
+        self.use_label_predecessor_fixture()
+        self.add_timing_columns()
+        plan = self.make_plan()
+        self.assertEqual("predecessor", plan["file_set"])
+        first = self.apply()
+        self.assertEqual("installed", first["status"])
+        second_plan = self.make_plan()
+        self.assertEqual("already_current", second_plan["status"])
+        second = self.apply()
+        self.assertEqual("already_current", second["status"])
+
+    def test_label_predecessor_rollback_restores_observed_page_bytes(self):
+        target, profile = self.use_label_predecessor_fixture()
+        before = [deploy._sha_file(item[2]) for item in self.targets]
+
+        def failpoint(phase):
+            if phase == "post_install_verify":
+                raise RuntimeError("fixture rollback after file installation")
+
+        with self.assertRaisesRegex(deploy.DeployError, "rolled back"):
+            self.apply(failpoint=failpoint)
+        self.assertEqual(before, [deploy._sha_file(item[2]) for item in self.targets])
+        self.assertEqual(profile["sha256"], deploy._sha_file(target))
+        self.assertEqual(b"safe-predecessor-admin-page\n", target.read_bytes())
+        self.assertFalse(deploy._has_columns(self.db))
+
+    def test_label_predecessor_rejects_one_byte_drift_wrong_metadata_and_partial_mix(self):
+        target, _profile = self.use_label_predecessor_fixture()
+        items = deploy.verify_extension_sources(
+            self.release,
+            {"purpose": "nocturne-immutable-runtime-v1", "commit": FIXTURE_COMMIT,
+             "files": {**{rel: digest for rel, _source, _target, digest, _meta in self.targets},
+                       deploy.SOURCE_MANIFEST.as_posix(): deploy._sha_file(self.sm_path)}},
+            self.manifest,
+        )
+        # Exact predecessor is valid; a one-byte content change is not.
+        target.write_bytes(b"live-before-1!\n")
+        with self.assertRaisesRegex(deploy.DeployError, "content drift"):
+            deploy._validate_file_prestate(items)
+
+        target.unlink()
+        target.symlink_to(self.targets[1][1])
+        with self.assertRaises(deploy.DeployError):
+            deploy._validate_file_prestate(items)
+        target.unlink()
+
+        self.use_label_predecessor_fixture()
+        actual = deploy.capture_file(target)
+        original_capture = deploy.capture_file
+        for field, wrong in (("uid", actual["uid"] + 1), ("gid", actual["gid"] + 1),
+                             ("mode", "0600"), ("nlink", 2), ("size", 45430)):
+            with self.subTest(field=field):
+                bad_actual = {**actual, field: wrong}
+                def capture(path, *, _bad=bad_actual):
+                    if path == target:
+                        return _bad
+                    return original_capture(path)
+                with mock.patch.object(deploy, "capture_file", side_effect=capture):
+                    with self.assertRaises(deploy.DeployError):
+                        deploy._validate_file_prestate(items)
+
+        # An old-baseline file mixed into the exact predecessor+unchanged-target
+        # shape is not an explicitly approved release state.
+        self.targets[0][2].write_text("live-before-0\n", encoding="utf-8")
+        with self.assertRaisesRegex(deploy.DeployError, "mixed old/new"):
+            deploy._validate_file_prestate(items)
+
     def apply(self, failpoint=None, systemd=None):
         plan = self.make_plan()
         return deploy.apply_install(plan, commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,

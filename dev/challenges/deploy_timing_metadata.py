@@ -40,6 +40,21 @@ FILES = (
     ("dev/challenges/website/challenge-admin.html", Path("/srv/projects/website/challenge-admin.html")),
     ("dev/challenges/website/challenge-admin-state.js", Path("/srv/projects/website/challenge-admin-state.js")),
 )
+# One explicitly verified predecessor for the label-only admin-page update.
+# The content hash is the page shipped by 00b9768; metadata and ACL are checked
+# against the established live-file profile before it can be accepted.
+SAFE_LIVE_FILE_PREDECESSORS = {
+    "/srv/projects/website/challenge-admin.html": {
+        "commit": "00b976807ee137ffeaffc3e9b417d96c6bf7bff2",
+        "source_relative": "dev/challenges/website/challenge-admin.html",
+        "sha256": "3d0eb1a5a96455a94ad230c1bf1645f89de5639b9dee2e70d831e1a09031b06c",
+        "uid": 1001,
+        "gid": 33,
+        "mode": "0664",
+        "nlink": 1,
+        "size": 45431,
+    },
+}
 NEW_COLUMNS = (
     "timing_scope", "timing_segment_key", "timing_segment_label",
     "automatic_capture", "numeric_metric_key", "numeric_metric_label",
@@ -539,9 +554,18 @@ def _source_targets(release: Path, source_manifest: dict, release_manifest: dict
         source = release / rel
         if _sha_file(source) != digest:
             raise DeployError(f"immutable source digest mismatch: {rel}")
-        result.append({"source_relative": rel, "source": source, "target": target,
-                       "after_sha256": digest, "after_size": int(b.get("size", -1)),
-                       "before": expected_live})
+        item = {"source_relative": rel, "source": source, "target": target,
+                "after_sha256": digest, "after_size": int(b.get("size", -1)),
+                "before": expected_live}
+        predecessor = SAFE_LIVE_FILE_PREDECESSORS.get(str(target))
+        if predecessor is not None:
+            if (rel != predecessor["source_relative"] or
+                    any(expected_live.get(key) != predecessor[key]
+                        for key in ("uid", "gid", "mode", "nlink"))):
+                raise DeployError("safe predecessor does not match the pinned live target profile")
+            item["safe_predecessors"] = [{**predecessor,
+                                           "acl_sha256": expected_live.get("acl_sha256")}]
+        result.append(item)
     return result
 
 
@@ -1723,21 +1747,45 @@ def _verify_installed(path: Path, item: dict[str, Any]) -> None:
 
 
 def _validate_file_prestate(items: list[dict[str, Any]]) -> str:
-    states = []
+    states: dict[str, str] = {}
     for item in items:
         actual = capture_file(item["target"])
         expected = item["before"]
-        expected_size = expected.get("size") if actual["sha256"] == expected.get("sha256") else item["after_size"]
         if (actual["uid"] != expected.get("uid") or actual["gid"] != expected.get("gid") or
                 actual["mode"] != expected.get("mode") or actual["nlink"] != expected.get("nlink") or
-                actual["size"] != expected_size or actual["acl_sha256"] != expected.get("acl_sha256")):
+                actual["acl_sha256"] != expected.get("acl_sha256")):
             raise DeployError(f"live target metadata drift: {item['target']}")
-        if actual["sha256"] not in {expected.get("sha256"), item["after_sha256"]}:
-            raise DeployError(f"live target content drift: {item['target']}")
-        states.append("after" if actual["sha256"] == item["after_sha256"] else "before")
-    if len(set(states)) != 1:
-        raise DeployError("mixed old/new live file set; recover before retrying")
-    return states[0]
+        if actual["sha256"] == item["after_sha256"]:
+            state, expected_size = "after", item["after_size"]
+        elif actual["sha256"] == expected.get("sha256"):
+            state, expected_size = "before", expected.get("size")
+        else:
+            predecessor = next((profile for profile in item.get("safe_predecessors", [])
+                                if actual["sha256"] == profile.get("sha256")), None)
+            if predecessor is None:
+                raise DeployError(f"live target content drift: {item['target']}")
+            if any(actual.get(key) != predecessor.get(key)
+                   for key in ("uid", "gid", "mode", "nlink", "size", "acl_sha256")):
+                raise DeployError(f"live target predecessor metadata drift: {item['target']}")
+            state, expected_size = "safe_predecessor", predecessor["size"]
+        if actual["size"] != expected_size:
+            raise DeployError(f"live target metadata drift: {item['target']}")
+        states[str(item["target"])] = state
+    if states and all(value == "before" for value in states.values()):
+        return "before"
+    if states and all(value == "after" for value in states.values()):
+        return "after"
+    # The only mixed state admitted is the exact prior release for this
+    # label-only upgrade: its admin page plus already-current unchanged files.
+    safe_predecessor_targets = {
+        str(item["target"]) for item in items if item.get("safe_predecessors")
+    }
+    for target in safe_predecessor_targets:
+        if (states.get(target) == "safe_predecessor" and
+                all(value == "after" for path, value in states.items() if path != target) and
+                len(states) == len(FILES)):
+            return "predecessor"
+    raise DeployError("mixed old/new live file set; recover before retrying")
 
 
 def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
@@ -1945,7 +1993,8 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
     before = _db_facts(database, config_module, expected_journal_mode="wal" if database == DB else None)
     if before["active_version_id"] != 10:
         raise DeployError("active version changed before apply")
-    if state == "after" and _has_columns(database):
+    schema_present = _has_columns(database)
+    if state == "after" and schema_present:
         check_conn = sqlite3.connect(database)
         try:
             _validate_new_columns(check_conn)
@@ -1954,7 +2003,7 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
         return {"status": "already_current", "target": commit, "active_version_id": 10,
                 "database_integrity": before["integrity"], "nginx_changed": False,
                 "configuration_version_published": False}
-    if state == "after" or _has_columns(database):
+    if state == "after" or (schema_present and state != "predecessor"):
         raise DeployError("partial file/schema state requires operator recovery")
     main_identity_before_stop = _stat_identity(_db_lstat(database))
     sidecars_before_stop = _sidecar_state_snapshot(database)
