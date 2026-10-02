@@ -4,8 +4,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "1bd6e8b418b99481d19242567c8c523e6bd8a7b1d3e00862f462ae8cde35bac8",
-      "size": 11680,
+      "sha256": "038161be024d9f3dc0ef9b9cd00cdec2bba1d75cba8521b1c48172d4d0791877",
+      "size": 12233,
       "source": null,
       "type": "regular"
     },
@@ -470,8 +470,8 @@
       "extension_reason": "Adds repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/website/challenge-admin.html",
-      "sha256": "3d0eb1a5a96455a94ad230c1bf1645f89de5639b9dee2e70d831e1a09031b06c",
-      "size": 45431,
+      "sha256": "69ca510ebac524621fe0697108a9bcac9630c31aabae440ce566847f249aeff3",
+      "size": 45676,
       "source": "/srv/projects/website/challenge-admin.html",
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -1309,8 +1309,8 @@
       "extension_reason": "Adds regression coverage for repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/website/tests/challenge-admin-state.test.js",
-      "sha256": "330e9b634efe0cfd7039fc9b537457ca41667ed18a0b758d44ff5cf8d48df73d",
-      "size": 13332,
+      "sha256": "cb7e43c62ce58723c19f1dff6ea51dc53c46ab684977eadcf8d3a98b2e7c1cd4",
+      "size": 13819,
       "source": "/srv/projects/website/tests/challenge-admin-state.test.js",
       "source_relationship": "repository_owned_extension",
       "type": "regular"

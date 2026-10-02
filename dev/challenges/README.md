@@ -41,6 +41,13 @@ not installed or activated by this commit.
   byte equivalence. No activity timing mappings are inferred: legacy time
   definitions normalize to `unconfigured` and `manual_only`, while numeric
   definitions remain `manual_only` until their meaning is configured.
+- The admin editor calls the stored `overall` timing scope “Overall time” and
+  explains it as the full activity completion time. It calls stored `segment`
+  “Room time”: the combined total of timed rooms/encounters, not an individual
+  room record. “Unconfigured” remains unchanged. These are display labels only;
+  they do not rewrite stored enum values or configure an activity. The intended
+  future mapping is Theatre of Blood Hard Mode as `overall` and regular Theatre
+  of Blood as `segment`; no active configuration is changed here.
 - `integration/routes/`: bounded source excerpts for the authenticated admin
   proxy (`admin_app_challenge_routes.fragment.py`), public blueprint
   registration, navigation link, and the existing approved Challenge intake

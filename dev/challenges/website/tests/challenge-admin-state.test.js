@@ -110,12 +110,14 @@ test('timing and numeric definitions gate automatic capture', () => {
   const timed = normalizeCaptureMetadata({ metric_type: 'time' });
   assert.throws(() => setAutomaticCapture(timed, 'enabled'), /Complete the timing/);
   timed.timing_scope = 'overall';
+  assert.equal(timed.timing_scope, 'overall');
   assert.equal(captureDefinitionReady(timed), true);
   setAutomaticCapture(timed, 'enabled');
   assert.equal(timed.automatic_capture, 'enabled');
 
   const segment = { metric_type: 'time', timing_scope: 'segment',
     timing_segment_key: 'final_room', timing_segment_label: 'Final room' };
+  assert.equal(segment.timing_scope, 'segment');
   assert.equal(captureDefinitionReady(segment), true);
   const numeric = normalizeCaptureMetadata({ metric_type: 'numeric' });
   assert.throws(() => setAutomaticCapture(numeric, 'enabled'), /Complete the timing or numeric/);
@@ -152,6 +154,11 @@ test('admin form exposes timing, numeric meaning, capture, and legacy status con
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /Unconfigured \/ manual submissions only/);
+  assert.match(html, /value="unconfigured"[^>]*>Unconfigured<\/option>/);
+  assert.match(html, /value="overall"[^>]*>Overall time<\/option>/);
+  assert.match(html, /value="segment"[^>]*>Room time<\/option>/);
+  assert.match(html, /Overall time: full activity completion time\./);
+  assert.match(html, /Room time: combined total of timed rooms\/encounters, not an individual room record\./);
 });
 
 test('configured time input formats normalize to milliseconds and canonical storage', () => {
