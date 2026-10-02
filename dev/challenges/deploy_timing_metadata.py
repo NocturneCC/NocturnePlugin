@@ -59,6 +59,7 @@ TIMERS = (
 CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 LOCK_PATH = Path("/run/lock/nocturne-challenge-timing-deploy.lock")
+MAX_ACL_OUTPUT_BYTES = 16 * 1024
 
 
 class DeployError(RuntimeError):
@@ -329,9 +330,10 @@ def _safe_temp_snapshot_root(root: Path) -> None:
 
 
 def _acl_text(path: Path) -> str:
-    proc = _run(["/usr/bin/getfacl", "--absolute-names", str(path)])
-    if proc.returncode:
-        raise DeployError(f"ACL inspection failed: {path}")
+    proc = _run(["/usr/bin/getfacl", "-cpn", "--", str(path)], timeout=15)
+    if (proc.returncode or len(proc.stdout.encode("utf-8")) > MAX_ACL_OUTPUT_BYTES or
+            len(proc.stderr.encode("utf-8")) > MAX_ACL_OUTPUT_BYTES):
+        raise DeployError("ACL inspection failed safely")
     return proc.stdout
 
 

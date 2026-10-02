@@ -464,6 +464,37 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
         self.assertEqual("rwx", parsed["default:user:1003:"])
         self.assertEqual("rwx", parsed["default:user::"])
 
+    def test_acl_collection_uses_absolute_numeric_getfacl_and_path_terminator(self):
+        path = Path("/srv/projects/database")
+        proc = __import__("subprocess").CompletedProcess(
+            ["/usr/bin/getfacl"], 0, "user::rwx\ngroup::rwx\nother::r-x\n", "")
+        with mock.patch.object(deploy, "_run", return_value=proc) as run:
+            self.assertEqual(proc.stdout, deploy._acl_text(path))
+        run.assert_called_once_with(
+            ["/usr/bin/getfacl", "-cpn", "--", "/srv/projects/database"], timeout=15)
+
+    def test_acl_text_collection_fails_closed_on_command_error_or_oversized_output(self):
+        path = Path("/srv/projects")
+        for proc in (
+                __import__("subprocess").CompletedProcess([], 1, "", "getfacl failed"),
+                __import__("subprocess").CompletedProcess(
+                    [], 0, "x" * (deploy.MAX_ACL_OUTPUT_BYTES + 1), ""),
+                __import__("subprocess").CompletedProcess(
+                    [], 0, "", "x" * (deploy.MAX_ACL_OUTPUT_BYTES + 1))):
+            with self.subTest(returncode=proc.returncode, outlen=len(proc.stdout), errlen=len(proc.stderr)), \
+                    mock.patch.object(deploy, "_run", return_value=proc):
+                with self.assertRaisesRegex(deploy.DeployError, "ACL inspection failed safely"):
+                    deploy._acl_text(path)
+
+    def test_acl_parser_accepts_numeric_and_rejects_name_resolved_principals(self):
+        numeric = "user::rwx\nuser:1003:rwx\ngroup::r-x\nmask::rwx\nother::r-x\n"
+        self.assertEqual("rwx", deploy._acl_entries(numeric)["user:1003:"])
+        for name in ("glob", "randal"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                deploy._acl_entries(
+                    "user::rwx\n" + f"user:{name}:rwx\n" +
+                    "group::r-x\nmask::rwx\nother::r-x\n")
+
     def test_authoritative_ancestry_acl_rejections_are_fail_closed(self):
         projects = Path("/srv/projects")
         database = Path("/srv/projects/database")
