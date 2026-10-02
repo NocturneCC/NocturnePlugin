@@ -94,6 +94,24 @@ class CategorizedDeployError(DeployError):
         super().__init__(f"diagnostic_category={category}")
 
 
+class LiveVerificationError(DeployError):
+    """A bounded, non-sensitive classification for one post-install probe."""
+
+    def __init__(self, category: str):
+        allowed = {
+            "intake_health_failed",
+            "configuration_read_failed",
+            "configuration_version_mismatch",
+            "schema_verification_failed",
+            "leaderboard_api_failed",
+            "admin_auth_gate_failed",
+        }
+        if category not in allowed:
+            raise ValueError("unsupported live-verification category")
+        self.diagnostic_category = category
+        super().__init__(f"diagnostic_category={category}")
+
+
 # Explicitly approved live Challenges.db ancestry and ACL principals.  This is
 # intentionally narrower than a generic “writable parent is okay” rule.
 _DB_ANCESTRY = {
@@ -1270,35 +1288,54 @@ def _http_json(url: str, *, expected: set[int] = {200}, maximum: int = 2 * 1024 
         return status, payload
 
 
+def _live_endpoint_json(url: str, category: str, *, expected: set[int] = {200}) -> tuple[int, dict[str, Any] | None]:
+    """Probe one local endpoint without allowing its URL/error into diagnostics."""
+    try:
+        return _http_json(url, expected=expected)
+    except Exception as exc:
+        raise LiveVerificationError(category) from exc
+
+
 def verify_live_behavior(expected_document: dict[str, Any]) -> dict[str, Any]:
     """Read-only bounded probes; response contents are never emitted."""
-    _status, intake_health = _http_json("http://127.0.0.1:5011/health")
+    if not isinstance(expected_document, dict) or expected_document.get("version_id") != 10:
+        raise LiveVerificationError("configuration_version_mismatch")
+    _status, intake_health = _live_endpoint_json(
+        "http://127.0.0.1:5011/health", "intake_health_failed")
     if not intake_health or intake_health.get("ok") is not True:
-        raise DeployError("Challenge intake health response failed")
-    _status, public_config = _http_json("http://127.0.0.1:5002/api/challenges/config/active")
-    if not public_config or public_config.get("version_id") != 10:
-        raise DeployError("public active Challenge config is not version 10")
+        raise LiveVerificationError("intake_health_failed")
+    _status, public_config = _live_endpoint_json(
+        "http://127.0.0.1:5002/api/challenges/config/active", "configuration_read_failed")
+    if not public_config:
+        raise LiveVerificationError("configuration_read_failed")
+    if public_config.get("version_id") != 10:
+        raise LiveVerificationError("configuration_version_mismatch")
     if not isinstance(public_config.get("bosses"), list):
-        raise DeployError("public active Challenge config response is invalid")
+        raise LiveVerificationError("schema_verification_failed")
     normalized_public = {key: value for key, value in public_config.items() if key != "ok"}
-    if normalized_public.get("version_id") != 10 or not isinstance(normalized_public.get("bosses"), list):
-        raise DeployError("public active config identity/schema is invalid")
+    if normalized_public.get("version_id") != 10:
+        raise LiveVerificationError("configuration_version_mismatch")
+    if not isinstance(normalized_public.get("bosses"), list):
+        raise LiveVerificationError("schema_verification_failed")
     if normalized_public != expected_document:
-        raise DeployError("public active config differs from the preserved version 10 document")
-    _validate_legacy_defaults(normalized_public)
-    _status, leaderboard = _http_json("http://127.0.0.1:5002/api/leaderboards/modes")
+        raise LiveVerificationError("schema_verification_failed")
+    try:
+        _validate_legacy_defaults(normalized_public)
+    except Exception as exc:
+        raise LiveVerificationError("schema_verification_failed") from exc
+    _status, leaderboard = _live_endpoint_json(
+        "http://127.0.0.1:5002/api/leaderboards/modes", "leaderboard_api_failed")
     if not leaderboard or leaderboard.get("ok") is not True:
-        raise DeployError("Challenge leaderboard read verification failed")
+        raise LiveVerificationError("leaderboard_api_failed")
     # Deliberately test the existing auth gate without presenting or revealing
     # a cookie: the focused API/admin suite exercises the authenticated path.
-    admin_status, _ = _http_json(
+    admin_status, _ = _live_endpoint_json(
         "http://127.0.0.1:5003/admin/api/challenges/config/published",
+        "admin_auth_gate_failed",
         expected={200, 302, 401, 403},
     )
     if admin_status == 200:
-        raise DeployError("admin API unexpectedly permitted an unauthenticated request")
-    if expected_document.get("version_id") != 10:
-        raise DeployError("expected active Challenge version identity is invalid")
+        raise LiveVerificationError("admin_auth_gate_failed")
     return {"intake_health": "ok", "public_active_config": "ok",
             "active_version_id": 10, "leaderboard_read": "ok",
             "admin_auth_gate": "protected", "manual_submission": "unchanged; no submission sent"}
@@ -1959,7 +1996,8 @@ def apply_install(plan: dict[str, Any], *, commit: str, repo: Path = REPO,
                 "configuration_version_published": False, "post_install": live}
     except BaseException as error:
         diagnostic_category = (error.diagnostic_category
-            if phase == "sidecar_quiescence" and isinstance(error, CategorizedDeployError) else
+            if phase == "live_behavior_verification" and isinstance(error, LiveVerificationError) else
+            error.diagnostic_category if phase == "sidecar_quiescence" and isinstance(error, CategorizedDeployError) else
             "unexpected_failure" if not isinstance(error, DeployError) else
             "maintenance_failure" if phase == "maintenance_stop" else
             "sidecar_quiescence_failure" if phase == "sidecar_quiescence" else

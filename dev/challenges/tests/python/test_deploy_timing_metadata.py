@@ -986,6 +986,117 @@ class DeploymentTests(unittest.TestCase):
             return 200, {"ok": True, "modes": []}
         return 401, None
 
+    def test_live_verification_failures_have_exact_safe_categories(self):
+        intake_url = "http://127.0.0.1:5011/health"
+        config_url = "http://127.0.0.1:5002/api/challenges/config/active"
+        leaderboard_url = "http://127.0.0.1:5002/api/leaderboards/modes"
+        admin_url = "http://127.0.0.1:5003/admin/api/challenges/config/published"
+        valid_config = self.fake_http(config_url)[1]
+        expected = {key: value for key, value in valid_config.items() if key != "ok"}
+        cases = (
+            ("intake request", "intake_health_failed", intake_url,
+             deploy.DeployError("sensitive URL https://example.invalid/?credential=fixture-only")),
+            ("intake response", "intake_health_failed", intake_url, (200, {"ok": False})),
+            ("config request", "configuration_read_failed", config_url,
+             deploy.DeployError("private response body")),
+            ("config absent", "configuration_read_failed", config_url, (200, None)),
+            ("config version", "configuration_version_mismatch", config_url,
+             (200, {**valid_config, "version_id": 11})),
+            ("config schema", "schema_verification_failed", config_url,
+             (200, {**valid_config, "bosses": None})),
+            ("config document", "schema_verification_failed", config_url,
+             (200, {**valid_config, "bosses": []})),
+            ("leaderboard request", "leaderboard_api_failed", leaderboard_url,
+             deploy.DeployError("private leaderboard payload")),
+            ("leaderboard response", "leaderboard_api_failed", leaderboard_url,
+             (200, {"ok": False})),
+            ("admin request", "admin_auth_gate_failed", admin_url,
+             deploy.DeployError("private auth response")),
+            ("admin unauthenticated", "admin_auth_gate_failed", admin_url, (200, {})),
+        )
+        for name, category, failing_url, failure in cases:
+            with self.subTest(name=name):
+                def fake(url, **kwargs):
+                    if url == failing_url:
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return self.fake_http(url, **kwargs)
+                with mock.patch.object(deploy, "_http_json", side_effect=fake):
+                    with self.assertRaises(deploy.LiveVerificationError) as caught:
+                        deploy.verify_live_behavior(expected)
+                self.assertEqual(category, caught.exception.diagnostic_category)
+                self.assertEqual(f"diagnostic_category={category}", str(caught.exception))
+                self.assertNotIn("example.invalid", str(caught.exception))
+                self.assertNotIn("private", str(caught.exception))
+                if isinstance(failure, Exception):
+                    self.assertIsNotNone(caught.exception.__cause__)
+
+        bad_legacy_config = {
+            **valid_config,
+            "bosses": [{"metric_type": "time", "timing_scope": "overall",
+                        "automatic_capture": "manual_only"}],
+        }
+        expected_bad_legacy = {key: value for key, value in bad_legacy_config.items() if key != "ok"}
+        with self.subTest(name="legacy defaults"):
+            with mock.patch.object(deploy, "_http_json", side_effect=lambda _url, **_kwargs: (200, bad_legacy_config)):
+                with self.assertRaises(deploy.LiveVerificationError) as caught:
+                    deploy.verify_live_behavior(expected_bad_legacy)
+            self.assertEqual("schema_verification_failed", caught.exception.diagnostic_category)
+
+        with self.subTest(name="expected identity"):
+            with mock.patch.object(deploy, "_http_json", side_effect=self.fake_http):
+                with self.assertRaises(deploy.LiveVerificationError) as caught:
+                    deploy.verify_live_behavior({**expected, "version_id": 11})
+            self.assertEqual("configuration_version_mismatch", caught.exception.diagnostic_category)
+
+    def test_live_verification_failure_reports_category_and_restores_full_prestate(self):
+        files_before = [deploy._sha_file(item[2]) for item in self.targets]
+        connection = sqlite3.connect(self.db)
+        counts_before = deploy._table_counts(connection)
+        schema_before = connection.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        self.assertEqual("ok", connection.execute("PRAGMA integrity_check").fetchone()[0])
+        connection.close()
+        units_before = {unit: self.systemd.show(unit) for unit in deploy.CONTROLLED}
+
+        def fail_leaderboard(url, **kwargs):
+            if url.endswith("/api/leaderboards/modes"):
+                raise deploy.DeployError("private fixture response must not escape")
+            return self.fake_http(url, **kwargs)
+
+        with mock.patch.object(deploy, "_http_json", side_effect=fail_leaderboard):
+            with self.assertRaisesRegex(
+                deploy.DeployError,
+                "phase=live_behavior_verification diagnostic_category=leaderboard_api_failed",
+            ) as caught:
+                self.apply()
+        self.assertNotIn("private fixture response", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, deploy.LiveVerificationError)
+        self.assertIsNotNone(caught.exception.__cause__.__cause__)
+        self.assertEqual(files_before, [deploy._sha_file(item[2]) for item in self.targets])
+
+        restored = sqlite3.connect(self.db)
+        self.assertEqual("ok", restored.execute("PRAGMA integrity_check").fetchone()[0])
+        self.assertEqual(counts_before, deploy._table_counts(restored))
+        self.assertEqual(schema_before, restored.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall())
+        self.assertFalse(set(deploy.NEW_COLUMNS).issubset(
+            {row[1] for row in restored.execute("PRAGMA table_info(challenge_config_bosses)")}))
+        restored.close()
+
+        for unit in (*deploy.LONG_SERVICES, *deploy.TIMERS):
+            before = units_before[unit]
+            after = self.systemd.show(unit)
+            self.assertEqual(tuple(before[key] for key in ("LoadState", "ActiveState", "SubState")),
+                             tuple(after[key] for key in ("LoadState", "ActiveState", "SubState")), unit)
+            if unit in deploy.TIMERS:
+                self.assertEqual(before["MainPID"], after["MainPID"], unit)
+            elif before["ActiveState"] == "active":
+                self.assertGreater(int(after["MainPID"]), 0, unit)
+
     def make_plan(self):
         return deploy.make_plan(commit=FIXTURE_COMMIT, repo=self.repo, runtime_root=self.root,
                                 release=self.release, database=self.db, systemd=self.systemd)
