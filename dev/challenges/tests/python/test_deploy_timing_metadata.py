@@ -293,6 +293,180 @@ class ReadOnlyDatabaseProfileTests(unittest.TestCase):
         self.assertEqual(10, observed["kwargs"]["timeout"])
 
 
+class DatabaseMetadataSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / "Challenges.db"
+        conn = sqlite3.connect(self.db)
+        conn.execute("CREATE TABLE sample(value TEXT)")
+        conn.commit()
+        conn.close()
+        self.db.chmod(0o664)
+
+    def test_optional_sidecars_safely_absent(self):
+        captured = deploy._database_metadata(self.db)
+        self.assertEqual({"main"}, set(captured))
+
+    def test_wal_and_shm_present_are_validated_and_fingerprinted(self):
+        writer = sqlite3.connect(self.db)
+        self.addCleanup(writer.close)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("INSERT INTO sample VALUES('fixture')")
+        writer.commit()
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(self.db) + suffix)
+            self.assertTrue(sidecar.is_file())
+            sidecar.chmod(0o664)
+        captured = deploy._database_metadata(self.db)
+        self.assertTrue({"main", "-wal", "-shm"}.issubset(captured))
+        self.assertTrue(all(len(captured[label]) == 10 for label in ("main", "-wal", "-shm")))
+
+    def test_sidecar_disappearance_during_capture_is_busy(self):
+        wal = Path(str(self.db) + "-wal")
+        wal.write_bytes(b"stable fixture")
+        wal.chmod(0o664)
+        original_digest = deploy._safe_file_digest
+
+        def digest(path, identity):
+            result = original_digest(path, identity)
+            if path == wal:
+                wal.unlink()
+            return result
+
+        with mock.patch.object(deploy, "_safe_file_digest", side_effect=digest):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_busy node=wal"):
+                deploy._database_metadata(self.db)
+
+    def test_sidecar_change_during_capture_is_busy(self):
+        wal = Path(str(self.db) + "-wal")
+        wal.write_bytes(b"before")
+        wal.chmod(0o664)
+        original_digest = deploy._safe_file_digest
+
+        def digest(path, identity):
+            result = original_digest(path, identity)
+            if path == wal:
+                wal.write_bytes(b"changed-during-capture")
+            return result
+
+        with mock.patch.object(deploy, "_safe_file_digest", side_effect=digest):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_busy node=wal"):
+                deploy._database_metadata(self.db)
+
+    def test_sidecar_appearance_during_capture_is_busy(self):
+        wal = Path(str(self.db) + "-wal")
+        original_present = deploy._sidecar_present
+
+        def appears(path):
+            if path == wal:
+                wal.write_bytes(b"appeared")
+                wal.chmod(0o664)
+                return True
+            return original_present(path)
+
+        with mock.patch.object(deploy, "_sidecar_present", side_effect=appears):
+            with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=database_busy node=wal"):
+                deploy._database_metadata(self.db)
+
+    def test_established_named_file_acl_is_accepted_and_fingerprinted(self):
+        expected = {
+            "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
+            "mask::": "rw-", "other::": "r--",
+        }
+        text = "user::rw-\nuser:glob:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+        self.assertEqual(deploy._acl_hash(text), deploy._validate_acl_profile(text, expected))
+        with self.assertRaises(ValueError):
+            deploy._validate_acl_profile(text + "default:user::rw-\n", expected)
+        with self.assertRaises(ValueError):
+            deploy._validate_acl_profile(text.replace("user:glob:rw-", "user:1002:rwx"), expected)
+
+    def test_authoritative_live_file_metadata_passes_the_static_predicates(self):
+        """The supplied settled live profile itself is not an unsafe node."""
+        canonical = deploy.DB
+        fake = os.stat_result((stat.S_IFREG | 0o664, 42, 9, 1, 1001, 33, 8175616, 0, 0, 0))
+        acl = "user::rw-\nuser:glob:rw-\ngroup::rw-\nmask::rw-\nother::r--\n"
+        def lstat(path):
+            if path == canonical:
+                return fake
+            raise FileNotFoundError
+        with (mock.patch.object(deploy, "_db_ancestry_snapshot", return_value=()),
+              mock.patch.object(deploy, "_db_lstat", side_effect=lstat),
+              mock.patch.object(deploy, "_acl_text", return_value=acl),
+              mock.patch.object(deploy, "_safe_file_digest", return_value="a" * 64),
+              mock.patch.object(deploy, "_sidecar_present", return_value=False)):
+            metadata = deploy._database_metadata(canonical)
+        self.assertEqual({"main"}, set(metadata))
+        self.assertEqual(1001, metadata["main"][2])
+        self.assertEqual(33, metadata["main"][3])
+        self.assertEqual(0o664, metadata["main"][4])
+
+    @staticmethod
+    def ancestry_acl(named_users, group_acl):
+        access = ["user::rwx", *(f"user:{uid}:rwx" for uid in sorted(named_users)),
+                  f"group::{group_acl}", "mask::rwx", "other::r-x"]
+        default = [f"default:{line}" for line in access]
+        return "\n".join(access + default) + "\n"
+
+    def ancestry_fixture(self, *, unsafe_projects=False, mutate_acl=False):
+        nodes = list(deploy._DB_ANCESTRY)
+        acl_by_node = {
+            Path("/srv"): "user::rwx\ngroup::r-x\nother::r-x\n",
+            Path("/srv/projects"): self.ancestry_acl({1003}, "r-x"),
+            Path("/srv/projects/database"): self.ancestry_acl({1000, 1003}, "rwx"),
+        }
+        stats = {}
+        for index, (node, (uid, gid, mode, _named, _group_acl)) in enumerate(deploy._DB_ANCESTRY.items(), 1):
+            if unsafe_projects and node == Path("/srv/projects"):
+                mode = 0o0777
+            stats[node] = os.stat_result((stat.S_IFDIR | mode, index, 1, 3, uid, gid, 4096, 0, 0, 0))
+        lstat_calls = {}
+
+        def lstat(path):
+            return stats[path]
+
+        def acl(path):
+            if mutate_acl and path == nodes[0]:
+                lstat_calls[path] = lstat_calls.get(path, 0) + 1
+                return acl_by_node[path] if lstat_calls[path] == 1 else "user::rwx\ngroup::rwx\nother::r-x\n"
+            return acl_by_node[path]
+
+        return mock.patch.object(deploy, "_db_lstat", side_effect=lstat), mock.patch.object(deploy, "_acl_text", side_effect=acl)
+
+    def test_approved_setgid_ancestry_and_named_default_acls_pass(self):
+        lstat_patch, acl_patch = self.ancestry_fixture()
+        with lstat_patch, acl_patch:
+            result = deploy._db_ancestry_snapshot(deploy.DB)
+        self.assertEqual(3, len(result))
+        self.assertTrue(all(len(item[-1]) == 64 for item in result))
+
+    def test_unexpected_writable_ancestry_and_acl_mutation_fail_closed(self):
+        for kwargs in ({"unsafe_projects": True}, {"mutate_acl": True}):
+            lstat_patch, acl_patch = self.ancestry_fixture(**kwargs)
+            with self.subTest(kwargs=kwargs), lstat_patch, acl_patch:
+                with self.assertRaisesRegex(deploy.DeployError, "diagnostic_category=unsafe_metadata node=ancestry"):
+                    deploy._db_ancestry_snapshot(deploy.DB)
+
+    def test_metadata_capture_does_not_change_fixture_hash_or_metadata(self):
+        def fingerprint():
+            paths = [self.db, *(Path(str(self.db) + suffix) for suffix in ("-wal", "-shm"))]
+            return {
+                str(path): None if not path.exists() else (
+                    hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_dev,
+                    path.stat().st_ino, path.stat().st_uid, path.stat().st_gid,
+                    stat.S_IMODE(path.stat().st_mode), path.stat().st_nlink,
+                    deploy._acl_hash(deploy._acl_text(path)))
+                for path in paths
+            }
+        before = fingerprint()
+        source_hash = deploy._sha_file(self.db)
+        deploy._database_metadata(self.db)
+        self.assertEqual(before, fingerprint())
+        self.assertEqual(source_hash, deploy._sha_file(self.db))
+
+
 class PreparedCheckTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

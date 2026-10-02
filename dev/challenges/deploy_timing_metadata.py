@@ -65,6 +65,19 @@ class DeployError(RuntimeError):
     pass
 
 
+# Explicitly approved live Challenges.db ancestry and ACL principals.  This is
+# intentionally narrower than a generic “writable parent is okay” rule.
+_DB_ANCESTRY = {
+    Path("/srv"): (0, 0, 0o755, frozenset(), None),
+    Path("/srv/projects"): (1000, 33, 0o2775, frozenset({1003}), "r-x"),
+    Path("/srv/projects/database"): (1000, 33, 0o2775, frozenset({1000, 1003}), "rwx"),
+}
+_DB_FILE_ACL = {
+    "user::": "rw-", "user:1003:": "rw-", "group::": "rw-",
+    "mask::": "rw-", "other::": "r--",
+}
+
+
 def _sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -167,6 +180,149 @@ def _safe_parent(path: Path) -> None:
         st = current.lstat()
         if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode):
             raise DeployError(f"unsafe target parent: {current}")
+
+
+def _acl_entries(text: str) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # getfacl emits access entries as user::rwx/user:name:rwx and
+        # inherited entries with a default: prefix.
+        if line.startswith("default:"):
+            line = line[len("default:"):]
+            prefix = "default:"
+        else:
+            prefix = ""
+        parts = line.split(":")
+        if len(parts) == 3 and parts[0] in {"user", "group", "mask", "other"} and not parts[1]:
+            key, perms = f"{prefix}{parts[0]}::", parts[2]
+        elif len(parts) == 3 and parts[0] in {"user", "group"}:
+            identity = parts[1]
+            if identity == "randal":
+                identity = "1000"
+            elif identity == "glob":
+                identity = "1003"
+            if not identity.isdecimal():
+                raise ValueError("unapproved ACL identity")
+            key, perms = f"{prefix}{parts[0]}:{identity}:", parts[2]
+        else:
+            raise ValueError("malformed ACL entry")
+        if key in entries or not re.fullmatch(r"[r-][w-][x-]", perms):
+            raise ValueError("duplicate or malformed ACL entry")
+        entries[key] = perms
+    return entries
+
+
+def _validate_acl_profile(text: str, expected: dict[str, str]) -> str:
+    entries = _acl_entries(text)
+    if entries != expected:
+        raise ValueError("ACL profile mismatch")
+    # Named entries must never gain effective permissions outside the mode's
+    # group-class mask.  Exact-profile comparison above also rejects extra IDs.
+    mask = entries.get("mask::", entries.get("group::"))
+    if mask is None:
+        raise ValueError("ACL mask missing")
+    mask_set = {i for i, bit in enumerate(mask) if bit != "-"}
+    for key, permissions in entries.items():
+        if key.startswith(("user:", "group:")) and not key.endswith("::"):
+            effective = {i for i, bit in enumerate(permissions) if bit != "-"}
+            if not effective.issubset(mask_set):
+                raise ValueError("ACL exceeds effective mode")
+    return _acl_hash(text)
+
+
+def _db_ancestry_snapshot(path: Path) -> tuple[tuple[Any, ...], ...]:
+    if path != DB:
+        return ()
+    snapshot = []
+    for node, (uid, gid, mode, named_users, group_acl) in _DB_ANCESTRY.items():
+        try:
+            before = _db_lstat(node)
+            if (not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode) or
+                    (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) != (uid, gid, mode)):
+                raise ValueError("directory metadata mismatch")
+            acl_text = _acl_text(node)
+            if group_acl is not None:
+                entries = _acl_entries(acl_text)
+                prefix_sets = {"access": set(), "default": set()}
+                for key in entries:
+                    scope, entry = ("default", key[len("default:"):]) if key.startswith("default:") else ("access", key)
+                    if entry.startswith("user:") and not entry.startswith("user::"):
+                        prefix_sets[scope].add(int(entry.split(":")[1]))
+                    elif entry.startswith("group:") and not entry.startswith("group::"):
+                        raise ValueError("unapproved named group ACL")
+                if prefix_sets["access"] != set(named_users) or prefix_sets["default"] != set(named_users):
+                    raise ValueError("ACL identity set mismatch")
+                base = {"user::": "rwx", "group::": group_acl, "mask::": "rwx", "other::": "r-x"}
+                expected = dict(base)
+                expected.update({f"user:{identity}:": "rwx" for identity in named_users})
+                expected_default = {f"default:{key}": value for key, value in expected.items()}
+                if entries != {**expected, **expected_default}:
+                    raise ValueError("ACL permission profile mismatch")
+                acl_digest = _acl_hash(acl_text)
+            else:
+                acl_digest = _validate_acl_profile(acl_text, {
+                    "user::": "rwx", "group::": "r-x", "other::": "r-x"})
+            after = _db_lstat(node)
+            if _stat_identity(before) != _stat_identity(after):
+                raise RuntimeError("directory changed during capture")
+            if _acl_hash(acl_text) != _acl_hash(_acl_text(node)):
+                raise ValueError("ACL changed during capture")
+            snapshot.append((str(node), *_stat_identity(before), acl_digest))
+        except RuntimeError:
+            raise DeployError("database inspection failed diagnostic_category=database_busy node=ancestry") from None
+        except (OSError, ValueError, DeployError):
+            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata node=ancestry") from None
+    return tuple(snapshot)
+
+
+def _stat_identity(st: os.stat_result) -> tuple[int, ...]:
+    return (st.st_dev, st.st_ino, st.st_uid, st.st_gid,
+            stat.S_IMODE(st.st_mode), st.st_nlink, st.st_size, st.st_mtime_ns)
+
+
+def _database_failure(category: str, node: str) -> DeployError:
+    return DeployError(f"database inspection failed diagnostic_category={category} node={node}")
+
+
+def _db_lstat(path: Path) -> os.stat_result:
+    return path.lstat()
+
+
+def _sidecar_present(path: Path) -> bool:
+    try:
+        _db_lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _safe_temp_snapshot_root(root: Path) -> None:
+    try:
+        parent = Path("/tmp")
+        parent_st = parent.lstat()
+        root_st = root.lstat()
+        private_owner = (0, 0) if os.geteuid() == 0 else (os.geteuid(), os.getegid())
+        parent_metadata_ok = (
+            (parent_st.st_uid, parent_st.st_gid, stat.S_IMODE(parent_st.st_mode)) == (0, 0, 0o1777)
+            if os.geteuid() == 0 else stat.S_IMODE(parent_st.st_mode) == 0o1777
+        )
+        if (not stat.S_ISDIR(parent_st.st_mode) or stat.S_ISLNK(parent_st.st_mode) or
+                not parent_metadata_ok or not os.path.ismount(parent) or
+                not stat.S_ISDIR(root_st.st_mode) or stat.S_ISLNK(root_st.st_mode) or
+                (root_st.st_uid, root_st.st_gid) != private_owner or
+                stat.S_IMODE(root_st.st_mode) != 0o700 or root_st.st_nlink < 2 or
+                root_st.st_dev != parent_st.st_dev or os.path.ismount(root)):
+            raise ValueError("private temporary profile mismatch")
+        if os.geteuid() == 0:
+            _validate_acl_profile(_acl_text(parent), {
+                "user::": "rwx", "group::": "rwx", "other::" : "rwx"})
+        _validate_acl_profile(_acl_text(root), {
+            "user::": "rwx", "group::": "---", "other::": "---"})
+    except (OSError, ValueError, DeployError):
+        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata node=private_temp") from None
 
 
 def _acl_text(path: Path) -> str:
@@ -449,75 +605,133 @@ def _sqlite_error_category(exc: sqlite3.Error, fallback: str) -> str:
 
 def _database_metadata(path: Path) -> dict[str, tuple[Any, ...]]:
     """Validate stable DB/sidecar nodes and capture private content fingerprints."""
+    def fail(category: str, node: str) -> DeployError:
+        return DeployError(f"database inspection failed diagnostic_category={category} node={node}")
+
+    def acl_for(node: Path, node_class: str) -> str:
+        try:
+            return _acl_text(node)
+        except (OSError, DeployError):
+            try:
+                _db_lstat(node)
+            except OSError:
+                raise fail("database_busy", node_class) from None
+            raise fail("unsafe_metadata", node_class) from None
+
     try:
         _safe_parent(path)
     except (OSError, DeployError):
-        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+        raise fail("unsafe_metadata", "ancestry") from None
+    ancestry_before = _db_ancestry_snapshot(path)
     nodes: dict[str, tuple[Any, ...]] = {}
     paths = [("main", path), *((suffix, Path(str(path) + suffix))
                                for suffix in ("-wal", "-shm", "-journal"))]
     main_identity = None
+    initially_present: set[str] = set()
     for label, node in paths:
+        node_class = {"main": "database", "-wal": "wal", "-shm": "shm", "-journal": "journal"}[label]
         try:
-            before = node.lstat()
+            before = _db_lstat(node)
         except FileNotFoundError:
             if label == "main":
-                raise DeployError("database inspection failed diagnostic_category=database_missing") from None
+                raise fail("database_missing", "database") from None
             continue
-        except OSError:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+        except OSError as exc:
+            category = "database_busy" if label != "main" and exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE} else "unsafe_metadata"
+            raise fail(category, node_class) from None
+        initially_present.add(label)
         if (not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_nlink != 1):
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            raise fail("unsafe_metadata", node_class)
         if before.st_size > 512 * 1024 * 1024:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
-        identity = (before.st_dev, before.st_ino, before.st_uid, before.st_gid,
-                    stat.S_IMODE(before.st_mode), before.st_nlink, before.st_size, before.st_mtime_ns)
+            raise fail("unsafe_metadata", node_class)
+        identity = _stat_identity(before)
         if label == "main":
             main_identity = identity
             if path == DB and (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) != (1001, 33, 0o664):
-                raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+                raise fail("unsafe_metadata", "database")
         elif main_identity is not None and identity[2:5] != main_identity[2:5]:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            raise fail("unsafe_metadata", node_class)
+        elif main_identity is not None and identity[0] != main_identity[0]:
+            raise fail("unsafe_metadata", node_class)
         try:
-            acl_digest = _acl_hash(_acl_text(node))
-        except (OSError, DeployError):
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+            acl_text = acl_for(node, node_class)
+            if path == DB:
+                acl_digest = _validate_acl_profile(acl_text, _DB_FILE_ACL)
+            else:
+                acl_digest = _acl_hash(acl_text)
+        except DeployError as exc:
+            match = re.search(r"diagnostic_category=(database_busy|unsafe_metadata)", str(exc))
+            raise fail(match.group(1) if match else "unsafe_metadata", node_class) from None
+        except (OSError, ValueError):
+            raise fail("unsafe_metadata", node_class) from None
         try:
-            after = node.lstat()
+            after = _db_lstat(node)
         except OSError:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
-        after_identity = (after.st_dev, after.st_ino, after.st_uid, after.st_gid,
-                          stat.S_IMODE(after.st_mode), after.st_nlink, after.st_size, after.st_mtime_ns)
+            raise fail("database_busy", node_class) from None
+        after_identity = _stat_identity(after)
         if identity != after_identity:
-            category = "database_busy" if identity[:6] == after_identity[:6] else "unsafe_metadata"
-            raise DeployError(f"database inspection failed diagnostic_category={category}")
+            raise fail("database_busy", node_class)
         if not stat.S_ISREG(after.st_mode):
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
-        nodes[label] = (*identity, acl_digest, _safe_file_digest(node, identity))
+            raise fail("database_busy", node_class)
+        try:
+            file_digest = _safe_file_digest(node, identity)
+            post_read = _db_lstat(node)
+            if _stat_identity(post_read) != identity:
+                raise fail("database_busy", node_class)
+            acl_after = acl_for(node, node_class)
+            if _acl_hash(acl_after) != acl_digest:
+                raise fail("unsafe_metadata", node_class)
+        except DeployError as exc:
+            match = re.search(r"diagnostic_category=(database_busy|unsafe_metadata)", str(exc))
+            raise fail(match.group(1) if match else "unsafe_metadata", node_class) from None
+        except (OSError, ValueError) as exc:
+            category = "database_busy" if isinstance(exc, OSError) and exc.errno in {
+                errno.ENOENT, errno.EAGAIN, errno.ESTALE, errno.ELOOP
+            } else "unsafe_metadata"
+            raise fail(category, node_class) from None
+        nodes[label] = (*identity, acl_digest, file_digest)
     if "main" not in nodes:
-        raise DeployError("database inspection failed diagnostic_category=database_missing")
+        raise fail("database_missing", "database")
+    # WAL/SHM/journal nodes may appear or disappear as SQLite opens/closes. A
+    # transition during capture is contention, not evidence of unsafe static
+    # metadata; the next attempt will validate the new settled state.
+    for label, node in paths[1:]:
+        try:
+            present = _sidecar_present(node)
+        except OSError:
+            raise fail("database_busy", {"-wal": "wal", "-shm": "shm", "-journal": "journal"}[label]) from None
+        if present != (label in initially_present):
+            raise fail("database_busy", {"-wal": "wal", "-shm": "shm", "-journal": "journal"}[label])
+    ancestry_after = _db_ancestry_snapshot(path)
+    if ancestry_before != ancestry_after:
+        if tuple(item[-1] for item in ancestry_before) != tuple(item[-1] for item in ancestry_after):
+            raise fail("unsafe_metadata", "ancestry")
+        raise fail("database_busy", "ancestry")
+    if ancestry_before:
+        nodes["ancestry"] = (ancestry_before,)
     return nodes
 
 
 def _safe_file_digest(path: Path, identity: tuple[int, ...]) -> str:
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata") from None
+    except OSError as exc:
+        category = "database_busy" if exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE, errno.ELOOP} else "unsafe_metadata"
+        raise DeployError(f"database inspection failed diagnostic_category={category}") from None
     digest = hashlib.sha256()
     try:
         before = os.fstat(fd)
         current = (before.st_dev, before.st_ino, before.st_uid, before.st_gid,
                    stat.S_IMODE(before.st_mode), before.st_nlink, before.st_size, before.st_mtime_ns)
         if current[:6] != identity[:6]:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            raise DeployError("database inspection failed diagnostic_category=database_busy")
         if current[6:] != identity[6:]:
             raise DeployError("database inspection failed diagnostic_category=database_busy")
         total = 0
         while block := os.read(fd, 1024 * 1024):
             total += len(block)
             if total > 512 * 1024 * 1024:
-                raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+                raise _database_failure("unsafe_metadata", "private_snapshot")
             digest.update(block)
         after = os.fstat(fd)
         final = (after.st_dev, after.st_ino, after.st_uid, after.st_gid,
@@ -530,12 +744,44 @@ def _safe_file_digest(path: Path, identity: tuple[int, ...]) -> str:
                          stat.S_IMODE(named.st_mode), named.st_nlink, named.st_size,
                          named.st_mtime_ns)
         if current[:6] != final[:6] or current[:6] != named_identity[:6]:
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+            raise DeployError("database inspection failed diagnostic_category=database_busy")
         if current[6:] != final[6:] or current[6:] != named_identity[6:]:
             raise DeployError("database inspection failed diagnostic_category=database_busy")
         return digest.hexdigest()
     finally:
         os.close(fd)
+
+
+def _raise_if_sidecar_changed(path: Path, baseline: dict[str, tuple[Any, ...]]) -> None:
+    """Classify sidecar transitions during a snapshot as contention.
+
+    An ACL mutation is deliberately different: it remains unsafe metadata.
+    """
+    for label in ("-wal", "-shm", "-journal"):
+        node = Path(str(path) + label)
+        node_class = {"-wal": "wal", "-shm": "shm", "-journal": "journal"}[label]
+        try:
+            current = _db_lstat(node)
+        except FileNotFoundError:
+            if label in baseline:
+                raise _database_failure("database_busy", node_class) from None
+            continue
+        except OSError:
+            raise _database_failure("database_busy", node_class) from None
+        if label not in baseline:
+            raise _database_failure("database_busy", node_class)
+        if not stat.S_ISREG(current.st_mode) or stat.S_ISLNK(current.st_mode):
+            raise _database_failure("database_busy", node_class)
+        try:
+            acl = _acl_text(node)
+        except (OSError, DeployError):
+            raise _database_failure("database_busy", node_class) from None
+        if _acl_hash(acl) != baseline[label][8]:
+            raise _database_failure("unsafe_metadata", node_class)
+        if _stat_identity(current) != baseline[label][:8]:
+            raise _database_failure("database_busy", node_class)
+        if _safe_file_digest(node, baseline[label][:8]) != baseline[label][9]:
+            raise _database_failure("database_busy", node_class)
 
 
 @contextlib.contextmanager
@@ -551,11 +797,7 @@ def _readonly_database_snapshot(path: Path):
         raise DeployError("database inspection failed diagnostic_category=database_busy")
     with tempfile.TemporaryDirectory(prefix="nocturne-challenge-db-inspect-", dir="/tmp") as directory:
         root = Path(directory)
-        root_st = root.lstat()
-        if (not stat.S_ISDIR(root_st.st_mode) or stat.S_ISLNK(root_st.st_mode) or
-                root_st.st_uid != os.geteuid() or stat.S_IMODE(root_st.st_mode) != 0o700):
-            raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
-        _require_basic_acl(root)
+        _safe_temp_snapshot_root(root)
         snapshot = root / path.name
         for label, suffix in (("main", ""), ("-wal", "-wal")):
             if label not in before:
@@ -580,7 +822,7 @@ def _readonly_database_snapshot(path: Path):
                 while block := os.read(src_fd, 1024 * 1024):
                     total += len(block)
                     if total > 512 * 1024 * 1024:
-                        raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+                            raise _database_failure("unsafe_metadata", "private_snapshot")
                     copied.update(block)
                     view = memoryview(block)
                     while view:
@@ -594,16 +836,22 @@ def _readonly_database_snapshot(path: Path):
                 copied_st = os.fstat(dst_fd)
                 if (not stat.S_ISREG(copied_st.st_mode) or copied_st.st_nlink != 1 or
                         copied_st.st_uid != os.geteuid() or stat.S_IMODE(copied_st.st_mode) != 0o600):
-                    raise DeployError("database inspection failed diagnostic_category=unsafe_metadata")
+                    raise _database_failure("unsafe_metadata", "private_snapshot")
             except OSError as exc:
-                category = "database_busy" if exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE} else "unsafe_metadata"
-                raise DeployError(f"database inspection failed diagnostic_category={category}") from None
+                category = "database_busy" if exc.errno in {errno.ENOENT, errno.EAGAIN, errno.ESTALE, errno.ELOOP} else "unsafe_metadata"
+                node_class = "database" if label == "main" else "wal"
+                raise _database_failure(category, node_class) from None
             finally:
                 if src_fd is not None:
                     os.close(src_fd)
                 if dst_fd is not None:
                     os.close(dst_fd)
-        if _database_metadata(path) != before:
+        try:
+            after_metadata = _database_metadata(path)
+        except DeployError:
+            _raise_if_sidecar_changed(path, before)
+            raise
+        if after_metadata != before:
             raise DeployError("database inspection failed diagnostic_category=database_busy")
         uri = snapshot.as_uri() + "?mode=ro"
         try:
