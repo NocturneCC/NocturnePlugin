@@ -665,6 +665,59 @@ class DatabaseMetadataSafetyTests(unittest.TestCase):
         self.assertEqual(source_hash, deploy._sha_file(self.db))
 
 
+class DeploymentLockTests(unittest.TestCase):
+    @staticmethod
+    def fake_stat(file_type, mode, *, uid=0, gid=0, nlink=1):
+        return os.stat_result((file_type | mode, 1, 2, nlink, uid, gid, 0, 0, 0, 0))
+
+    def test_lock_path_uses_private_run_directory(self):
+        self.assertEqual(Path("/run/nocturne-challenge-timing-deploy.lock"), deploy.LOCK_PATH)
+        self.assertEqual(Path("/run"), deploy.LOCK_PATH.parent)
+
+    def test_safe_parent_and_root_owned_private_lock_file_are_accepted(self):
+        parent = self.fake_stat(stat.S_IFDIR, 0o755)
+        lock = self.fake_stat(stat.S_IFREG, 0o600)
+        with (mock.patch.object(Path, "lstat", return_value=parent),
+              mock.patch.object(deploy.os, "open", return_value=17) as open_file,
+              mock.patch.object(deploy.os, "fstat", return_value=lock),
+              mock.patch.object(deploy.fcntl, "flock") as flock):
+            self.assertEqual(17, deploy._deployment_lock(deploy.LOCK_PATH))
+        self.assertEqual(
+            (deploy.LOCK_PATH, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600),
+            open_file.call_args.args)
+        flock.assert_called_once_with(17, deploy.fcntl.LOCK_EX | deploy.fcntl.LOCK_NB)
+
+    def test_unsafe_parent_metadata_is_rejected_before_open(self):
+        unsafe_parents = (
+            self.fake_stat(stat.S_IFDIR, 0o755, uid=1000),
+            self.fake_stat(stat.S_IFDIR, 0o1777),
+            self.fake_stat(stat.S_IFLNK, 0o777),
+        )
+        for parent in unsafe_parents:
+            with self.subTest(parent=parent), mock.patch.object(Path, "lstat", return_value=parent), \
+                    mock.patch.object(deploy.os, "open") as open_file:
+                with self.assertRaisesRegex(deploy.DeployError, "deployment lock parent is unsafe"):
+                    deploy._deployment_lock(deploy.LOCK_PATH)
+                open_file.assert_not_called()
+
+    def test_unsafe_lock_file_metadata_is_rejected(self):
+        parent = self.fake_stat(stat.S_IFDIR, 0o755)
+        unsafe_files = (
+            self.fake_stat(stat.S_IFDIR, 0o600),
+            self.fake_stat(stat.S_IFREG, 0o640),
+            self.fake_stat(stat.S_IFREG, 0o600, uid=1000),
+            self.fake_stat(stat.S_IFREG, 0o600, nlink=2),
+        )
+        for lock in unsafe_files:
+            with self.subTest(lock=lock), mock.patch.object(Path, "lstat", return_value=parent), \
+                    mock.patch.object(deploy.os, "open", return_value=17), \
+                    mock.patch.object(deploy.os, "fstat", return_value=lock), \
+                    mock.patch.object(deploy.os, "close") as close_file:
+                with self.assertRaisesRegex(deploy.DeployError, "deployment lock file is unsafe"):
+                    deploy._deployment_lock(deploy.LOCK_PATH)
+                close_file.assert_called_once_with(17)
+
+
 class PreparedCheckTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

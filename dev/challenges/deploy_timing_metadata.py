@@ -58,7 +58,7 @@ TIMERS = (
 )
 CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-LOCK_PATH = Path("/run/lock/nocturne-challenge-timing-deploy.lock")
+LOCK_PATH = Path("/run/nocturne-challenge-timing-deploy.lock")
 MAX_ACL_OUTPUT_BYTES = 16 * 1024
 
 
