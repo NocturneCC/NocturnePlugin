@@ -47,6 +47,8 @@ final class NocturnePanel extends PluginPanel
 	private final JLabel player = label("Log in to see your character", Color.WHITE);
 	private final JLabel tracking = label("Loot tracking enabled", PURPLE);
 	private final JLabel count = label("0 loot events", MUTED);
+	private final JTextArea storageInfo = note(
+		"Stored locally per character. Persisted records are display-only and are never resubmitted.", BACKGROUND);
 	private final JButton loadOlder = new JButton("Load 50 older events");
 	private final JPanel feed = new JPanel();
 	private final JPanel announcementFeed = new JPanel();
@@ -85,7 +87,6 @@ final class NocturnePanel extends PluginPanel
 		header.add(spacer());
 		header.add(label("CHARACTER", MUTED));
 		header.add(player);
-		header.add(spacer());
 		header.add(tracking);
 		header.add(connection);
 		header.add(spacer());
@@ -99,7 +100,7 @@ final class NocturnePanel extends PluginPanel
 		announcementFeed.add(note("Announcements load in the background.", BACKGROUND));
 		header.add(announcementFeed);
 		header.add(spacer());
-		header.add(label("RECENT LOOT", PURPLE));
+		header.add(label("RECENT DROPS", PURPLE));
 		header.add(count);
 		add(header, BorderLayout.NORTH);
 
@@ -132,9 +133,10 @@ final class NocturnePanel extends PluginPanel
 		});
 		footer.add(loadOlder);
 		footer.add(clear);
-		footer.add(note("Stored locally per character. Persisted records are display-only and are never resubmitted.", BACKGROUND));
+		footer.add(storageInfo);
 		add(footer, BorderLayout.SOUTH);
 		installViewportInputTracking();
+		setDiagnostics(false);
 		renderHistory();
 	}
 
@@ -444,7 +446,8 @@ final class NocturnePanel extends PluginPanel
 
 	void setDiagnostics(boolean enabled)
 	{
-		if (diagnostics != enabled)
+		boolean changed = diagnostics != enabled;
+		if (changed)
 		{
 			ViewportAnchor anchor = captureViewportAnchor();
 			diagnostics = enabled;
@@ -452,8 +455,15 @@ final class NocturnePanel extends PluginPanel
 			renderHistory();
 			restoreAfterLayout(anchor, beginIndependentRestore());
 		}
+		tracking.setVisible(enabled);
+		connection.setVisible(enabled);
+		count.setVisible(enabled);
 		groupPreview.setVisible(enabled);
 		raidDiagnostics.setVisible(enabled);
+		raidVerification.setVisible(enabled);
+		storageInfo.setVisible(enabled);
+		revalidate();
+		repaint();
 	}
 
 	void setSubmissionEnabled(boolean enabled)
@@ -483,7 +493,7 @@ final class NocturnePanel extends PluginPanel
 		loadOlder.setVisible(history.hasOlder());
 		if (history.getRecords().isEmpty())
 		{
-			feed.add(note("No drops yet. Defeat an NPC that drops loot to test tracking.", CARD));
+			feed.add(note("No recent drops yet.", CARD));
 		}
 		for (LootRecord record : history.getRecords())
 		{
@@ -532,37 +542,50 @@ final class NocturnePanel extends PluginPanel
 				icon.setPreferredSize(new Dimension(36, 32));
 				itemManager.getImage(item.id).addTo(icon);
 				row.add(icon, BorderLayout.WEST);
-				String price = priceText(item);
+				String price = item.unitPriceGp > 0 || diagnostics ? priceText(item) : "";
 				JTextArea text = note(item.quantity + " × " + item.name
 					+ (diagnostics ? " [" + item.id + "]" : "") + price, CARD);
 				text.setForeground(Color.WHITE);
 				row.add(text, BorderLayout.CENTER);
 				card.add(row);
 			}
-			card.add(note(record.submission.label, CARD));
-			if (record.group.eligibilityNote != null)
+			if (diagnostics || hasActionableDeliveryState(record.submission))
 			{
-				card.add(note(record.group.eligibilityNote, CARD));
+				card.add(note(record.submission.label, CARD));
 			}
-			if (record.group.rosterState != null)
+			if (diagnostics)
 			{
-				card.add(note("Roster snapshot: " + record.group.rosterState.replace('_', ' '), CARD));
+				if (record.group.eligibilityNote != null)
+				{
+					card.add(note(record.group.eligibilityNote, CARD));
+				}
+				if (record.group.rosterState != null)
+				{
+					card.add(note("Roster snapshot: " + record.group.rosterState.replace('_', ' '), CARD));
+				}
+				if (record.group.scoringMode != null)
+				{
+					card.add(note("Proposed scoring mode: " + record.group.scoringMode, CARD));
+				}
+				if (record.group.status == GroupSnapshot.Status.MATCHED
+					|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
+				{
+					boolean rewardRoster = RaidType.fromSource(record.source) != null;
+					card.add(note((rewardRoster ? "Raid roster" : "Active raid context")
+						+ (record.group.status == GroupSnapshot.Status.INCOMPLETE
+						? " (incomplete)" : "") + " · local only\n"
+						+ (record.group.names.isEmpty() ? "Unavailable" : String.join(", ", record.group.names)), CARD));
+				}
+				card.add(note(record.group.displayText(), CARD));
 			}
-			if (record.group.scoringMode != null)
-			{
-				card.add(note("Proposed scoring mode: " + record.group.scoringMode, CARD));
-			}
-			if (record.group.status == GroupSnapshot.Status.MATCHED
-				|| record.group.status == GroupSnapshot.Status.INCOMPLETE)
-			{
-				boolean rewardRoster = RaidType.fromSource(record.source) != null;
-				card.add(note((rewardRoster ? "Raid roster" : "Active raid context")
-					+ (record.group.status == GroupSnapshot.Status.INCOMPLETE
-					? " (incomplete)" : "") + " · local only\n"
-					+ (record.group.names.isEmpty() ? "Unavailable" : String.join(", ", record.group.names)), CARD));
-			}
-			if (diagnostics) card.add(note(record.group.displayText(), CARD));
 			return card;
+	}
+
+	private static boolean hasActionableDeliveryState(SubmissionStatus status)
+	{
+		return status == SubmissionStatus.SENDING || status == SubmissionStatus.ACCEPTED
+			|| status == SubmissionStatus.UNCERTAIN || status == SubmissionStatus.REJECTED
+			|| status == SubmissionStatus.BUSY || status == SubmissionStatus.CANCELLED;
 	}
 
 	private static final class ViewportAnchor

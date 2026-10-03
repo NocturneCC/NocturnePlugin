@@ -279,6 +279,7 @@ public class NocturnePanelScrollTest
 		onEdt(() ->
 		{
 			NocturnePanel panel = new NocturnePanel(null);
+			panel.setDiagnostics(true);
 			panel.setPlayer("Tester");
 			List<LootRecord> page = new ArrayList<>();
 			for (int i = 0; i < records; i++) page.add(record("old-" + i));

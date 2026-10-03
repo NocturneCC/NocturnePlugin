@@ -45,7 +45,7 @@ public class LootEventCoverageTest
 			NocturnePlugin.classifyLoot(LootRecordType.EVENT, "Barrows Chests"));
 		LootRecord record = new LootRecord("First", "Barrows Chests", List.of());
 		record.submission = SubmissionStatus.INELIGIBLE;
-		JPanel card = new NocturnePanel(null).renderRecord(record);
+		JPanel card = diagnosticPanel().renderRecord(record);
 		List<String> labels = labels(card);
 		assertTrue(labels.contains("Barrows Chests"));
 		assertTrue(labels.contains(SubmissionStatus.INELIGIBLE.label));
@@ -69,7 +69,7 @@ public class LootEventCoverageTest
 		assertFalse(NocturnePlugin.isSubmissionEligible(List.of(valuable), blocked));
 		LootRecord record = new LootRecord("First", "Chambers of Xeric", List.of(), blocked);
 		record.submission = SubmissionStatus.INELIGIBLE;
-		List<String> labels = labels(new NocturnePanel(null).renderRecord(record));
+		List<String> labels = labels(diagnosticPanel().renderRecord(record));
 		assertTrue(labels.contains("Below 5.00%"));
 		assertTrue(labels.contains(SubmissionStatus.INELIGIBLE.label));
 	}
@@ -80,7 +80,7 @@ public class LootEventCoverageTest
 		GroupSnapshot group = new GroupSnapshot("Chambers", List.of("First"), 1,
 			GroupSnapshot.Status.MATCHED, "", true, "Eligible",
 			"RETAINED_PRE_COMPLETION", "SOLO_PERSONAL_ONLY");
-		List<String> labels = labels(new NocturnePanel(null).renderRecord(
+		List<String> labels = labels(diagnosticPanel().renderRecord(
 			new LootRecord("First", "Chambers of Xeric", List.of(), group)));
 		assertTrue(labels.contains("Roster snapshot: RETAINED PRE COMPLETION"));
 		assertTrue(labels.contains("Proposed scoring mode: SOLO_PERSONAL_ONLY"));
@@ -124,7 +124,7 @@ public class LootEventCoverageTest
 		GroupSnapshot group = new GroupSnapshot("Chambers of Xeric / Raiding-party sidebar",
 			List.of(), 4, GroupSnapshot.Status.INCOMPLETE, "No names accepted");
 		LootRecord record = new LootRecord("First", "Scavenger beast", List.of(), group);
-		List<String> labels = labels(new NocturnePanel(null).renderRecord(record));
+		List<String> labels = labels(diagnosticPanel().renderRecord(record));
 		assertTrue(labels.stream().anyMatch(text -> text.startsWith("Active raid context (incomplete)")));
 		assertFalse(labels.stream().anyMatch(text -> text.startsWith("Raid roster")));
 	}
@@ -139,5 +139,12 @@ public class LootEventCoverageTest
 			if (component instanceof Container) result.addAll(labels((Container) component));
 		}
 		return result;
+	}
+
+	private static NocturnePanel diagnosticPanel()
+	{
+		NocturnePanel panel = new NocturnePanel(null);
+		panel.setDiagnostics(true);
+		return panel;
 	}
 }
