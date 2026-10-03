@@ -23,7 +23,9 @@ public class NocturnePanelPrivacyTest
 		NocturnePanel panel = panel();
 		String visible = visibleText(panel);
 		assertTrue(visible.contains("NOCTURNE"));
-		assertTrue(visible.contains(PluginMetadata.VERSION));
+		assertFalse(visible.contains("COMPANION"));
+		assertFalse(visible.contains("PREVIEW"));
+		assertFalse(visible.contains(PluginMetadata.VERSION));
 		assertTrue(visible.contains("Tester"));
 		assertTrue(visible.contains("CLAN ANNOUNCEMENTS"));
 		assertTrue(visible.contains("Clan news"));

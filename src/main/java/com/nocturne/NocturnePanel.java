@@ -83,7 +83,6 @@ final class NocturnePanel extends PluginPanel
 		JLabel title = label("NOCTURNE", PURPLE);
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 21f));
 		header.add(title);
-		header.add(label("COMPANION  /  PREVIEW " + PluginMetadata.VERSION, MUTED));
 		header.add(spacer());
 		header.add(label("CHARACTER", MUTED));
 		header.add(player);
