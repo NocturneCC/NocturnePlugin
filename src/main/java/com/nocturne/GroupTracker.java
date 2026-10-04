@@ -147,6 +147,13 @@ final class GroupTracker
 		return current;
 	}
 
+	RaidCompletionEvidence completionEvidence()
+	{
+		if (session == null || session.expired(tick)) return null;
+		return new RaidCompletionEvidence(session.type, session.runEpoch, session.challengeMode,
+			session.isCompleted(), session.snapshot());
+	}
+
 	RaidDiagnostics diagnostics()
 	{
 		return diagnostics;

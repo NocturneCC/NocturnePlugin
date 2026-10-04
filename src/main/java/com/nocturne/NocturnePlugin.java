@@ -43,7 +43,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "Nocturne",
-	description = "Automatically checks nocturne.events for announcements and Clan Chat emojis and sends your RSN/self-only CoX presence; requests expose your IP, and disabling Nocturne stops them",
+ description = "Automatically checks nocturne.events for announcements and Clan Chat emojis; optional settings submit drops, raid presence, or completion times including public party RSNs",
 	tags = {"nocturne", "clan", "loot"}
 )
 public class NocturnePlugin extends Plugin
@@ -87,6 +87,8 @@ public class NocturnePlugin extends Plugin
 	private ScheduledExecutorService executor;
 
 	private volatile SubmissionService submissions;
+	private volatile ChallengeObservationService challengeObservations;
+	private volatile ChallengeCompletionCapture challengeCapture;
 	private volatile RaidPresenceService raidPresence;
 	private volatile AnnouncementService announcementService;
 	private volatile AnnouncementToastOverlay announcementToastOverlay;
@@ -119,6 +121,11 @@ public class NocturnePlugin extends Plugin
 		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
+		ChallengeObservationService observations = new ChallengeObservationService(http, gson, executor);
+		challengeObservations = observations;
+		challengeCapture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), observations,
+			message -> clientThread.invoke(() -> { if (lifecycle == token) client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Nocturne", message, null); }),
+			message -> log.debug("{}", message));
 		raidPresence = new RaidPresenceService(http, gson);
 		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager, result ->
 			log.debug("Nocturne emoji render diagnostic supported_message_type={} token_matched={} icon_registered={} node_rewritten={} refresh_requested={}",
@@ -213,6 +220,12 @@ public class NocturnePlugin extends Plugin
 		SubmissionService sender = submissions;
 		submissions = null;
 		if (sender != null) sender.close();
+		ChallengeCompletionCapture capture = challengeCapture;
+		challengeCapture = null;
+		if (capture != null) capture.close();
+		ChallengeObservationService observations = challengeObservations;
+		if (observations != null) observations.close();
+		challengeObservations = null;
 		RaidPresenceService presence = raidPresence;
 		raidPresence = null;
 		if (presence != null) presence.close();
@@ -256,6 +269,7 @@ public class NocturnePlugin extends Plugin
 		if (tracker != null)
 		{
 			tracker.onTick();
+			observeCompletion(null, tracker);
 			RaidPresenceService presence = raidPresence;
 			if (presence != null && tracker.isActiveChambers())
 			{
@@ -281,6 +295,8 @@ public class NocturnePlugin extends Plugin
 		{
 			activeRsn = null;
 			if (groups != null) groups.reset();
+			if (challengeCapture != null) challengeCapture.reset();
+			if (challengeObservations != null) challengeObservations.cancelPending();
 			raidVerification = RaidVerificationStatus.INACTIVE;
 			if (submissions != null) submissions.cancelPending();
 			withPanel(NocturnePanel::setLoggedOut);
@@ -288,6 +304,8 @@ public class NocturnePlugin extends Plugin
 		else if (event.getGameState() == GameState.HOPPING)
 		{
 			if (groups != null) groups.reset();
+			if (challengeCapture != null) challengeCapture.reset();
+			if (challengeObservations != null) challengeObservations.cancelPending();
 			withPanel(view -> view.setGroup(GroupSnapshot.unavailable("World changed; group capture reset.")));
 		}
 		else if (event.getGameState() == GameState.LOGGED_IN)
@@ -302,6 +320,11 @@ public class NocturnePlugin extends Plugin
 		if (NocturneConfig.GROUP.equals(event.getGroup()))
 		{
 			if (!config.submitTestDrops() && submissions != null) submissions.cancelPending();
+			if (!config.submitChallengeTimes())
+			{
+				if (challengeCapture != null) challengeCapture.clearPartial();
+				if (challengeObservations != null) challengeObservations.cancelPending();
+			}
 			GroupTracker diagnosticsTracker = groups;
 			if (diagnosticsTracker != null) diagnosticsTracker.setDiagnosticsEnabled(config.showDiagnostics());
 			withPanel(view ->
@@ -388,9 +411,28 @@ public class NocturnePlugin extends Plugin
 				RaidPresenceService presence = raidPresence;
 				if (presence != null) presence.submit(tracker.presenceReport("completion"), this::updateRaidVerification);
 			}
+			observeCompletion(event.getMessage(), tracker);
 		}
 		EmojiRenderer renderer = emojiRenderer;
 		if (renderer != null) renderer.onChatMessage(event);
+	}
+
+	private void observeCompletion(String message, GroupTracker tracker)
+	{
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture == null || !config.submitChallengeTimes() || client.getGameState() != GameState.LOGGED_IN) return;
+		Player local = client.getLocalPlayer();
+		if (local == null || local.getName() == null) return;
+		if (message == null)
+		{
+			capture.onEvidence(tracker.completionEvidence(), local.getName(), true,
+				config.showDiagnostics(), java.time.Instant.now());
+		}
+		else
+		{
+			capture.onMessage(message, tracker.completionEvidence(), local.getName(), true,
+				config.showDiagnostics(), java.time.Instant.now());
+		}
 	}
 
 	private void recordLoot(String source, Collection<ItemStack> stacks, LootOrigin origin)

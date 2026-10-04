@@ -167,6 +167,11 @@ final class RaidSession
 		return lastRosterObservationVerified;
 	}
 
+	boolean isCompleted()
+	{
+		return completed;
+	}
+
 	void finishChambers(int teamPoints, int personalPoints)
 	{
 		if (completed) return;

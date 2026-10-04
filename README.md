@@ -121,11 +121,15 @@ cannot undo a write already made by the server. Clearing local history does not
 delete records from the separate test database. Old drops are not sent when the
 toggle is enabled.
 
-Group data remains local while we resolve RuneLite's restriction on crowdsourcing
-other players' names. See the official
-[restricted feature list](https://github.com/runelite/runelite/wiki/Rejected-or-Rolled-Back-Features).
-The backend rejects extra group fields. Group bonuses remain a future feature;
-this preview cannot establish group membership or entitlement.
+**Submit raid completion times** is a separate opt-in, off by default. When
+enabled, supported completion messages may send your RSN, the bounded completion
+metrics and public in-game party RSNs to the Challenge observation endpoint for
+server-side policy and membership checks. It never sends chat text, PB claims,
+Discord IDs, credentials, or client-awarded points. The server alone selects the
+configured metric and updates Challenge results. Disable the setting to stop
+new observations and cancel pending requests. This data-sharing feature may need
+additional RuneLite Plugin Hub review; it is not enabled by the diagnostics or
+drop-submission settings.
 
 ### Detection scope
 

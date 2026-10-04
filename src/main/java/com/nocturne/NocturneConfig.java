@@ -27,11 +27,20 @@ public interface NocturneConfig extends Config
 	default boolean submitTestDrops() { return false; }
 
 	@ConfigItem(
+		keyName = "submitChallengeTimes",
+		name = "Submit raid completion times",
+		description = "When enabled, sends your RSN, supported raid completion times and public in-game party RSNs to nocturne.events for server-side Challenge review. No chat text, PB claim, Discord ID or automatic award is sent.",
+		warning = "This feature transmits public player information and your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
+		position = 2
+	)
+	default boolean submitChallengeTimes() { return false; }
+
+	@ConfigItem(
 		keyName = "attachScreenshots",
 		name = "Attach drop screenshots",
 		description = "Attach a compressed RuneLite canvas image to likely point-eligible submissions. Images are held in memory only until sent.",
 		warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
-		position = 2
+		position = 3
 	)
 	default boolean attachScreenshots() { return false; }
 
@@ -40,7 +49,7 @@ public interface NocturneConfig extends Config
 		name = "Include chat in screenshots",
 		description = "Include the full RuneLite canvas, including chat. Off crops submissions to the game viewport to protect private messages.",
 		warning = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
-		position = 3
+		position = 4
 	)
 	default boolean includeChatInScreenshots() { return false; }
 }
