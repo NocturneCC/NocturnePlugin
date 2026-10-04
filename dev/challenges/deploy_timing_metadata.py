@@ -71,12 +71,10 @@ REQUIRED_ACTIVE_SERVICES = ("osrs-drops-api.service", "nocturne-challenge-intake
 WRITER_SERVICES = (
     "nocturne-challenge-shadow-sync.service",
     "nocturne-leaderboard-shadow-renderer.service",
-    "nocturne-challenge-sheet-sync.service",
 )
 TIMERS = (
     "nocturne-challenge-shadow-sync.timer",
     "nocturne-leaderboard-shadow-renderer.timer",
-    "nocturne-challenge-sheet-sync.timer",
 )
 CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")

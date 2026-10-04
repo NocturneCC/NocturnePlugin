@@ -23,7 +23,9 @@ NORMALIZATIONS = {
 }
 REPOSITORY_EXTENSIONS = {
     "dev/challenges/service/challenge_config.py": "Adds repository-owned timing/capture fields and validation; not byte-equivalent to the live baseline.",
+    "dev/challenges/service/challenge_config_api.py": "Adds repository-owned Midgard-backed compatibility and retirement responses for obsolete CSV Challenge routes; not byte-equivalent to the adopted baseline.",
     "dev/challenges/tests/python/test_challenge_config.py": "Adds regression coverage for repository-owned timing/capture behavior; not byte-equivalent to the live baseline.",
+    "dev/challenges/tests/python/test_challenge_config_api.py": "Adds regression coverage for repository-owned legacy Challenge route retirement; not byte-equivalent to the adopted baseline.",
     "dev/challenges/website/challenge-admin-state.js": "Adds repository-owned timing/capture editor state; not byte-equivalent to the live baseline.",
     "dev/challenges/website/challenge-admin.html": "Adds repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
     "dev/challenges/website/tests/challenge-admin-state.test.js": "Adds regression coverage for repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
@@ -36,6 +38,9 @@ REPOSITORY_EXTENSIONS = {
     "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
     "dev/challenges/deploy_automatic_observations.py": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
     "dev/challenges/tests/python/test_deploy_automatic_observations.py": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
+    "dev/challenges/website/legacy_challenge_retirement.py": "Adds deterministic source transforms and a Midgard-backed redirect artifact for retiring the stale CSV progress view; production website files are not modified here.",
+    "dev/challenges/website/nocturne-challenge-progress.html": "Repository-owned redirect replacement for the legacy progress page; deployment to the separate website tree is not performed by this change.",
+    "dev/challenges/tests/python/test_legacy_challenge_retirement.py": "Tests the repository-owned legacy Challenge page/link retirement transforms.",
 }
 
 

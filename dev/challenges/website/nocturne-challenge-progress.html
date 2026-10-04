@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nocturne Challenges</title>
+  <script>
+    (() => {
+      const rsn = new URLSearchParams(location.search).get('rsn');
+      location.replace(rsn
+        ? `/challenge-member.html?rsn=${encodeURIComponent(rsn)}`
+        : '/challenges.html');
+    })();
+  </script>
+</head>
+<body><p>Opening the current Nocturne Challenges page…</p></body>
+</html>

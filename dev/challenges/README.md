@@ -175,14 +175,16 @@ link, or the Challenge LKG cache.
 `challenge_intake_api.py`). Those two long-running consumers are the only
 services restarted to load the changed Python module. During the additive
 SQLite migration, the tool pauses the active timers for the Challenge shadow
-sync, leaderboard shadow renderer, and CSV sheet sync, drains any currently
-running one-shot jobs, and stops API/intake. It restores only the previously
-active API/intake services and timers. The admin app does not import the changed
+sync and leaderboard shadow renderer, drains any currently running one-shot
+jobs, and stops API/intake. It restores only the previously active API/intake
+services and timers. The admin app does not import the changed
 module and is not restarted; its short read-only SQLite operations are allowed
 to drain against SQLite's exclusive migration lock. Nginx is not restarted.
-The shadow-sync and sheet-sync jobs are not rerun by the installer; their
-originally active timers resume afterward and load the installed module on
-their next ordinary run.
+The shadow-sync jobs are not rerun by the installer; their originally active
+timers resume afterward and load the installed module on their next ordinary
+run. The legacy Google Sheet Challenge progress importer is retired from
+deployment control. Its script and unit remain available for recovery, but
+future Challenge installers neither pause nor restore its timer/service.
 
 Before migration the installer uses SQLite's online backup API to create and
 verify a private, transactionally consistent `Challenges.db` backup under
@@ -209,6 +211,38 @@ sudo /usr/bin/python3.14 -B \
 ```
 
 The expected brief service interruption is limited to the two Challenge API
-consumers and the three scheduled Challenge writers while SQLite schema DDL is
+consumers and the two scheduled Challenge writers while SQLite schema DDL is
 performed. The installer must report `status=already_current` on a repeat
 without rewriting files or creating another backup.
+
+## Legacy CSV-backed progress retirement
+
+The former `/nocturne-challenge-progress.html` page and the member-viewer
+summary card consume the old CSV-import contract. The replacement
+`website/nocturne-challenge-progress.html` redirects the former page to
+`/challenges.html` (or `/challenge-member.html?rsn=...`). The deterministic
+transforms in `website/legacy_challenge_retirement.py` retarget internal links
+and remove the member-viewer card that calls the retired summary API. These are
+source artifacts for a separately reviewed website deployment and were not
+applied to the live website by this change.
+
+The public `/api/nocturne-challenges/bosses` compatibility route now derives
+its catalog from the active published Midgard config. Legacy `summary`,
+`progress`, and `leaderboards` response shapes are not semantically equivalent
+to the current projection model; they return bounded HTTP 410 responses with
+replacement routes and `Cache-Control: no-store`, never a stale CSV snapshot.
+The public Challenge blueprint is registered before the legacy inline handlers
+in the production API, so its exact routes take precedence after the source is
+installed. Do not restore the old inline handlers as fallbacks.
+
+Current config, member progress, leaderboard, RuneLite, bot, and projection
+reads use published config versions, `challenge_legacy_baselines`, accepted
+submissions, and derived projection tables, not the importer-refreshed summary,
+progress, or leaderboard rows. Those three tables remain referenced only by
+historical migration/import/review tooling. `challenge_bosses` is a retained
+compatibility key catalog maintained from published configuration and used by
+existing submission foreign keys; it must not be dropped, and is no longer
+authoritative from Google imports. This change neither drops nor rewrites any
+of the four tables. The sheet-sync script and unit remain on disk for recovery,
+but are no longer captured, paused, restored, or reported by future Challenge
+deployment helpers.

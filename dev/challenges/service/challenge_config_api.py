@@ -104,3 +104,52 @@ def challenge_leaderboard():
     with _ro(CHALLENGES_DB) as challenge, _ro(MEMBERS_DB) as members:
         payload = leaderboard_payload(challenge, members)
     return _public_response(payload)
+
+
+@bp.get("/api/nocturne-challenges/bosses")
+def legacy_challenge_bosses():
+    """Compatibility endpoint backed by the published Midgard config only."""
+    with _ro(CHALLENGES_DB) as conn:
+        document = config_document(conn)
+    bosses = [
+        {
+            "boss_key": boss["boss_key"],
+            "display_name": boss["display_name"],
+            "metric_type": boss["metric_type"],
+            "sort_order": boss["display_order"],
+            "image_url": boss["icon_url"],
+            "is_active": int(bool(boss["active"])),
+        }
+        for boss in document["bosses"]
+        if boss["active"]
+    ]
+    return _public_response({"ok": True, "bosses": bosses})
+
+
+def _legacy_challenge_retired(replacement: str):
+    response = _public_response({
+        "ok": False,
+        "error": "legacy_endpoint_retired",
+        "replacement": replacement,
+    }, 410)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.get("/api/nocturne-challenges/summary")
+def legacy_challenge_summary():
+    # The former CSV summary has different tier/award semantics from the
+    # current member projection; do not silently translate or serve stale rows.
+    return _legacy_challenge_retired("/api/challenges/member")
+
+
+@bp.get("/api/nocturne-challenges/progress")
+def legacy_challenge_progress():
+    return _legacy_challenge_retired("/api/challenges/member or /challenges.html")
+
+
+@bp.get("/api/nocturne-challenges/leaderboards")
+def legacy_challenge_leaderboards():
+    # The replacement is available, but its projection and response contract
+    # are intentionally not represented as the old Google leaderboard shape.
+    return _legacy_challenge_retired("/api/challenges/leaderboard")

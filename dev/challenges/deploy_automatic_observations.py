@@ -66,12 +66,10 @@ LONG_SERVICES = (
 WRITER_SERVICES = (
     "nocturne-challenge-shadow-sync.service",
     "nocturne-leaderboard-shadow-renderer.service",
-    "nocturne-challenge-sheet-sync.service",
 )
 TIMERS = (
     "nocturne-challenge-shadow-sync.timer",
     "nocturne-leaderboard-shadow-renderer.timer",
-    "nocturne-challenge-sheet-sync.timer",
 )
 CONTROLLED = (*LONG_SERVICES, *WRITER_SERVICES, *TIMERS)
 REQUIRED_ACTIVE = ("osrs-drops-api.service", "nocturne-challenge-intake.service")

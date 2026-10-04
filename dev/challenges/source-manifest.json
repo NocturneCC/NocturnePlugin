@@ -26,8 +26,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "bf29522b07c0ba826cf4096916dd2919d65e228c8621d54ce9d8a89a4d30b6fe",
-      "size": 12612,
+      "sha256": "a146f44027a5f162cc729de81bff37b7473634a6f3337e28170545bc7b5404b4",
+      "size": 14804,
       "source": null,
       "type": "regular"
     },
@@ -99,8 +99,8 @@
       "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
       "normalization": null,
       "path": "dev/challenges/deploy_automatic_observations.py",
-      "sha256": "4eb7fa320af8d32aa316cac98e5cd2201fcb3eaa3e0857ce1cfc87b923e57baf",
-      "size": 60765,
+      "sha256": "57652284545dfd39e0beb225bcd763268b7b7f2e8444ed8049a79ef142911ade",
+      "size": 60677,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -109,8 +109,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/deploy_timing_metadata.py",
-      "sha256": "75f4cba19abd1939c9b1896888a1cae03479c1f686edfc139b4f6178e0ffe4dd",
-      "size": 109586,
+      "sha256": "975f1580bbcc916ac771fb219fd7530094a7fefe50061c4b5dc4856e238dc05a",
+      "size": 109498,
       "source": null,
       "type": "regular"
     },
@@ -219,8 +219,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/prepare.py",
-      "sha256": "b2f32a2c7411c36779c3e70cbe25b1c3179fb8b82bfa1c450a12ac0de8d13551",
-      "size": 22891,
+      "sha256": "28cf5096239adc8cc0096fcf6860a5f7a6e1666bac02f3d66268e037c0a0cbd3",
+      "size": 23885,
       "source": null,
       "type": "regular"
     },
@@ -257,11 +257,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds repository-owned Midgard-backed compatibility and retirement responses for obsolete CSV Challenge routes; not byte-equivalent to the adopted baseline.",
       "normalization": null,
       "path": "dev/challenges/service/challenge_config_api.py",
-      "sha256": "d4b4fab9c1e7eaa96e7915c926dabbc88468c6baa76bb865b0c364ef70b299cc",
-      "size": 3616,
+      "sha256": "ed789fd0043be74ff66ea2a3bad906fd3614cfb7c5d34475fb6a52e6483e536b",
+      "size": 5334,
       "source": "/srv/projects/nocturne-services/challenge_config_api.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -409,11 +411,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds regression coverage for repository-owned legacy Challenge route retirement; not byte-equivalent to the adopted baseline.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_challenge_config_api.py",
-      "sha256": "07828b5eb5da8bb4c50c06ccaee55e1276639f95650739405ad8def1d1b1c15e",
-      "size": 13601,
+      "sha256": "c686951984d104c6e637f904a215bf5ffc903bcdb09daf3e6b7c26ccdc01d40e",
+      "size": 15398,
       "source": "/srv/projects/nocturne-services/tests/test_challenge_config_api.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -448,8 +452,8 @@
       "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
-      "sha256": "1932598d817622cd4f392a46d662c9632a9f138a0159a43567090f1c1e6b2854",
-      "size": 32585,
+      "sha256": "3dc5d3c451b210e67c1c05592d47633b1d9664182a41d7e493b62efebec2aa2f",
+      "size": 32820,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -458,8 +462,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_timing_metadata.py",
-      "sha256": "6eb29de4d7a82028b016c14ab2850266a86b752a5132732a23611c08cddec5d0",
-      "size": 108601,
+      "sha256": "f3566966431a694fefe4d2c58709427a6fd9b6256bff998de46f431b321fcc23",
+      "size": 108836,
       "source": null,
       "type": "regular"
     },
@@ -488,6 +492,17 @@
       "sha256": "de38c38693d384a08b892e7a282b3f899555cdcc92324b81c2472f2db2e5cce0",
       "size": 3654,
       "source": "/srv/projects/nocturne-services/tests/test_leaderboard_projection_refresh.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Tests the repository-owned legacy Challenge page/link retirement transforms.",
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_legacy_challenge_retirement.py",
+      "sha256": "45e1b924a9bcf86615aafe553255d92808a3d073a87c951e63b218e1941bca2b",
+      "size": 2362,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -545,6 +560,17 @@
       "sha256": "69ca510ebac524621fe0697108a9bcac9630c31aabae440ce566847f249aeff3",
       "size": 45676,
       "source": "/srv/projects/website/challenge-admin.html",
+      "source_relationship": "repository_owned_extension",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Adds deterministic source transforms and a Midgard-backed redirect artifact for retiring the stale CSV progress view; production website files are not modified here.",
+      "normalization": null,
+      "path": "dev/challenges/website/legacy_challenge_retirement.py",
+      "sha256": "af6ac84a7ac6e018f91ddc4d61747950815ed23c8a88ccfacd382dc6c65ed8ba",
+      "size": 2241,
+      "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
@@ -1374,6 +1400,17 @@
       "sha256": "c99f93fd3822c69029a3ed754afc499de819783210835fcd9bd416096b5f5e75",
       "size": 44169,
       "source": "/srv/projects/website/navbar.html",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Repository-owned redirect replacement for the legacy progress page; deployment to the separate website tree is not performed by this change.",
+      "normalization": null,
+      "path": "dev/challenges/website/nocturne-challenge-progress.html",
+      "sha256": "008214a8057aec01aa844c9fc5ce709d8d7a62d2a374ef9e040438bd2370ec7c",
+      "size": 493,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {

@@ -60,6 +60,39 @@ class PublicConfigApiTests(unittest.TestCase):
         )
         self.assertIn("ETag", after.headers)
 
+    def test_legacy_boss_catalog_uses_published_config(self):
+        response = self.client.get("/api/nocturne-challenges/bosses")
+        self.assertEqual(response.status_code, 200)
+        active = self.client.get("/api/challenges/config/active").json
+        expected = [boss for boss in active["bosses"] if boss["active"]]
+        self.assertEqual(len(response.json["bosses"]), len(expected))
+        self.assertEqual(response.json["bosses"][0]["boss_key"], expected[0]["boss_key"])
+        self.assertEqual(response.json["bosses"][0]["sort_order"], expected[0]["display_order"])
+
+    def test_legacy_csv_backed_routes_are_bounded_gone(self):
+        for route in (
+            "/api/nocturne-challenges/summary?rsn=fixture",
+            "/api/nocturne-challenges/progress",
+            "/api/nocturne-challenges/leaderboards",
+        ):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 410)
+                self.assertEqual(response.json["error"], "legacy_endpoint_retired")
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertNotIn("progress", response.json)
+
+    def test_legacy_route_registration_precedes_old_api_fallback(self):
+        # Production registers this blueprint before the legacy inline API
+        # functions. Flask resolves the earlier identical rule first.
+        self.app.add_url_rule(
+            "/api/nocturne-challenges/progress", "old_csv_fallback",
+            lambda: ({"ok": True, "stale": True}, 200), methods=["GET"],
+        )
+        response = self.client.get("/api/nocturne-challenges/progress")
+        self.assertEqual(response.status_code, 410)
+        self.assertNotIn("stale", response.json)
+
 
 class InternalAdminApiTests(unittest.TestCase):
     def setUp(self):

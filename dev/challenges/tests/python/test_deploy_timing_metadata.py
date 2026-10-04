@@ -88,6 +88,10 @@ class SystemdStateParsingTests(unittest.TestCase):
         state = self.show(unit, self.output(unit, "loaded", "inactive", "dead", "0"))
         self.assertEqual("0", state["MainPID"])
 
+    def test_retired_sheet_sync_is_not_in_controlled_units(self):
+        self.assertNotIn("nocturne-challenge-sheet-sync.service", deploy.CONTROLLED)
+        self.assertNotIn("nocturne-challenge-sheet-sync.timer", deploy.CONTROLLED)
+
 
 class GitCheckoutGateTests(unittest.TestCase):
     commit = "d" * 40

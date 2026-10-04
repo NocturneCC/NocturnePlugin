@@ -350,6 +350,10 @@ class NginxAndSmokeTests(unittest.TestCase):
 
 
 class TransactionStateMachineTests(unittest.TestCase):
+    def test_retired_sheet_sync_is_not_in_controlled_units(self):
+        self.assertNotIn("nocturne-challenge-sheet-sync.service", deploy.CONTROLLED)
+        self.assertNotIn("nocturne-challenge-sheet-sync.timer", deploy.CONTROLLED)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
