@@ -2,10 +2,30 @@
   "bundle_files": [
     {
       "executable": false,
+      "extension_reason": "Documents the repository-owned public observation contract and trust boundary.",
+      "normalization": null,
+      "path": "dev/challenges/AUTOMATIC_OBSERVATIONS.md",
+      "sha256": "140a13812a5aaf3e9cb88bee2c491e29bd987b58065cc217ea8dc64e2dd7402a",
+      "size": 5569,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
+      "type": "regular"
+    },
+    {
+      "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "038161be024d9f3dc0ef9b9cd00cdec2bba1d75cba8521b1c48172d4d0791877",
-      "size": 12233,
+      "sha256": "bf29522b07c0ba826cf4096916dd2919d65e228c8621d54ce9d8a89a4d30b6fe",
+      "size": 12612,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/__pycache__/deploy_timing_metadata.cpython-314.pyc",
+      "sha256": "436a792d61f85eef7b949e30cb00f1ce2a94b6df05db93c371c0e1830870a0d2",
+      "size": 151815,
       "source": null,
       "type": "regular"
     },
@@ -119,11 +139,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds the repository-owned bounded Nginx route for automatic observations; not byte-equivalent to the live baseline.",
       "normalization": null,
       "path": "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
-      "sha256": "3f753e60ac08e69bdf94d860818dfad2c2545068cbf10d9b39611abc5ceefe73",
-      "size": 711,
+      "sha256": "fac7b3d526ab5bd56a150612c170493f7aa9a77e774002dd64ae835df82270d8",
+      "size": 1439,
       "source": "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -184,9 +206,20 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/prepare.py",
-      "sha256": "3910c89a7deeaec29c17dfea9d71f7e5463173a463325896133915e81533081b",
-      "size": 20151,
+      "sha256": "661bbd3ded538bb2696471761b34d6b778c23a8df3ef6e2daca5e8e83fbbf13b",
+      "size": 21222,
       "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Adds the repository-owned, tokenless server-authoritative RuneLite observation boundary and reversible additive schema.",
+      "normalization": null,
+      "path": "dev/challenges/service/challenge_automatic_intake.py",
+      "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+      "size": 27618,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -238,11 +271,13 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds a repository-owned public bounded observation route; privileged/manual routes remain unchanged.",
       "normalization": null,
       "path": "dev/challenges/service/challenge_intake_api.py",
-      "sha256": "18ed7786854e56c3a24f31adeb7acfb6bbc25cc15daef874e48eeaf4b389e7b2",
-      "size": 20931,
+      "sha256": "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
+      "size": 24095,
       "source": "/srv/projects/nocturne-services/challenge_intake_api.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -292,11 +327,13 @@
     },
     {
       "executable": true,
+      "extension_reason": "Adds repository-owned automatic-observation provenance and full observed group-size projection while preserving the legacy participant-count fallback.",
       "normalization": null,
       "path": "dev/challenges/service/leaderboard_challenge_ingest.py",
-      "sha256": "4004ce3352885e5273a7aac785d5f1d7cd202ff1a7331df5da5f26f68a0e4330",
-      "size": 21812,
+      "sha256": "a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c",
+      "size": 24209,
       "source": "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py",
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -333,6 +370,26 @@
       "sha256": "b255b2f0ff186294ad4f7bc9836bd747d7f37d2dca093615ef9645f91f935543",
       "size": 18050,
       "source": "/srv/projects/nocturne-services/leaderboard_shadow_renderer.py",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/__pycache__/test_deploy_timing_metadata.cpython-314.pyc",
+      "sha256": "7d6d3f07daa86a59597e63fd3e0a01f3693850c74c2a6e3aa36c304a39cd6db7",
+      "size": 183040,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_challenge_automatic_intake.py",
+      "sha256": "5c42eb1897f3e5da660225371ccdc7d5161c0e0a7cfbb0419865f851e3f00332",
+      "size": 22220,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -422,8 +479,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_source_adoption.py",
-      "sha256": "4be3d82140e1020803961842e6bd22a6092ff56b6cec70eec08614ee3d3beadc",
-      "size": 4240,
+      "sha256": "3fb930ba190bc07ced631e2478a0059b08f7dfc72f966bf4b33562f3905ab91d",
+      "size": 5240,
       "source": null,
       "type": "regular"
     },

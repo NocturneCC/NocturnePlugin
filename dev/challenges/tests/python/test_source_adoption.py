@@ -38,6 +38,23 @@ class SourceAdoptionTests(unittest.TestCase):
             self.assertEqual("repository_owned_extension", records[path]["source_relationship"])
             self.assertIn("not byte-equivalent", records[path]["extension_reason"])
 
+    def test_automatic_observation_sources_are_repository_owned_extensions(self):
+        paths = {
+            "dev/challenges/service/challenge_automatic_intake.py",
+            "dev/challenges/service/challenge_intake_api.py",
+            "dev/challenges/service/leaderboard_challenge_ingest.py",
+            "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
+            "dev/challenges/tests/python/test_challenge_automatic_intake.py",
+            "dev/challenges/AUTOMATIC_OBSERVATIONS.md",
+        }
+        reasons = prepare.REPOSITORY_EXTENSIONS
+        self.assertTrue(paths <= reasons.keys())
+        files = {p.relative_to(prepare.ROOT).as_posix(): p for p in prepare.expected_files()}
+        for path in paths:
+            record = prepare.file_record(files[path], prepare.bindings().get(path))
+            self.assertEqual("repository_owned_extension", record["source_relationship"])
+            self.assertIn("repository-owned", record["extension_reason"])
+
     def test_version_10_equivalence_evidence_is_digest_only(self):
         evidence = json.loads((SCRIPT.parent / "evidence/config-v10-equivalence.json").read_text())
         self.assertEqual(evidence["version_id"], 10)

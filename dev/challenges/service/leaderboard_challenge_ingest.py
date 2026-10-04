@@ -111,6 +111,7 @@ class Candidate:
     metric_value: int
     metric_display: str
     fingerprint: str
+    group_size: int
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -208,7 +209,19 @@ def _candidate(conn: sqlite3.Connection, source: sqlite3.Row, version_id: int) -
     participants = _participants(conn, canonical_id)
     if not participants or any(row["member_id"] is None for row in participants):
         return None, "unresolved_identity", {"canonical_submission_id": canonical_id, "participant_count": len(participants)}
-    modes = _mode_for(conn, version_id, str(canonical_row["boss_key"] or ""), len(participants))
+    automatic = None
+    group_size = len(participants)
+    if str(canonical_row["source_system"]) == "runelite_automatic":
+        automatic = conn.execute(
+            "SELECT mode_key,observed_group_size FROM challenge_automatic_observations WHERE submission_id=? AND disposition='accepted'",
+            (canonical_id,),
+        ).fetchone()
+        if automatic is None:
+            return None, "automatic_provenance_missing", {"canonical_submission_id": canonical_id}
+        group_size = int(automatic["observed_group_size"])
+    modes = _mode_for(conn, version_id, str(canonical_row["boss_key"] or ""), group_size)
+    if automatic is not None:
+        modes = [row for row in modes if str(row["mode_key"]) == str(automatic["mode_key"])]
     if not modes:
         boss_modes = conn.execute(
             "SELECT mode_key,party_size_min,party_size_max FROM leaderboard_mode_versions WHERE config_version_id=? AND is_active=1 AND boss_key=?",
@@ -217,7 +230,7 @@ def _candidate(conn: sqlite3.Connection, source: sqlite3.Row, version_id: int) -
         return None, "party_mismatch" if boss_modes else "unsupported_mode", {
             "canonical_submission_id": canonical_id,
             "boss_key": canonical_row["boss_key"],
-            "participant_count": len(participants),
+            "participant_count": group_size,
             "configured_modes": [dict(row) for row in boss_modes],
         }
     if len(modes) != 1:
@@ -242,7 +255,8 @@ def _candidate(conn: sqlite3.Connection, source: sqlite3.Row, version_id: int) -
         "metric_value": metric_value,
         "proof_url": str(canonical_row["evidence_url"] or ""),
     }
-    return Candidate(source, canonical_row, mode, participants, metric_value, metric_display, digest(fingerprint_payload)), "eligible", {}
+    return Candidate(source, canonical_row, mode, participants, metric_value, metric_display,
+                     digest(fingerprint_payload), group_size), "eligible", {}
 
 
 def _existing_observation(conn: sqlite3.Connection, candidate: Candidate) -> int | None:
@@ -291,25 +305,40 @@ def _link(conn: sqlite3.Connection, source_id: int, canonical_id: int, observati
     )
 
 
-def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[str, Any]:
-    conn = sqlite3.connect(database, timeout=30)
+def ingest_connection(
+    conn: sqlite3.Connection, *, apply: bool, allow_migrate: bool = False,
+    source_submission_id: int | None = None, manage_transaction: bool = True,
+) -> dict[str, Any]:
+    """Run the existing projection using a caller connection when requested.
+
+    manage_transaction=False is reserved for atomic API intake and requires an
+    already-open transaction; all ordinary CLI callers retain prior behavior.
+    """
+    owns_transaction = bool(manage_transaction)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=30000")
+        if manage_transaction:
+            conn.execute("PRAGMA busy_timeout=30000")
         if allow_migrate:
             migrate(conn)
         elif conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='leaderboard_challenge_submission_links'").fetchone() is None:
             raise RuntimeError("leaderboard challenge ingestion schema is not installed")
-        conn.execute("BEGIN IMMEDIATE")
+        if manage_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        elif not conn.in_transaction:
+            raise RuntimeError("caller-managed leaderboard ingestion requires an open transaction")
         version_id = _active_version(conn)
         cutoff = _legacy_cutoff(conn)
+        source_filter = " AND s.submission_id=?" if source_submission_id is not None else ""
+        source_params = (source_submission_id,) if source_submission_id is not None else ()
         sources = conn.execute(
-            """SELECT s.* FROM challenge_submissions s
+            f"""SELECT s.* FROM challenge_submissions s
                 WHERE s.record_state IN ('approved','corrected') AND s.parse_status='parsed'
                   AND NOT EXISTS (SELECT 1 FROM challenge_submissions newer WHERE newer.supersedes_submission_id=s.submission_id)
-                  AND NOT EXISTS (SELECT 1 FROM leaderboard_challenge_submission_links l WHERE l.source_submission_id=s.submission_id)
-                ORDER BY CASE s.source_system WHEN 'discord_direct' THEN 0 ELSE 1 END,s.submission_id"""
+                  AND NOT EXISTS (SELECT 1 FROM leaderboard_challenge_submission_links l WHERE l.source_submission_id=s.submission_id)"""
+                  + source_filter + " ORDER BY CASE s.source_system WHEN 'discord_direct' THEN 0 ELSE 1 END,s.submission_id",
+            source_params,
         ).fetchall()
         sources = [row for row in sources if _after_cutoff(row, cutoff)]
         now = utc_now()
@@ -386,6 +415,15 @@ def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[
                     "participant_subjects": subjects,
                     "evidence_url": proof,
                 }
+                party_display = ", ".join(str(row["rsn_snapshot"] or row["subject_key"]) for row in candidate.participants)
+                if (str(candidate.canonical["source_system"]) == "runelite_automatic"
+                        and candidate.group_size > len(candidate.participants)):
+                    party_display += f" + {candidate.group_size - len(candidate.participants)} unlinked"
+                occurred_at = (
+                    candidate.canonical["source_submitted_at"]
+                    if str(candidate.canonical["source_system"]) == "runelite_automatic"
+                    else candidate.canonical["source_approved_at"]
+                ) or candidate.canonical["first_observed_at"]
                 cursor = conn.execute(
                     """INSERT INTO leaderboard_observations(
                        import_run_id,config_version_id,mode_key,metric_type,metric_value,metric_unit,metric_display,
@@ -396,8 +434,8 @@ def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[
                     (import_run_id, version_id, candidate.mode["mode_key"], candidate.mode["metric_type"],
                      candidate.metric_value, candidate.mode["metric_unit"], candidate.metric_display,
                      candidate.mode["comparison_direction"], proof, proof_type, proof_identity,
-                     candidate.canonical["source_approved_at"], candidate.canonical["source_approved_at"],
-                     party_key, ", ".join(str(row["rsn_snapshot"] or row["subject_key"]) for row in candidate.participants),
+                     occurred_at, occurred_at,
+                     party_key, party_display,
                      competitor_key, SOURCE_SYSTEM, canonical([f"challenge_submission:{canonical_id}"]),
                      canonical([source_snapshot]), canonical([candidate.canonical["raw_payload_sha256"]]), 1,
                      candidate.fingerprint, "resolved", now),
@@ -422,8 +460,9 @@ def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[
             foreign_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
             if foreign_errors:
                 raise RuntimeError(f"foreign key check failed: {len(foreign_errors)}")
-            conn.commit()
-        else:
+            if manage_transaction:
+                conn.commit()
+        elif not apply and manage_transaction:
             conn.rollback()
         return {
             "ok": True,
@@ -438,8 +477,15 @@ def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[
             )],
         }
     except Exception:
-        conn.rollback()
+        if owns_transaction:
+            conn.rollback()
         raise
+
+
+def ingest(database: Path, *, apply: bool, allow_migrate: bool = False) -> dict[str, Any]:
+    conn = sqlite3.connect(database, timeout=30)
+    try:
+        return ingest_connection(conn, apply=apply, allow_migrate=allow_migrate)
     finally:
         conn.close()
 

@@ -48,6 +48,12 @@ not installed or activated by this commit.
   they do not rewrite stored enum values or configure an activity. The intended
   future mapping is Theatre of Blood Hard Mode as `overall` and regular Theatre
   of Blood as `segment`; no active configuration is changed here.
+- `service/challenge_automatic_intake.py` and
+  `AUTOMATIC_OBSERVATIONS.md` define the repository-only RuneLite completion
+  observation boundary. The client reports bounded observations and public
+  RSNs; the server selects policy and metric from the active Challenge
+  configuration. No RuneLite parser, production migration, or deployment is
+  included in this source change.
 - `integration/routes/`: bounded source excerpts for the authenticated admin
   proxy (`admin_app_challenge_routes.fragment.py`), public blueprint
   registration, navigation link, and the existing approved Challenge intake

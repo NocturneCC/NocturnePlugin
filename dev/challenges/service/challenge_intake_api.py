@@ -92,6 +92,7 @@ def create_app(config: dict | None = None) -> Flask:
         app.config.update(config)
     token = str(app.config.get("INTAKE_TOKEN") or _load_token(Path(app.config["TOKEN_FILE"]))).strip()
     limiter = SlidingLimiter()
+    automatic_limiter = SlidingLimiter(per_ip=10, global_limit=300)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     def challenge_db() -> sqlite3.Connection:
@@ -132,6 +133,8 @@ def create_app(config: dict | None = None) -> Flask:
 
     @app.errorhandler(RequestEntityTooLarge)
     def too_large(_error):
+        if request.path == "/api/challenges/intake/observations":
+            return jsonify({"state": "invalid", "reason": "request_too_large"}), 413
         audit_failure("validation_failure", 413, "payload_too_large", b"")
         return jsonify({"ok": False, "error": "payload_too_large"}), 413
 
@@ -456,6 +459,69 @@ def create_app(config: dict | None = None) -> Flask:
         finally:
             members.close()
             challenge.close()
+
+    @app.post("/api/challenges/intake/observations")
+    def intake_automatic_observation():
+        """Public, bounded observation intake; never accepts approval/PB claims."""
+        from challenge_automatic_intake import ObservationError, process_observation
+
+        if request.content_length is not None and request.content_length > 8192:
+            return jsonify({"state": "invalid", "reason": "request_too_large"}), 413
+        raw = request.get_data(cache=False)
+        if len(raw) > 8192:
+            return jsonify({"state": "invalid", "reason": "request_too_large"}), 413
+        if request.mimetype != "application/json":
+            return jsonify({"state": "invalid", "reason": "content_type_required"}), 415
+        address = request.remote_addr or "unknown"
+        if app.config["RATE_LIMIT_ENABLED"] and not automatic_limiter.allowed(address):
+            return jsonify({"state": "rate_limited"}), 429
+
+        def reject_duplicate_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate_json_key")
+                result[key] = value
+            return result
+
+        try:
+            payload = json.loads(
+                raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("invalid_json_number")),
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return jsonify({"state": "invalid", "reason": "invalid_json"}), 400
+
+        challenge = None
+        members = None
+        try:
+            challenge = challenge_db()
+            members = members_db()
+            challenge.execute("PRAGMA busy_timeout=5000")
+            challenge.execute("BEGIN IMMEDIATE")
+            result = process_observation(challenge, members, payload)
+            challenge.commit()
+            state = result["state"]
+            status = 201 if state == "accepted" else 200
+            return jsonify(result), status
+        except ObservationError as exc:
+            if challenge is not None:
+                challenge.rollback()
+            if exc.state == "idempotency_conflict":
+                return jsonify({"state": "idempotency_conflict"}), 409
+            return jsonify({"state": "invalid", "reason": exc.reason}), 422
+        except Exception:
+            if challenge is not None:
+                challenge.rollback()
+            # Intentionally no exception text, payload, identity, or request
+            # metadata in logs; the transaction failure remains fail-closed.
+            app.logger.error("automatic Challenge observation failed category=processing_failure")
+            return jsonify({"state": "server_failure"}), 503
+        finally:
+            if challenge is not None:
+                challenge.close()
+            if members is not None:
+                members.close()
 
     return app
 

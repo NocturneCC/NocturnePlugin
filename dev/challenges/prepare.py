@@ -27,6 +27,12 @@ REPOSITORY_EXTENSIONS = {
     "dev/challenges/website/challenge-admin-state.js": "Adds repository-owned timing/capture editor state; not byte-equivalent to the live baseline.",
     "dev/challenges/website/challenge-admin.html": "Adds repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
     "dev/challenges/website/tests/challenge-admin-state.test.js": "Adds regression coverage for repository-owned timing/capture controls; not byte-equivalent to the live baseline.",
+    "dev/challenges/service/challenge_automatic_intake.py": "Adds the repository-owned, tokenless server-authoritative RuneLite observation boundary and reversible additive schema.",
+    "dev/challenges/service/challenge_intake_api.py": "Adds a repository-owned public bounded observation route; privileged/manual routes remain unchanged.",
+    "dev/challenges/service/leaderboard_challenge_ingest.py": "Adds repository-owned automatic-observation provenance and full observed group-size projection while preserving the legacy participant-count fallback.",
+    "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf": "Adds the repository-owned bounded Nginx route for automatic observations; not byte-equivalent to the live baseline.",
+    "dev/challenges/tests/python/test_challenge_automatic_intake.py": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
+    "dev/challenges/AUTOMATIC_OBSERVATIONS.md": "Documents the repository-owned public observation contract and trust boundary.",
 }
 
 
