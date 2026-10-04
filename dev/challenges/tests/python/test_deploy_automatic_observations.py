@@ -137,6 +137,150 @@ class TargetClassificationTests(unittest.TestCase):
             deploy._classify_files(self.items, self.support)
 
 
+class NewFileMetadataTests(unittest.TestCase):
+    ACL_TEXT = "user::rw-\ngroup::rw-\nother::r--\n"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.service_patch = mock.patch.object(deploy, "SERVICE_ROOT", self.root)
+        self.service_patch.start()
+        self.addCleanup(self.service_patch.stop)
+        self.api = self.root / "challenge_intake_api.py"
+        self.new_module = self.root / "challenge_automatic_intake.py"
+        self.api_source = self.root / "api-source.py"
+        self.api_backup = self.root / "api-backup"
+        self.api_bytes = b"verified predecessor API"
+        self.api_new_bytes = b"updated API source"
+        self.new_bytes = b"new automatic intake module"
+        self.api.write_bytes(self.api_bytes)
+        self.api_source.write_bytes(self.api_new_bytes)
+        self.api_backup.write_bytes(self.api_bytes)
+        self.source = self.root / "source.py"
+        self.source.write_bytes(self.new_bytes)
+        self.acl_sha = hashlib.sha256(self.ACL_TEXT.encode()).hexdigest()
+        self.baseline = {
+            "type": "regular", "sha256": hashlib.sha256(self.api_bytes).hexdigest(),
+            "uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
+            "size": len(self.api_bytes), "acl_sha256": self.acl_sha,
+        }
+        self.before = {**self.baseline, "acl_text": self.ACL_TEXT}
+        self.api_record = {
+            "source_relative": "dev/challenges/service/challenge_intake_api.py",
+            "source": self.api_source, "target": self.api,
+            "after_sha256": hashlib.sha256(self.api_new_bytes).hexdigest(),
+            "after_size": len(self.api_new_bytes),
+            "baseline": self.baseline, "predecessor_kind": "manifest",
+            "was_absent": False, "before_sha256": self.baseline["sha256"],
+            "before_metadata": self.before,
+            "backup_path": str(self.api_backup),
+            "backup_sha256": hashlib.sha256(self.api_bytes).hexdigest(),
+        }
+        self.new_record = {
+            "source_relative": "dev/challenges/service/challenge_automatic_intake.py",
+            "source": self.source, "target": self.new_module,
+            "after_sha256": hashlib.sha256(self.new_bytes).hexdigest(),
+            "after_size": len(self.new_bytes), "baseline": None,
+            "predecessor_kind": "absent", "was_absent": True,
+            "before_sha256": None, "before_metadata": None,
+        }
+        self.installed_meta = {}
+        self.support = SimpleNamespace(
+            _acl_hash=lambda text: hashlib.sha256(text.encode()).hexdigest(),
+            _read_regular=lambda path, *_args: Path(path).read_bytes(),
+            _sha_file=lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+            _safe_parent=lambda _path: None,
+            _fsync_dir=lambda _path: None,
+            _atomic_replace=self.atomic_replace,
+            capture_file=self.capture,
+        )
+
+    def atomic_replace(self, path, data, metadata):
+        path.write_bytes(data)
+        self.installed_meta[path] = dict(metadata)
+
+    def capture(self, path):
+        if not path.exists():
+            raise FileNotFoundError(path)
+        data = path.read_bytes()
+        if path == self.api:
+            metadata = self.before
+        else:
+            metadata = self.installed_meta[path]
+        return {**metadata, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+    def records(self):
+        return [dict(self.new_record), dict(self.api_record)]
+
+    def test_manifest_baseline_without_acl_text_uses_verified_capture(self):
+        self.assertNotIn("acl_text", self.baseline)
+        self.assertEqual(
+            {key: self.before[key] for key in deploy._NEW_FILE_META_KEYS},
+            deploy._expected_new_file_meta(self.records(), self.support),
+        )
+
+    def test_install_uses_captured_api_owner_mode_and_acl(self):
+        records = self.records()
+        tx = SimpleNamespace(file_backups=records)
+        deploy._install_files(tx, records, self.support)
+        self.assertEqual(self.new_bytes, self.new_module.read_bytes())
+        self.assertEqual({key: self.before[key] for key in deploy._NEW_FILE_META_KEYS},
+                         self.installed_meta[self.new_module])
+
+    def test_rollback_removes_new_target_using_same_captured_profile(self):
+        records = self.records()
+        tx = SimpleNamespace(file_backups=records)
+        deploy._install_files(tx, records, self.support)
+        deploy._restore_target_files(tx, self.support)
+        self.assertFalse(self.new_module.exists())
+        self.assertEqual(self.api_bytes, self.api.read_bytes())
+
+    def test_incomplete_ambiguous_or_unsafe_capture_fails_closed(self):
+        cases = []
+        missing_acl = self.records()
+        missing_acl[1]["before_metadata"] = dict(self.before)
+        missing_acl[1]["before_metadata"].pop("acl_text")
+        cases.append(("missing acl text", missing_acl))
+        missing_capture = self.records()
+        missing_capture[1]["before_metadata"] = None
+        cases.append(("missing capture", missing_capture))
+        duplicate = self.records()
+        duplicate.append(dict(self.api_record))
+        cases.append(("duplicate API capture", duplicate))
+        mismatched_acl = self.records()
+        mismatched_acl[1]["before_metadata"] = {**self.before, "acl_sha256": "f" * 64}
+        cases.append(("ACL digest mismatch", mismatched_acl))
+        mismatched_acl_profile = self.records()
+        mismatched_acl_profile[1]["before_metadata"] = {**self.before, "acl_text": "user::rwx\n"}
+        cases.append(("ACL text mismatch", mismatched_acl_profile))
+        unsafe_link = self.records()
+        unsafe_link[1]["before_metadata"] = {**self.before, "nlink": 2}
+        cases.append(("unsafe link count", unsafe_link))
+        unsafe_mode = self.records()
+        unsafe_mode[1]["before_metadata"] = {**self.before, "mode": "0999"}
+        cases.append(("unsafe mode", unsafe_mode))
+        unsafe_owner = self.records()
+        unsafe_owner[1]["before_metadata"] = {**self.before, "uid": "1001"}
+        cases.append(("unsafe owner type", unsafe_owner))
+        wrong_target = self.records()
+        wrong_target[1]["target"] = self.root / "different.py"
+        cases.append(("wrong API target", wrong_target))
+        missing_api = [self.new_record]
+        cases.append(("missing API capture", missing_api))
+        for label, records in cases:
+            with self.subTest(label=label), self.assertRaises(deploy.DeploymentError):
+                deploy._expected_new_file_meta(records, self.support)
+
+    def test_diagnostic_categories_are_fixed_and_preserve_explicit_values(self):
+        self.assertEqual("file_installation_failure", deploy._diagnostic_category(
+            deploy.DeploymentError("deployment failed phase=file_installation rollback=complete")))
+        self.assertEqual("sidecar_quiescence_failure", deploy._diagnostic_category(
+            deploy.DeploymentError("diagnostic_category=sidecar_quiescence_failure")))
+        self.assertEqual("preflight_blocked", deploy._diagnostic_category(
+            deploy.DeploymentError("some private raw detail")))
+
+
 class NginxAndSmokeTests(unittest.TestCase):
     def test_nginx_candidate_has_one_observation_route_and_preserves_approved(self):
         valid = (b"location = /api/challenges/intake/approved {\n}\n"

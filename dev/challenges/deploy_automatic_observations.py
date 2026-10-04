@@ -80,6 +80,21 @@ PUBLIC_PROBES = (
     ("https://nocturne.events/api/challenges/config/active", "config"),
     ("https://nocturne.events/api/challenges/leaderboard", "leaderboard"),
 )
+_NEW_FILE_META_KEYS = ("uid", "gid", "mode", "acl_text", "acl_sha256", "nlink")
+_COMPLETE_CAPTURE_META_KEYS = ("sha256", "uid", "gid", "mode", "nlink", "size", "acl_sha256", "acl_text")
+_ACL_TEXT_MAX_BYTES = 64 * 1024
+_PHASE_DIAGNOSTIC_CATEGORIES = {
+    "maintenance_stop": "maintenance_stop_failure",
+    "sidecar_quiescence": "sidecar_quiescence_failure",
+    "database_revalidation": "database_revalidation_failure",
+    "backup_creation": "backup_creation_failure",
+    "file_installation": "file_installation_failure",
+    "schema_migration": "schema_migration_failure",
+    "runtime_import_check": "runtime_import_check_failure",
+    "service_restoration": "service_restoration_failure",
+    "nginx_validation": "nginx_validation_failure",
+    "live_verification": "live_verification_failure",
+}
 
 
 class DeploymentError(RuntimeError):
@@ -444,13 +459,50 @@ def _create_file_backups(tx: Transaction, support) -> None:
     support._fsync_dir(tx.directory)
 
 
-def _expected_new_file_meta(items: list[dict[str, Any]]) -> dict[str, Any]:
-    api = next(x["baseline"] for x in items if x["target"] == SERVICE_ROOT / "challenge_intake_api.py")
-    return {key: api[key] for key in ("uid", "gid", "mode", "acl_text", "acl_sha256", "nlink")}
+def _expected_new_file_meta(file_backups: list[dict[str, Any]], support) -> dict[str, Any]:
+    """Derive the new module's install profile from its captured API predecessor.
+
+    The immutable manifest authenticates the predecessor's content and ACL
+    digest.  The transaction capture additionally contains the exact ACL text
+    needed by atomic replacement; it is deliberately not stored in the source
+    manifest.
+    """
+    api_target = SERVICE_ROOT / "challenge_intake_api.py"
+    matches = [entry for entry in file_backups
+               if isinstance(entry, dict) and entry.get("target") == api_target]
+    if len(matches) != 1:
+        raise DeploymentError("captured API predecessor record is absent or ambiguous")
+    entry = matches[0]
+    baseline = entry.get("baseline")
+    before = entry.get("before_metadata")
+    if (entry.get("was_absent") is not False or entry.get("predecessor_kind") != "manifest" or
+            entry.get("source_relative") != "dev/challenges/service/challenge_intake_api.py" or
+            not isinstance(baseline, dict) or baseline.get("type") != "regular" or
+            not isinstance(before, dict) or not set(_COMPLETE_CAPTURE_META_KEYS).issubset(before) or
+            entry.get("before_sha256") != baseline.get("sha256") or
+            not _expected_live_matches(before, baseline)):
+        raise DeploymentError("captured API predecessor metadata is incomplete or inconsistent")
+    uid, gid, mode, acl_text, acl_sha256, nlink = (before.get(key) for key in _NEW_FILE_META_KEYS)
+    if (type(uid) is not int or uid < 0 or type(gid) is not int or gid < 0 or
+            not isinstance(mode, str) or re.fullmatch(r"[0-7]{4}", mode) is None or
+            type(nlink) is not int or nlink != 1 or
+            not isinstance(acl_text, str) or not acl_text or "\x00" in acl_text or
+            len(acl_text.encode("utf-8")) > _ACL_TEXT_MAX_BYTES or
+            not isinstance(acl_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", acl_sha256) is None or
+            acl_sha256 != baseline.get("acl_sha256")):
+        raise DeploymentError("captured API predecessor metadata is unsafe")
+    try:
+        if support._acl_hash(acl_text) != acl_sha256:
+            raise DeploymentError("captured API predecessor ACL fingerprint is inconsistent")
+    except DeploymentError:
+        raise
+    except Exception as exc:
+        raise DeploymentError("captured API predecessor ACL fingerprint is invalid") from exc
+    return {key: before[key] for key in _NEW_FILE_META_KEYS}
 
 
 def _install_files(tx: Transaction, items: list[dict[str, Any]], support) -> None:
-    new_meta = _expected_new_file_meta(items)
+    new_meta = _expected_new_file_meta(tx.file_backups, support)
     for item in tx.file_backups:
         source_data = support._read_regular(item["source"])
         if _sha_bytes(source_data) != item["after_sha256"]:
@@ -607,7 +659,7 @@ def _restore_target_files(tx: Transaction, support) -> None:
         if item["was_absent"]:
             if current is None:
                 continue
-            profile = _expected_new_file_meta(tx.items)
+            profile = _expected_new_file_meta(tx.file_backups, support)
             if (current["sha256"] != item["after_sha256"] or current["nlink"] != 1 or
                     any(current.get(key) != profile.get(key)
                         for key in ("uid", "gid", "mode", "acl_sha256"))):
@@ -1007,13 +1059,23 @@ def _cli(argv: list[str] | None = None) -> int:
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
     except Exception as exc:
-        message = str(exc)
-        category_match = re.search(r"diagnostic_category=([a-z_]+)", message)
-        category = category_match.group(1) if category_match else "preflight_blocked"
+        category = _diagnostic_category(exc)
         # Only fixed categories are emitted. No exception text, source path,
         # request response, database contents, or identity reaches stdout.
         print(json.dumps({"status": "blocked", "diagnostic_category": category}, separators=(",", ":")))
         return 2
+
+
+def _diagnostic_category(exc: BaseException) -> str:
+    """Map only fixed deployment phases/categories to bounded CLI output."""
+    message = str(exc)
+    explicit = re.search(r"(?:^|\s)diagnostic_category=([a-z_]+)(?:\s|$)", message)
+    if explicit:
+        return explicit.group(1)
+    phase = re.search(r"(?:^|\s)phase=([a-z_]+)(?:\s|$)", message)
+    if phase:
+        return _PHASE_DIAGNOSTIC_CATEGORIES.get(phase.group(1), "preflight_blocked")
+    return "preflight_blocked"
 
 
 if __name__ == "__main__":
