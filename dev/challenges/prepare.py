@@ -33,6 +33,9 @@ REPOSITORY_EXTENSIONS = {
     "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf": "Adds the repository-owned bounded Nginx route for automatic observations; not byte-equivalent to the live baseline.",
     "dev/challenges/tests/python/test_challenge_automatic_intake.py": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
     "dev/challenges/AUTOMATIC_OBSERVATIONS.md": "Documents the repository-owned public observation contract and trust boundary.",
+    "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
+    "dev/challenges/deploy_automatic_observations.py": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
+    "dev/challenges/tests/python/test_deploy_automatic_observations.py": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
 }
 
 
@@ -220,10 +223,24 @@ def source_record(path_text: str, metadata_seed: dict | None = None) -> dict:
 
 
 def expected_files() -> list[Path]:
-    paths = [p for p in TREE.rglob("*") if p.is_file() and p != MANIFEST]
+    paths = [p for p in TREE.rglob("*") if p.is_file() and p != MANIFEST
+             and "__pycache__" not in p.parts and p.suffix != ".pyc"]
     if any(p.is_symlink() for p in TREE.rglob("*")):
         raise RuntimeError("symlink found in adopted source tree")
     return sorted(paths, key=lambda p: p.relative_to(ROOT).as_posix())
+
+
+def refresh_bundle_records() -> None:
+    """Refresh only repository file records, preserving host-captured metadata."""
+    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    source_map = bindings()
+    files = expected_files()
+    rels = {p.relative_to(ROOT).as_posix() for p in files}
+    missing = sorted(set(source_map) - rels)
+    if missing:
+        raise RuntimeError("source bindings missing from bundle: " + ", ".join(missing))
+    data["bundle_files"] = [file_record(p, source_map.get(p.relative_to(ROOT).as_posix())) for p in files]
+    MANIFEST.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def build_manifest() -> dict:
@@ -329,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--refresh-manifest", action="store_true", help="write only the repository source manifest")
+    group.add_argument("--refresh-bundle-files-only", action="store_true",
+                       help="refresh repository bundle file hashes without recapturing live metadata")
     group.add_argument("--verify-bundle", action="store_true", help="verify bundle against its manifest without Git/live gates")
     group.add_argument("--commit", help="read-only dry-run bound to this exact published full commit; defaults to HEAD")
     args = parser.parse_args(argv)
@@ -337,6 +356,10 @@ def main(argv: list[str] | None = None) -> int:
             data = build_manifest()
             MANIFEST.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n", encoding="utf-8")
             print(f"manifest_refreshed files={len(data['bundle_files'])} sources={len(data['live_sources'])}")
+            return 0
+        if args.refresh_bundle_files_only:
+            refresh_bundle_records()
+            print("bundle_file_records_refreshed live_metadata=preserved")
             return 0
         if args.verify_bundle:
             verify_bundle()

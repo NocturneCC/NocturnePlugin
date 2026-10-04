@@ -2,7 +2,9 @@ import importlib.util
 import json
 import unittest
 import copy
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "prepare.py"
@@ -46,6 +48,9 @@ class SourceAdoptionTests(unittest.TestCase):
             "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
             "dev/challenges/tests/python/test_challenge_automatic_intake.py",
             "dev/challenges/AUTOMATIC_OBSERVATIONS.md",
+            "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md",
+            "dev/challenges/deploy_automatic_observations.py",
+            "dev/challenges/tests/python/test_deploy_automatic_observations.py",
         }
         reasons = prepare.REPOSITORY_EXTENSIONS
         self.assertTrue(paths <= reasons.keys())
@@ -54,6 +59,20 @@ class SourceAdoptionTests(unittest.TestCase):
             record = prepare.file_record(files[path], prepare.bindings().get(path))
             self.assertEqual("repository_owned_extension", record["source_relationship"])
             self.assertIn("repository-owned", record["extension_reason"])
+
+    def test_bundle_only_refresh_excludes_bytecode_and_preserves_live_metadata(self):
+        original = json.loads(prepare.MANIFEST.read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "source-manifest.json"
+            manifest.write_text(json.dumps(original))
+            with mock.patch.object(prepare, "MANIFEST", manifest):
+                prepare.refresh_bundle_records()
+            refreshed = json.loads(manifest.read_text())
+        names = {row["path"] for row in refreshed["bundle_files"]}
+        self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
+        self.assertEqual(original["live_sources"], refreshed["live_sources"])
+        self.assertEqual(original["external_references"], refreshed["external_references"])
+        self.assertEqual(original["metadata_capture"], refreshed["metadata_capture"])
 
     def test_version_10_equivalence_evidence_is_digest_only(self):
         evidence = json.loads((SCRIPT.parent / "evidence/config-v10-equivalence.json").read_text())

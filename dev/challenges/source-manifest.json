@@ -13,19 +13,21 @@
     },
     {
       "executable": false,
+      "extension_reason": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
       "normalization": null,
-      "path": "dev/challenges/README.md",
-      "sha256": "bf29522b07c0ba826cf4096916dd2919d65e228c8621d54ce9d8a89a4d30b6fe",
-      "size": 12612,
+      "path": "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md",
+      "sha256": "f52191b19dd00fd18edca981343dbc6d1a7bc81ea92789a57af36c211824ff9f",
+      "size": 6380,
       "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
       "executable": false,
       "normalization": null,
-      "path": "dev/challenges/__pycache__/deploy_timing_metadata.cpython-314.pyc",
-      "sha256": "436a792d61f85eef7b949e30cb00f1ce2a94b6df05db93c371c0e1830870a0d2",
-      "size": 151815,
+      "path": "dev/challenges/README.md",
+      "sha256": "bf29522b07c0ba826cf4096916dd2919d65e228c8621d54ce9d8a89a4d30b6fe",
+      "size": 12612,
       "source": null,
       "type": "regular"
     },
@@ -90,6 +92,17 @@
       "sha256": "35abf7614191d04563ebe3c3cd44a66fb8ba22e4f74b56b368fa0453f7157040",
       "size": 4989,
       "source": "/srv/projects/nocturne-bot/utils/midgardChallengeIntake.js",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
+      "normalization": null,
+      "path": "dev/challenges/deploy_automatic_observations.py",
+      "sha256": "9832ff6a2fd3e726de854088e6cbccd8a50f722918d8641759da80cd08620750",
+      "size": 57356,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
       "type": "regular"
     },
     {
@@ -206,8 +219,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/prepare.py",
-      "sha256": "661bbd3ded538bb2696471761b34d6b778c23a8df3ef6e2daca5e8e83fbbf13b",
-      "size": 21222,
+      "sha256": "b2f32a2c7411c36779c3e70cbe25b1c3179fb8b82bfa1c450a12ac0de8d13551",
+      "size": 22891,
       "source": null,
       "type": "regular"
     },
@@ -374,15 +387,6 @@
     },
     {
       "executable": false,
-      "normalization": null,
-      "path": "dev/challenges/tests/python/__pycache__/test_deploy_timing_metadata.cpython-314.pyc",
-      "sha256": "7d6d3f07daa86a59597e63fd3e0a01f3693850c74c2a6e3aa36c304a39cd6db7",
-      "size": 183040,
-      "source": null,
-      "type": "regular"
-    },
-    {
-      "executable": false,
       "extension_reason": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_challenge_automatic_intake.py",
@@ -441,6 +445,17 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
+      "sha256": "b854a9af63fd4a2eaeacbffb76f4f64b3c079085fe7ba4a257cf5648b690b973",
+      "size": 25330,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
+      "type": "regular"
+    },
+    {
+      "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_timing_metadata.py",
       "sha256": "6eb29de4d7a82028b016c14ab2850266a86b752a5132732a23611c08cddec5d0",
@@ -479,8 +494,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_source_adoption.py",
-      "sha256": "3fb930ba190bc07ced631e2478a0059b08f7dfc72f966bf4b33562f3905ab91d",
-      "size": 5240,
+      "sha256": "425227b63884c2464ad22482894c513223c80324f94ba541d2a330701a83c8bc",
+      "size": 6407,
       "source": null,
       "type": "regular"
     },
