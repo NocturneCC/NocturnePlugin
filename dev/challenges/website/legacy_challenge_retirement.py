@@ -42,6 +42,14 @@ def rewrite_legacy_progress_links(source: str) -> str:
 
 def remove_legacy_member_summary_consumer(source: str) -> str:
     """Remove the member-viewer card that fetched the retired CSV summary."""
+    # Immutable deployment may be retried after a successful installation. An
+    # already transformed page has this exact marker and is a stable input;
+    # absence of both old and new shapes without the marker is unknown drift.
+    marker = "// Challenge rank/progress is provided by the Midgard-backed profile."
+    if ("loadNocturneChallengeCard" not in source
+            and "/api/nocturne-challenges/summary" not in source
+            and marker in source):
+        return source
     updated, count = _CARD_BLOCK.subn(
         "// Challenge rank/progress is provided by the Midgard-backed profile.\n\n",
         source,

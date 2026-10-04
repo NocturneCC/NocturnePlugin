@@ -38,6 +38,8 @@ REPOSITORY_EXTENSIONS = {
     "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
     "dev/challenges/deploy_automatic_observations.py": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
     "dev/challenges/tests/python/test_deploy_automatic_observations.py": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
+    "dev/challenges/deploy_legacy_challenge_retirement.py": "Adds a root-only apply, default-dry-run immutable-release-bound installer for retiring obsolete CSV-backed Challenge progress routes with verified backups and rollback.",
+    "dev/challenges/tests/python/test_deploy_legacy_challenge_retirement.py": "Adds disposable fixtures for the guarded legacy Challenge retirement installer, routes, metadata, and rollback behavior.",
     "dev/challenges/website/legacy_challenge_retirement.py": "Adds deterministic source transforms and a Midgard-backed redirect artifact for retiring the stale CSV progress view; production website files are not modified here.",
     "dev/challenges/website/nocturne-challenge-progress.html": "Repository-owned redirect replacement for the legacy progress page; deployment to the separate website tree is not performed by this change.",
     "dev/challenges/tests/python/test_legacy_challenge_retirement.py": "Tests the repository-owned legacy Challenge page/link retirement transforms.",

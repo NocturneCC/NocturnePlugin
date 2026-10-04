@@ -246,3 +246,55 @@ authoritative from Google imports. This change neither drops nor rewrites any
 of the four tables. The sheet-sync script and unit remain on disk for recovery,
 but are no longer captured, paused, restored, or reported by future Challenge
 deployment helpers.
+
+### Guarded legacy progress retirement deployment
+
+`deploy_legacy_challenge_retirement.py` is default-dry-run and bound to the
+exact retirement commit. It reads only the matching prepared release for the
+API source, redirect page, and deterministic website transforms. Before apply
+it requires the clean published checkout and canonical immutable `--check`,
+the pinned prior live hashes and ACL/metadata profiles, and healthy active
+configuration/leaderboard state. It makes root-private file backups plus a
+SQLite online backup; the database is never migrated or restored because this
+deployment does not write it. Only `osrs-drops-api.service` is restarted: its
+`api:app` imports `challenge_config_api.py`. Nginx is unchanged.
+
+The sheet-sync timer is paused only for this retirement transaction and then
+returned to its captured active/enablement state. A running one-shot is allowed
+to drain naturally. Because rerunning it could rewrite retired CSV-derived
+tables, an apply that captured the one-shot already running aborts before file
+installation, restores the timer/API prestate, and asks for a retry after the
+one-shot is inactive. On any later failure the helper restores the exact file
+backups atomically and restores the API and timer states. The service is not
+disabled and its unit/script remain available for recovery; future general
+Challenge deployment control sets continue to exclude both legacy units.
+
+After publishing this installer commit, Simon should use that exact commit SHA
+for preparation and deployment so the installer itself, retirement sources,
+and support interfaces all come from one prepared immutable release. Replace
+the placeholder consistently below with that full SHA. Preparation and apply
+are operator actions and were not run while preparing this source change:
+
+```sh
+sudo /bin/bash \
+  /srv/projects/nocturne-plugin-intake/dev/intake/prepare_immutable_runtime.sh \
+  --prepare <commit>
+
+sudo /bin/bash \
+  /srv/nocturne-plugin/releases/<commit>/dev/intake/prepare_immutable_runtime.sh \
+  --check <commit>
+
+sudo /usr/bin/python3.14 -B \
+  /srv/nocturne-plugin/releases/<commit>/dev/challenges/deploy_legacy_challenge_retirement.py \
+  --dry-run --commit <commit>
+
+sudo /usr/bin/python3.14 -B \
+  /srv/nocturne-plugin/releases/<commit>/dev/challenges/deploy_legacy_challenge_retirement.py \
+  --apply --commit <commit>
+```
+
+The apply result prints a transaction-record path. If an operator later
+explicitly requests reversal, the matching immutable helper accepts that
+record with `--rollback-record <printed-transaction.json> --commit <commit>`;
+rollback verifies every saved
+backup and refuses database-state or live-file drift.

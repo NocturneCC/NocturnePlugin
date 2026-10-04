@@ -26,8 +26,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/README.md",
-      "sha256": "a146f44027a5f162cc729de81bff37b7473634a6f3337e28170545bc7b5404b4",
-      "size": 14804,
+      "sha256": "0e6b0944204cd40e05afae8e57ef5e8c2421a82d539ced8828264a5c30d02edd",
+      "size": 17481,
       "source": null,
       "type": "regular"
     },
@@ -101,6 +101,17 @@
       "path": "dev/challenges/deploy_automatic_observations.py",
       "sha256": "57652284545dfd39e0beb225bcd763268b7b7f2e8444ed8049a79ef142911ade",
       "size": 60677,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "extension_reason": "Adds a root-only apply, default-dry-run immutable-release-bound installer for retiring obsolete CSV-backed Challenge progress routes with verified backups and rollback.",
+      "normalization": null,
+      "path": "dev/challenges/deploy_legacy_challenge_retirement.py",
+      "sha256": "f4893da68baefdc74566228729503d4030d725d69684796bc6da317cf60d52e1",
+      "size": 59741,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -219,8 +230,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/prepare.py",
-      "sha256": "28cf5096239adc8cc0096fcf6860a5f7a6e1666bac02f3d66268e037c0a0cbd3",
-      "size": 23885,
+      "sha256": "65a736934f705f90dc18b67e37c854f4c5f24b73ce8a72e1aa868f063a50f336",
+      "size": 24319,
       "source": null,
       "type": "regular"
     },
@@ -460,6 +471,17 @@
     },
     {
       "executable": false,
+      "extension_reason": "Adds disposable fixtures for the guarded legacy Challenge retirement installer, routes, metadata, and rollback behavior.",
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_deploy_legacy_challenge_retirement.py",
+      "sha256": "ecb2f145a257d85cd5acb8834ea8da2cd5b436df888ac1c454b2ad37f895f868",
+      "size": 23543,
+      "source": null,
+      "source_relationship": "repository_owned_extension",
+      "type": "regular"
+    },
+    {
+      "executable": false,
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_timing_metadata.py",
       "sha256": "f3566966431a694fefe4d2c58709427a6fd9b6256bff998de46f431b321fcc23",
@@ -568,8 +590,8 @@
       "extension_reason": "Adds deterministic source transforms and a Midgard-backed redirect artifact for retiring the stale CSV progress view; production website files are not modified here.",
       "normalization": null,
       "path": "dev/challenges/website/legacy_challenge_retirement.py",
-      "sha256": "af6ac84a7ac6e018f91ddc4d61747950815ed23c8a88ccfacd382dc6c65ed8ba",
-      "size": 2241,
+      "sha256": "ffcfa7cdbd9fa28fc95c4aeb9817cdf25b66e58e478376f3f37e9b64af6ee520",
+      "size": 2730,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
