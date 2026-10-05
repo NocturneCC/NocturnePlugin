@@ -23,6 +23,13 @@ assert spec and spec.loader
 sys.modules[spec.name] = deploy
 spec.loader.exec_module(deploy)
 
+timing_spec = importlib.util.spec_from_file_location(
+    "retirement_test_timing_support", TREE / "deploy_timing_metadata.py")
+timing_support = importlib.util.module_from_spec(timing_spec)
+assert timing_spec and timing_spec.loader
+sys.modules[timing_spec.name] = timing_support
+timing_spec.loader.exec_module(timing_support)
+
 
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -122,15 +129,62 @@ class MetadataAndRollbackTests(unittest.TestCase):
 
     def test_api_predecessor_acl_digest_is_bound_to_manifest(self):
         path = Path("/srv/projects/nocturne-services/challenge_config_api.py")
-        acl = "user::rw-\nuser:1003:rw-\ngroup::rwx\nmask::rw-\nother::r--\n"
+        acl = ("user::rw-\nuser:1003:rwx #effective:rw-\n"
+               "group::rwx #effective:rw-\nmask::rw-\nother::r--\n")
         meta = {"uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
-                "acl_text": acl, "acl_sha256": "pinned-acl"}
-        expected = {"user::": "rw-", "user:1003:": "rw-", "group::": "rwx",
-                    "mask::": "rw-", "other::": "r--"}
-        support = SimpleNamespace(_acl_entries=lambda _text: expected)
-        deploy._file_profile(path, meta, {"acl_sha256": "pinned-acl"}, support)
+                "acl_text": acl, "acl_sha256": timing_support._acl_hash(acl)}
+        parsed = {"user::": "rw-", "user:1003:": "rwx", "group::": "rwx",
+                  "mask::": "rw-", "other::": "r--"}
+        support = SimpleNamespace(_acl_entries=timing_support._acl_entries)
+        source_manifest = json.loads((TREE / "source-manifest.json").read_text())
+        manifest_records = [row for row in source_manifest["live_sources"]
+                            if row.get("path") == str(path)]
+        self.assertEqual(1, len(manifest_records))
+        manifest_record = manifest_records[0]
+        self.assertEqual(timing_support._acl_hash(acl), manifest_record["acl_sha256"])
+        deploy._file_profile(path, meta, manifest_record, support)
         with self.assertRaises(deploy.RetirementError):
-            deploy._file_profile(path, meta, {"acl_sha256": "different"}, support)
+            deploy._file_profile(path, meta, {"acl_sha256": "0" * 64}, support)
+
+        # Exact getfacl -cpn form: the named user's raw rwx is masked to rw-;
+        # it must not be normalized to rw- in the profile comparison.
+        actual = timing_support._acl_entries(acl)
+        self.assertEqual(parsed, actual)
+        altered_profiles = (
+            acl.replace("user:1003:rwx #effective:rw-\n", ""),
+            acl.replace("other::r--\n", "other::r--\nuser:2000:r--\n"),
+            acl.replace("mask::rw-", "mask::rwx"),
+            acl.replace("user:1003:rwx", "user:1003:rw-"),
+        )
+        for altered in altered_profiles:
+            altered_digest = timing_support._acl_hash(altered)
+            altered_meta = {**meta, "acl_text": altered, "acl_sha256": altered_digest}
+            with self.subTest(acl=altered):
+                with self.assertRaises(deploy.RetirementError):
+                    deploy._file_profile(path, altered_meta,
+                                         {"acl_sha256": altered_digest}, support)
+        for changed in ({"uid": 1000}, {"gid": 34}, {"mode": "0666"}, {"nlink": 2}):
+            with self.subTest(metadata=changed):
+                with self.assertRaises(deploy.RetirementError):
+                    deploy._file_profile(path, {**meta, **changed},
+                                         {"acl_sha256": "pinned-acl"}, support)
+
+    def test_api_acl_file_type_remains_regular_only(self):
+        # _file_profile receives capture_file metadata only after its O_NOFOLLOW
+        # regular-file/single-link checks; preserve an explicit regression for
+        # those guard predicates at the capture boundary.
+        with tempfile.TemporaryDirectory() as directory_text:
+            root = Path(directory_text)
+            regular = root / "regular"
+            regular.write_text("safe")
+            alias = root / "alias"
+            alias.symlink_to(regular)
+            with self.assertRaises(deploy.RetirementError):
+                deploy._read_nofollow(alias)
+            linked = root / "linked"
+            os.link(regular, linked)
+            with self.assertRaises(deploy.RetirementError):
+                deploy._read_nofollow(linked)
 
     def test_nofollow_capture_rejects_symlink_and_hardlink_ambiguity(self):
         with tempfile.TemporaryDirectory() as directory_text:

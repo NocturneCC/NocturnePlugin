@@ -217,7 +217,7 @@ def _file_profile(path: Path, meta: dict[str, Any], source_record: dict | None, 
         # The API's exact ACL digest is pinned by the adopted source manifest.
         if not source_record or meta.get("acl_sha256") != source_record.get("acl_sha256"):
             raise RetirementError("api_acl_baseline_mismatch")
-        expected_entries = {"user::": "rw-", "user:1003:": "rw-", "group::": "rwx",
+        expected_entries = {"user::": "rw-", "user:1003:": "rwx", "group::": "rwx",
                             "mask::": "rw-", "other::": "r--"}
     else:
         expected_entries = {"user::": "rw-", "user:1003:": "rw-", "group::": "r--",
