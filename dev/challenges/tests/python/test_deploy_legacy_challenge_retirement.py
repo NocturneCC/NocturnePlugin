@@ -129,8 +129,8 @@ class MetadataAndRollbackTests(unittest.TestCase):
 
     def test_api_predecessor_acl_digest_is_bound_to_manifest(self):
         path = Path("/srv/projects/nocturne-services/challenge_config_api.py")
-        acl = ("user::rw-\nuser:1003:rwx #effective:rw-\n"
-               "group::rwx #effective:rw-\nmask::rw-\nother::r--\n")
+        acl = ("user::rw-\nuser:1003:rwx\t#effective:rw-\n"
+               "group::rwx\t#effective:rw-\nmask::rw-\nother::r--\n")
         meta = {"uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
                 "acl_text": acl, "acl_sha256": timing_support._acl_hash(acl)}
         parsed = {"user::": "rw-", "user:1003:": "rwx", "group::": "rwx",
@@ -151,7 +151,7 @@ class MetadataAndRollbackTests(unittest.TestCase):
         actual = timing_support._acl_entries(acl)
         self.assertEqual(parsed, actual)
         altered_profiles = (
-            acl.replace("user:1003:rwx #effective:rw-\n", ""),
+            acl.replace("user:1003:rwx\t#effective:rw-\n", ""),
             acl.replace("other::r--\n", "other::r--\nuser:2000:r--\n"),
             acl.replace("mask::rw-", "mask::rwx"),
             acl.replace("user:1003:rwx", "user:1003:rw-"),
