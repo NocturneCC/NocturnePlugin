@@ -1516,7 +1516,7 @@
         "mode": "0775",
         "nlink": 1,
         "path": "/srv/projects/nocturne-services/api.py",
-        "sha256": "eecc596775ebe51e42dd3df69cda5a4fd5211231b9d2e9d75230778a66860602",
+        "sha256": "63839c093d2a57ce2a6fa32012e57374c6e2466cafbe020bdcc177eeb80b814a",
         "size": 269146,
         "type": "regular",
         "uid": 1001
