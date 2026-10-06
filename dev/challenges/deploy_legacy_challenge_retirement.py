@@ -336,6 +336,8 @@ def _capture_unit_state(systemd, support, unit: str, *, timer: bool = False) -> 
             raise RetirementError("timer_state_ambiguous")
         if pid not in {None, "0"}:
             raise RetirementError("timer_process_unexpected")
+        if unit_file_state not in {"enabled", "enabled-runtime", "disabled"}:
+            raise RetirementError("timer_enablement_unsupported")
     else:
         valid = ((active == "inactive" and sub == "dead" and pid == "0") or
                  (active == "active" and sub in {"running", "exited"} and pid is not None and pid.isdigit()))
@@ -529,7 +531,69 @@ def _systemctl(support, action: str, unit: str) -> None:
         raise RetirementError(f"systemd_{action}_failed")
 
 
+def _set_sheet_timer_enablement(target: str, support) -> None:
+    """Set only the supported enabled/disabled timer states, failing closed."""
+    if target not in {"enabled", "enabled-runtime", "disabled"}:
+        raise RetirementError("sheet_timer_enablement_unsupported")
+    current = _read_systemd_unit_file_state(support, SHEET_TIMER)
+    if current == target:
+        return
+    if current not in {"enabled", "enabled-runtime", "disabled"}:
+        raise RetirementError("sheet_timer_enablement_unsupported")
+    if current != "disabled":
+        argv = ["/usr/bin/systemctl", "disable"]
+        if current == "enabled-runtime":
+            argv.append("--runtime")
+        argv.append(SHEET_TIMER)
+        proc = support._run(argv, timeout=30)
+        if proc.returncode:
+            raise RetirementError("systemd_disable_failed")
+        current = "disabled"
+    if target != "disabled":
+        argv = ["/usr/bin/systemctl", "enable"]
+        if target == "enabled-runtime":
+            argv.append("--runtime")
+        argv.append(SHEET_TIMER)
+        proc = support._run(argv, timeout=30)
+        if proc.returncode:
+            raise RetirementError("systemd_enable_failed")
+    if _read_systemd_unit_file_state(support, SHEET_TIMER) != target:
+        raise RetirementError("sheet_timer_enablement_restore_mismatch")
+
+
+def _verify_sheet_timer_state(*, active: str, sub: str, enablement: str,
+                              systemd, support) -> None:
+    state = systemd.show(SHEET_TIMER)
+    if (state.get("Id") != SHEET_TIMER or state.get("LoadState") != "loaded" or
+            state.get("ActiveState") != active or state.get("SubState") != sub or
+            state.get("MainPID") not in {None, "0"}):
+        raise RetirementError("sheet_timer_state_restore_mismatch")
+    if _read_systemd_unit_file_state(support, SHEET_TIMER) != enablement:
+        raise RetirementError("sheet_timer_enablement_changed")
+
+
+def _retire_sheet_timer(systemd, support) -> None:
+    """Leave the obsolete importer timer disabled and inactive after success."""
+    state = systemd.show(SHEET_TIMER)
+    if state.get("ActiveState") == "active":
+        _systemctl(support, "stop", SHEET_TIMER)
+        systemd.wait_inactive(SHEET_TIMER, timeout=20)
+    state = systemd.show(SHEET_TIMER)
+    if (state.get("Id") != SHEET_TIMER or state.get("LoadState") != "loaded" or
+            state.get("ActiveState") != "inactive" or state.get("SubState") != "dead" or
+            state.get("MainPID") not in {None, "0"}):
+        raise RetirementError("sheet_timer_stop_verification_failed")
+    current_enablement = _read_systemd_unit_file_state(support, SHEET_TIMER)
+    if current_enablement != "disabled":
+        _set_sheet_timer_enablement("disabled", support)
+    _verify_sheet_timer_state(active="inactive", sub="dead", enablement="disabled",
+                              systemd=systemd, support=support)
+
+
 def _restore_timer(prior: dict[str, Any], systemd, support) -> None:
+    if prior.get("UnitFileState") not in {"enabled", "enabled-runtime", "disabled"}:
+        raise RetirementError("sheet_timer_enablement_unsupported")
+    _set_sheet_timer_enablement(prior["UnitFileState"], support)
     current = systemd.show(SHEET_TIMER)
     if prior["ActiveState"] == "active":
         if current.get("ActiveState") != "active":
@@ -545,13 +609,9 @@ def _restore_timer(prior: dict[str, Any], systemd, support) -> None:
     elif current.get("ActiveState") != "inactive" or current.get("SubState") != "dead":
         _systemctl(support, "stop", SHEET_TIMER)
         systemd.wait_inactive(SHEET_TIMER, timeout=20)
-    final = systemd.show(SHEET_TIMER)
-    if (final.get("Id") != SHEET_TIMER or final.get("LoadState") != "loaded" or
-            final.get("ActiveState") != prior["ActiveState"] or final.get("SubState") != prior["SubState"] or
-            final.get("MainPID") not in {None, "0"}):
-        raise RetirementError("sheet_timer_state_restore_mismatch")
-    if _read_systemd_unit_file_state(support, SHEET_TIMER) != prior["UnitFileState"]:
-        raise RetirementError("sheet_timer_enablement_changed")
+    _verify_sheet_timer_state(active=prior["ActiveState"], sub=prior["SubState"],
+                              enablement=prior["UnitFileState"], systemd=systemd,
+                              support=support)
 
 
 def _restore_api(prior: dict[str, Any], systemd, support) -> None:
@@ -585,11 +645,37 @@ def _restore_api(prior: dict[str, Any], systemd, support) -> None:
         raise RetirementError("api_service_enablement_changed")
 
 
-def _verify_sheet_service_drained(prior: dict[str, Any], systemd, support) -> None:
-    current = systemd.show(SHEET_SERVICE)
-    if (current.get("Id") != SHEET_SERVICE or current.get("LoadState") != "loaded" or
-            current.get("ActiveState") != "inactive" or current.get("SubState") != "dead" or
-            current.get("MainPID") != "0"):
+def _verify_sheet_service_drained(prior: dict[str, Any], systemd, support,
+                                  *, timeout: float = 90) -> None:
+    """Wait boundedly for a timer-triggered one-shot, without stopping it."""
+    deadline = time.monotonic() + timeout
+    while True:
+        current = systemd.show(SHEET_SERVICE)
+        if current.get("Id") != SHEET_SERVICE or current.get("LoadState") != "loaded":
+            raise RetirementError("sheet_service_drain_failed")
+        active, sub, pid = current.get("ActiveState"), current.get("SubState"), current.get("MainPID")
+        if (active, sub, pid) == ("inactive", "dead", "0"):
+            break
+        active_oneshot = ((sub == "running" and isinstance(pid, str) and pid.isdigit() and int(pid) > 0) or
+                          (sub == "exited" and pid in {None, "0"}))
+        if active == "active" and active_oneshot:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RetirementError("sheet_service_drain_timeout")
+            try:
+                systemd.wait_job_idle(SHEET_SERVICE, timeout=min(remaining, 15))
+            except Exception as exc:
+                if time.monotonic() >= deadline:
+                    raise RetirementError("sheet_service_drain_timeout") from exc
+            after_wait = systemd.show(SHEET_SERVICE)
+            if (after_wait.get("ActiveState"), after_wait.get("SubState"), after_wait.get("MainPID")) == (active, sub, pid):
+                time.sleep(min(.2, max(0, deadline - time.monotonic())))
+            continue
+        if active in {"activating", "deactivating"} and time.monotonic() < deadline:
+            time.sleep(min(.2, max(0, deadline - time.monotonic())))
+            continue
+        if time.monotonic() >= deadline:
+            raise RetirementError("sheet_service_drain_timeout")
         raise RetirementError("sheet_service_drain_failed")
     if _read_systemd_unit_file_state(support, SHEET_SERVICE) != prior["UnitFileState"]:
         raise RetirementError("sheet_service_enablement_changed")
@@ -781,16 +867,17 @@ def apply_plan(*, commit: str, plan: dict[str, Any], support, systemd,
             systemd.wait_inactive(SHEET_TIMER, timeout=20)
         # The one-shot is allowed to finish naturally; it is never killed or
         # re-run, avoiding a second CSV import. Its stable post-drain state is
-        # inactive/dead, while the timer's exact active/enablement prestate is
-        # restored below.
+        # inactive/dead. On successful retirement the timer remains stopped
+        # and is disabled; rollback alone restores its captured prestate.
         sheet_state = systemd.show(SHEET_SERVICE)
         if sheet_state.get("ActiveState") == "active":
             systemd.wait_job_idle(SHEET_SERVICE, timeout=90)
         _verify_sheet_service_drained(prior[SHEET_SERVICE], systemd, support)
         # A running oneshot has no stable state to restore without executing
         # the retired importer a second time (which could rewrite CSV tables).
-        # Drain it safely, restore the timer, and require a later retry once the
-        # captured service prestate is stable/inactive.
+        # Drain it safely and require a later retry once the captured service
+        # prestate is stable/inactive. A successful retirement never restores
+        # or re-enables the obsolete timer.
         if prior[SHEET_SERVICE]["ActiveState"] != "inactive":
             raise RetirementError("sheet_service_transient_prestate")
         if prior[SERVICE]["ActiveState"] == "active":
@@ -855,8 +942,8 @@ def apply_plan(*, commit: str, plan: dict[str, Any], support, systemd,
         after_db = _database_summary(database)
         if after_db["integrity"] != "ok" or after_db["active_config_version_id"] != database_before["active_config_version_id"]:
             raise RetirementError("database_poststate_changed")
-        phase = "timer_restore"
-        _restore_timer(prior[SHEET_TIMER], systemd, support)
+        phase = "timer_retirement"
+        _retire_sheet_timer(systemd, support)
         _verify_sheet_service_drained(prior[SHEET_SERVICE], systemd, support)
         record["state"] = "applied"
         record["completed_at_epoch"] = int(time.time())
@@ -866,40 +953,93 @@ def apply_plan(*, commit: str, plan: dict[str, Any], support, systemd,
                                      "active_config", "leaderboard"]
         record["restoration_result"] = {
             "api": "active_running" if prior[SERVICE]["ActiveState"] == "active" else "inactive_dead",
-            "sheet_timer": "active_waiting" if prior[SHEET_TIMER]["ActiveState"] == "active" else "inactive_dead",
+            "sheet_timer": "disabled_inactive",
             "sheet_service": "inactive_dead",
         }
         _write_record(record_path, record)
         return {"status": "applied", "target_commit": commit, "rewritten_files": sum(bool(x["changed"]) for x in fresh["_items"]),
-                "transaction_record": str(record_path), "timer_restored": True,
+                "transaction_record": str(record_path), "sheet_timer_retired": True,
                 "database_migrated": False, "nginx_changed": False}
     except Exception as exc:
+        failure_phase = phase
+        failure_category = exc.category if isinstance(exc, RetirementError) else "unexpected_failure"
+        rollback_category = "none"
         rollback_ok = True
-        try:
-            if backups and directory is not None:
+        files_outcome = "not_needed"
+        api_outcome = "not_needed"
+        timer_outcome = "not_needed"
+        sheet_service_outcome = "not_needed"
+
+        def rollback_step(category: str, operation) -> bool:
+            nonlocal rollback_ok, rollback_category
+            try:
+                operation()
+                return True
+            except Exception as rollback_exc:
+                rollback_ok = False
+                if rollback_category == "none":
+                    rollback_category = (rollback_exc.category if isinstance(rollback_exc, RetirementError)
+                                         else category)
+                return False
+
+        can_restore_files = True
+        if backups and directory is not None:
+            def stop_api_for_restore():
                 state = systemd.show(SERVICE)
                 if state.get("ActiveState") == "active":
                     _systemctl(support, "stop", SERVICE)
                     systemd.wait_inactive(SERVICE, timeout=30)
-                _atomic_restore_files(backups, directory, support)
-            if prior is not None:
-                _restore_api(prior[SERVICE], systemd, support)
-                _restore_timer(prior[SHEET_TIMER], systemd, support)
-            if directory is not None:
-                failed_record = {"schema_version": 1, "target_commit": commit,
-                                 "state": "rolled_back" if rollback_ok else "rollback_failed",
-                                 "failure_phase": phase, "failure_category": getattr(exc, "category", "apply_failure"),
-                                 "created_at_epoch": record["created_at_epoch"] if record else int(time.time()),
-                                 "completed_at_epoch": int(time.time()), "files": backups,
-                                 "prior_units": prior or {},
-                                 "database_backup": record.get("database_backup") if record else None,
-                                 "database_mutated": False, "schema_migrated": False,
-                                 "nginx_changed": False, "nginx_reloaded": False,
-                                 "services_restarted": [SERVICE] if prior and prior[SERVICE]["ActiveState"] == "active" else [],
-                                 "restoration_result": {"outcome": "complete" if rollback_ok else "failed"}}
+                    final = systemd.show(SERVICE)
+                    if (final.get("ActiveState"), final.get("SubState")) != ("inactive", "dead"):
+                        raise RetirementError("api_stop_for_rollback_failed")
+
+            can_restore_files = rollback_step("api_stop_for_rollback_failed", stop_api_for_restore)
+            if can_restore_files:
+                files_outcome = ("restored" if rollback_step(
+                    "file_restore_failed", lambda: _atomic_restore_files(backups, directory, support))
+                    else "failed")
+            else:
+                files_outcome = "not_attempted"
+
+        if prior is not None:
+            if files_outcome not in {"failed", "not_attempted"}:
+                api_outcome = ("restored" if rollback_step(
+                    "api_restore_failed", lambda: _restore_api(prior[SERVICE], systemd, support))
+                    else "failed")
+            else:
+                api_outcome = "not_attempted"
+            timer_restored = rollback_step("sheet_timer_restore_failed",
+                                           lambda: _restore_timer(prior[SHEET_TIMER], systemd, support))
+            timer_outcome = "restored" if timer_restored else "failed"
+            if timer_restored:
+                sheet_service_outcome = ("restored" if rollback_step(
+                    "sheet_service_restore_failed",
+                    lambda: _verify_sheet_service_drained(prior[SHEET_SERVICE], systemd, support))
+                    else "failed")
+            else:
+                sheet_service_outcome = "not_attempted"
+
+        if directory is not None:
+            failed_record = {"schema_version": 1, "target_commit": commit,
+                             "state": "rolled_back" if rollback_ok else "rollback_failed",
+                             "failure_phase": failure_phase, "failure_category": failure_category,
+                             "rollback_category": rollback_category,
+                             "created_at_epoch": record["created_at_epoch"] if record else int(time.time()),
+                             "completed_at_epoch": int(time.time()), "files": backups,
+                             "prior_units": prior or {},
+                             "database_backup": record.get("database_backup") if record else None,
+                             "database_mutated": False, "schema_migrated": False,
+                             "nginx_changed": False, "nginx_reloaded": False,
+                             "services_restarted": [SERVICE] if prior and prior[SERVICE]["ActiveState"] == "active" else [],
+                             "restoration_result": {
+                                 "outcome": "complete" if rollback_ok else "failed",
+                                 "files": files_outcome, "api": api_outcome,
+                                 "sheet_timer": timer_outcome,
+                                 "sheet_service": sheet_service_outcome}}
+            try:
                 _write_record(directory / "transaction.json", failed_record)
-        except Exception:
-            rollback_ok = False
+            except Exception:
+                rollback_ok = False
         # The original fixed category remains internal as __cause__; the
         # operator receives bounded phase plus rollback outcome only.
         raise RetirementError("rollback_complete" if rollback_ok else "rollback_failed",
@@ -950,10 +1090,17 @@ def rollback_record(*, record_path: Path, commit: str, support, systemd) -> dict
         _validate_rollback_units(prior)
         expected_restoration = {
             "api": "active_running",
+            "sheet_timer": "disabled_inactive",
+            "sheet_service": "inactive_dead",
+        }
+        # Accept pre-correction applied records for recoverability, but every
+        # newly written transaction must record the retired disabled state.
+        legacy_restoration = {
+            "api": "active_running",
             "sheet_timer": "active_waiting" if prior[SHEET_TIMER]["ActiveState"] == "active" else "inactive_dead",
             "sheet_service": "inactive_dead",
         }
-        if record.get("restoration_result") != expected_restoration:
+        if record.get("restoration_result") not in (expected_restoration, legacy_restoration):
             raise RetirementError("rollback_restoration_record_invalid")
         expected_backup_names = {target: f"file-{index:02d}.backup"
                                  for index, target in enumerate(LIVE_TARGETS)}

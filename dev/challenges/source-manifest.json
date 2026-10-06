@@ -110,8 +110,8 @@
       "extension_reason": "Adds a root-only apply, default-dry-run immutable-release-bound installer for retiring obsolete CSV-backed Challenge progress routes with verified backups and rollback.",
       "normalization": null,
       "path": "dev/challenges/deploy_legacy_challenge_retirement.py",
-      "sha256": "924d6fcfdf2045f4dd7ccfda8aaa3da3f22190f39d2f1137888bbccf293bb123",
-      "size": 59741,
+      "sha256": "282a5b6b92617e04ce851b71d49909a5875bc5597287080a827f8748f6b56886",
+      "size": 67128,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -474,8 +474,8 @@
       "extension_reason": "Adds disposable fixtures for the guarded legacy Challenge retirement installer, routes, metadata, and rollback behavior.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_legacy_challenge_retirement.py",
-      "sha256": "f9611749b2c2f02997a0fbf7c2cc4c4a412cec3f4e36fb5075f23fb2e5c2876a",
-      "size": 26455,
+      "sha256": "cac11024c173ab612bc0ca6ea10fa27448b8b589c14fd87f6f661eb3fc54b234",
+      "size": 36100,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"

@@ -321,22 +321,29 @@ class IdempotencyTests(unittest.TestCase):
 
 
 class ApplicationStateMachineTests(unittest.TestCase):
-    def _run(self, *, verification_fails=False, sheet_running=False):
+    def _run(self, *, verification_fails=False, sheet_running=False,
+             timer_restore_fails=False, timer_starts_oneshot=False, all_files=False):
         temp_ctx = tempfile.TemporaryDirectory()
         self.addCleanup(temp_ctx.cleanup)
         root = Path(temp_ctx.name)
-        target = root / "challenge_config_api.py"
-        target.write_bytes(b"prior API")
         before_meta = {"uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
                        "acl_sha256": "acl", "acl_text": "user::rw-\ngroup::rw-\nother::r--\n"}
-        after_data = b"retired API"
-        before_capture = {**before_meta, "type": "regular", "sha256": digest(b"prior API"),
-                          "size": len(b"prior API")}
-        item = {"target": str(target), "before_sha256": digest(b"prior API"),
-                "after_sha256": digest(after_data), "before_data": b"prior API",
-                "after_data": after_data, "before_metadata": before_capture,
-                "changed": True, "kind": "api"}
-        plan = {"target_commit": TEST_COMMIT, "status": "upgrade_required", "_items": [item]}
+        count = len(deploy.LIVE_TARGETS) if all_files else 1
+        targets = [root / f"target-{index}.html" for index in range(count)]
+        prior_bytes = {str(path): f"prior file {index}".encode() for index, path in enumerate(targets)}
+        after_bytes = {str(path): f"retired file {index}".encode() for index, path in enumerate(targets)}
+        before_captures = {}
+        items = []
+        for index, path in enumerate(targets):
+            old, new = prior_bytes[str(path)], after_bytes[str(path)]
+            path.write_bytes(old)
+            captured = {**before_meta, "type": "regular", "sha256": digest(old), "size": len(old)}
+            before_captures[str(path)] = captured
+            items.append({"target": str(path), "before_sha256": digest(old),
+                          "after_sha256": digest(new), "before_data": old,
+                          "after_data": new, "before_metadata": captured,
+                          "changed": True, "kind": "api" if index == 0 else "links"})
+        plan = {"target_commit": TEST_COMMIT, "status": "upgrade_required", "_items": items}
         database_profile = {"integrity": "ok", "journal_mode": "wal", "locking_mode": "normal",
                             "active_config_version_id": 10}
         backup_root = root / "backups"
@@ -353,15 +360,20 @@ class ApplicationStateMachineTests(unittest.TestCase):
         }
         plan["services"] = {unit: dict(state) for unit, state in units.items()}
         calls = []
-        self.last_target = target
+        database_summary_spy = mock.Mock(return_value=database_profile)
+        self.last_database_summary_spy = database_summary_spy
+        self.last_target = targets[0]
+        self.last_targets = targets
         self.last_calls = calls
+        self.last_units = units
+        self.last_transaction = None
 
         def capture(path):
             data = Path(path).read_bytes()
             return {**before_meta, "type": "regular", "sha256": digest(data), "size": len(data)}
 
         def atomic_replace(path, data, metadata):
-            self.assertEqual(before_capture, metadata)
+            self.assertEqual(before_captures[str(path)], metadata)
             Path(path).write_bytes(data)
 
         def backup_dir(_root, commit):
@@ -377,6 +389,20 @@ class ApplicationStateMachineTests(unittest.TestCase):
             Path(path).write_bytes(data)
             Path(path).chmod(0o600)
 
+        def run(argv, **_kwargs):
+            if "--property=UnitFileState" in argv:
+                unit = argv[2]
+                return SimpleNamespace(returncode=0, stdout=units[unit]["UnitFileState"] + "\n")
+            if len(argv) >= 3 and argv[0] == "/usr/bin/systemctl" and argv[1] in {"enable", "disable"}:
+                action = argv[1]
+                unit = argv[-1]
+                runtime = "--runtime" in argv
+                calls.append((action + ("_runtime" if runtime else ""), unit))
+                units[unit]["UnitFileState"] = ("enabled-runtime" if runtime else "enabled") if action == "enable" else "disabled"
+                return SimpleNamespace(returncode=0, stdout="")
+            unit = argv[-1] if argv else ""
+            return SimpleNamespace(returncode=0, stdout=(units.get(unit, {}).get("UnitFileState", "static") + "\n"))
+
         support = SimpleNamespace(
             _deployment_lock=lambda _path: os.open(root / "lock", os.O_CREAT | os.O_RDWR, 0o600),
             _prepared_check=lambda *_args: None,
@@ -387,8 +413,7 @@ class ApplicationStateMachineTests(unittest.TestCase):
             _require_basic_acl=lambda *_args: None,
             _sha_file=lambda path: digest(Path(path).read_bytes()),
             _atomic_replace=atomic_replace,
-            _run=lambda argv, **_kwargs: SimpleNamespace(
-                returncode=0, stdout=("static\n" if deploy.SHEET_SERVICE in argv else "enabled\n")),
+            _run=run,
         )
 
         class FakeSystemd:
@@ -412,6 +437,8 @@ class ApplicationStateMachineTests(unittest.TestCase):
                     units[unit].update(ActiveState="inactive", SubState="dead")
                 elif action == "start":
                     units[unit].update(ActiveState="active", SubState="waiting")
+                    if timer_starts_oneshot:
+                        units[deploy.SHEET_SERVICE].update(ActiveState="active", SubState="running", MainPID="333")
             if unit == deploy.SERVICE:
                 if action == "stop":
                     units[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
@@ -425,20 +452,27 @@ class ApplicationStateMachineTests(unittest.TestCase):
 
         def restore_timer(prior, _systemd, _support):
             self.assertEqual("active", prior["ActiveState"])
-            units[deploy.SHEET_TIMER].update(ActiveState="active", SubState="waiting")
+            if timer_restore_fails:
+                raise deploy.RetirementError("fixture_timer_restore_failure")
+            units[deploy.SHEET_TIMER].update(UnitFileState="enabled", ActiveState="active", SubState="waiting")
+            if timer_starts_oneshot:
+                units[deploy.SHEET_SERVICE].update(ActiveState="active", SubState="running", MainPID="333")
             calls.append(("restore", deploy.SHEET_TIMER))
 
         systemd = FakeSystemd()
+        restore_timer_spy = mock.Mock(side_effect=restore_timer)
+        self.last_restore_timer_spy = restore_timer_spy
         patches = [
-            mock.patch.object(deploy, "LIVE_TARGETS", {str(target): {"kind": "api"}}),
+            mock.patch.object(deploy, "LIVE_TARGETS", {str(path): {"kind": "api" if index == 0 else "links"}
+                                                        for index, path in enumerate(targets)}),
             mock.patch.object(deploy, "make_plan", return_value=plan),
-            mock.patch.object(deploy, "_database_summary", return_value=database_profile),
+            mock.patch.object(deploy, "_database_summary", new=database_summary_spy),
             mock.patch.object(deploy, "_capture_unit_state", side_effect=lambda _sd, _s, unit, **_kw: dict(units[unit])),
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl),
             mock.patch.object(deploy, "_restore_api", side_effect=restore_api),
-            mock.patch.object(deploy, "_restore_timer", side_effect=restore_timer),
+            mock.patch.object(deploy, "_restore_timer", new=restore_timer_spy),
             mock.patch.object(deploy, "_write_private", side_effect=write_private),
-            mock.patch.object(deploy, "_write_record", side_effect=lambda path, value: write_private(path, json.dumps(value).encode())),
+            mock.patch.object(deploy, "_write_record", side_effect=self._record_writer(write_private)),
             mock.patch.object(deploy, "_verify_backup", return_value=None),
             mock.patch.object(deploy.os, "geteuid", return_value=0),
         ]
@@ -459,31 +493,156 @@ class ApplicationStateMachineTests(unittest.TestCase):
             with mock.patch.object(Path, "lstat", autospec=True, side_effect=fixture_lstat):
                 return deploy.apply_plan(commit=TEST_COMMIT, plan=plan, support=support,
                                          systemd=systemd, database=root / "Challenges.db",
-                                         backup_root=backup_root, verify_live=verifier), target, calls
+                                         backup_root=backup_root, verify_live=verifier), targets[0], calls
 
-    def test_apply_restarts_only_api_and_restores_sheet_timer_state(self):
+    def _record_writer(self, write_private):
+        def write(path, value):
+            self.last_transaction = dict(value)
+            write_private(path, json.dumps(value).encode())
+        return write
+
+    def test_successful_apply_retires_timer_and_never_restores_it(self):
         result, target, calls = self._run()
         self.assertEqual("applied", result["status"])
-        self.assertEqual(b"retired API", target.read_bytes())
+        self.assertEqual(b"retired file 0", target.read_bytes())
         self.assertIn(("stop", deploy.SHEET_TIMER), calls)
-        self.assertIn(("restore", deploy.SHEET_TIMER), calls)
-        self.assertTrue(all(unit in {deploy.SERVICE, deploy.SHEET_TIMER} for _action, unit in calls))
+        self.assertIn(("disable", deploy.SHEET_TIMER), calls)
+        self.last_restore_timer_spy.assert_not_called()
+        self.assertNotIn("timer_restored", result)
+        self.assertTrue(result["sheet_timer_retired"])
+        self.assertEqual(("inactive", "dead", "disabled"),
+                         (self.last_units[deploy.SHEET_TIMER]["ActiveState"],
+                          self.last_units[deploy.SHEET_TIMER]["SubState"],
+                          self.last_units[deploy.SHEET_TIMER]["UnitFileState"]))
+        self.assertEqual(("inactive", "dead"),
+                         (self.last_units[deploy.SHEET_SERVICE]["ActiveState"],
+                          self.last_units[deploy.SHEET_SERVICE]["SubState"]))
+        self.assertEqual("disabled_inactive", self.last_transaction["restoration_result"]["sheet_timer"])
+        self.assertEqual(("active", "running"),
+                         (self.last_units[deploy.SERVICE]["ActiveState"],
+                          self.last_units[deploy.SERVICE]["SubState"]))
+        self.assertGreater(int(self.last_units[deploy.SERVICE]["MainPID"]), 0)
+        self.assertGreaterEqual(self.last_database_summary_spy.call_count, 3)
+        self.assertFalse(self.last_transaction["database_mutated"])
+        self.assertFalse(self.last_transaction["schema_migrated"])
 
     def test_failed_live_route_verification_rolls_files_and_services_back(self):
         with self.assertRaises(deploy.RetirementError):
             self._run(verification_fails=True)
-        self.assertEqual(b"prior API", self.last_target.read_bytes())
+        self.assertEqual(b"prior file 0", self.last_target.read_bytes())
         self.assertIn(("restore", deploy.SERVICE), self.last_calls)
         self.assertIn(("restore", deploy.SHEET_TIMER), self.last_calls)
+        self.assertEqual("rolled_back", self.last_transaction["state"])
+        self.assertEqual("live_verification", self.last_transaction["failure_phase"])
+        self.assertEqual("fixture_route_failure", self.last_transaction["failure_category"])
+        self.assertEqual("none", self.last_transaction["rollback_category"])
+        self.assertEqual({"outcome": "complete", "files": "restored", "api": "restored",
+                          "sheet_timer": "restored", "sheet_service": "restored"},
+                         self.last_transaction["restoration_result"])
+        self.assertEqual(("active", "waiting", "enabled"),
+                         (self.last_units[deploy.SHEET_TIMER]["ActiveState"],
+                          self.last_units[deploy.SHEET_TIMER]["SubState"],
+                          self.last_units[deploy.SHEET_TIMER]["UnitFileState"]))
+
+    def test_rollback_tolerates_timer_triggered_one_shot_and_drains_boundedly(self):
+        with self.assertRaises(deploy.RetirementError) as caught:
+            self._run(verification_fails=True, timer_starts_oneshot=True)
+        self.assertEqual("rollback_complete", caught.exception.category)
+        self.assertEqual(("active", "waiting", "enabled"),
+                         (self.last_units[deploy.SHEET_TIMER]["ActiveState"],
+                          self.last_units[deploy.SHEET_TIMER]["SubState"],
+                          self.last_units[deploy.SHEET_TIMER]["UnitFileState"]))
+        self.assertEqual(("inactive", "dead", "0"),
+                         (self.last_units[deploy.SHEET_SERVICE]["ActiveState"],
+                          self.last_units[deploy.SHEET_SERVICE]["SubState"],
+                          self.last_units[deploy.SHEET_SERVICE]["MainPID"]))
+        self.assertEqual("rolled_back", self.last_transaction["state"])
+
+    def test_actual_timer_restore_accepts_immediate_one_shot_race(self):
+        units = {
+            deploy.SHEET_TIMER: {"Id": deploy.SHEET_TIMER, "LoadState": "loaded", "ActiveState": "inactive",
+                                 "SubState": "dead", "MainPID": "0", "UnitFileState": "disabled"},
+            deploy.SHEET_SERVICE: {"Id": deploy.SHEET_SERVICE, "LoadState": "loaded", "ActiveState": "inactive",
+                                   "SubState": "dead", "MainPID": "0", "UnitFileState": "static"},
+        }
+        calls = []
+
+        class RaceSystemd:
+            def show(self, unit):
+                return dict(units[unit])
+
+            def wait_active(self, *_args, **_kwargs):
+                return None
+
+            def wait_inactive(self, *_args, **_kwargs):
+                return None
+
+            def wait_job_idle(self, unit, **_kwargs):
+                self.asserted_unit = unit
+                units[unit].update(ActiveState="inactive", SubState="dead", MainPID="0")
+
+        def run(argv, **_kwargs):
+            if "--property=UnitFileState" in argv:
+                return SimpleNamespace(returncode=0, stdout=units[argv[2]]["UnitFileState"] + "\n")
+            action = argv[1]
+            unit = argv[-1]
+            calls.append((action, unit))
+            if action == "enable":
+                units[unit]["UnitFileState"] = "enabled"
+            return SimpleNamespace(returncode=0, stdout="")
+
+        def systemctl(_support, action, unit):
+            calls.append((action, unit))
+            if unit == deploy.SHEET_TIMER and action == "start":
+                units[unit].update(ActiveState="active", SubState="waiting")
+                # systemd may launch the associated one-shot immediately.
+                units[deploy.SHEET_SERVICE].update(ActiveState="active", SubState="exited", MainPID="0")
+
+        support = SimpleNamespace(_run=run)
+        systemd = RaceSystemd()
+        prior_timer = {"ActiveState": "active", "SubState": "waiting", "UnitFileState": "enabled"}
+        prior_service = {"UnitFileState": "static"}
+        with mock.patch.object(deploy, "_systemctl", side_effect=systemctl):
+            deploy._restore_timer(prior_timer, systemd, support)
+            deploy._verify_sheet_service_drained(prior_service, systemd, support, timeout=1)
+        self.assertEqual(("active", "waiting", "enabled"),
+                         (units[deploy.SHEET_TIMER]["ActiveState"], units[deploy.SHEET_TIMER]["SubState"],
+                          units[deploy.SHEET_TIMER]["UnitFileState"]))
+        self.assertEqual(("inactive", "dead", "0"),
+                         (units[deploy.SHEET_SERVICE]["ActiveState"], units[deploy.SHEET_SERVICE]["SubState"],
+                          units[deploy.SHEET_SERVICE]["MainPID"]))
+        self.assertIn(("start", deploy.SHEET_TIMER), calls)
+
+    def test_rollback_failure_still_records_original_and_rollback_categories(self):
+        with self.assertRaises(deploy.RetirementError) as caught:
+            self._run(verification_fails=True, timer_restore_fails=True)
+        self.assertEqual("rollback_failed", caught.exception.category)
+        self.assertEqual(b"prior file 0", self.last_target.read_bytes())
+        self.assertEqual("rollback_failed", self.last_transaction["state"])
+        self.assertEqual("live_verification", self.last_transaction["failure_phase"])
+        self.assertEqual("fixture_route_failure", self.last_transaction["failure_category"])
+        self.assertEqual("fixture_timer_restore_failure", self.last_transaction["rollback_category"])
+        self.assertEqual({"outcome": "failed", "files": "restored", "api": "restored",
+                          "sheet_timer": "failed", "sheet_service": "not_attempted"},
+                         self.last_transaction["restoration_result"])
+
+    def test_all_seven_files_restore_on_rollback(self):
+        with self.assertRaises(deploy.RetirementError):
+            self._run(verification_fails=True, all_files=True)
+        self.assertEqual(7, len(self.last_targets))
+        for index, path in enumerate(self.last_targets):
+            self.assertEqual(f"prior file {index}".encode(), path.read_bytes())
+        self.assertEqual(7, len(self.last_transaction["files"]))
 
     def test_running_oneshot_is_drained_but_not_replayed_or_installed(self):
         with self.assertRaises(deploy.RetirementError) as caught:
             self._run(sheet_running=True)
-        self.assertEqual(b"prior API", self.last_target.read_bytes())
+        self.assertEqual(b"prior file 0", self.last_target.read_bytes())
         self.assertEqual("rollback_complete", caught.exception.category)
         self.assertEqual("maintenance_stop", caught.exception.phase)
         self.assertNotIn(("start", deploy.SHEET_SERVICE), self.last_calls)
         self.assertIn(("restore", deploy.SHEET_TIMER), self.last_calls)
+        self.assertEqual("rolled_back", self.last_transaction["state"])
 
 
 
