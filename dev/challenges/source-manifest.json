@@ -99,8 +99,8 @@
       "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
       "normalization": null,
       "path": "dev/challenges/deploy_automatic_observations.py",
-      "sha256": "d2399c61251ce56ee8756ca03a0b6f7576daf7190f03238a513357279253f562",
-      "size": 63064,
+      "sha256": "11bdff662a03e1d894ad49a665d17cf0ee1b481b2c46a78f919f67366cfc1bab",
+      "size": 64032,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -472,8 +472,8 @@
       "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
-      "sha256": "3d1a0a24dc652b321a3d808985cd139cf9879f9a20da71a26512de583ec1c9ea",
-      "size": 34732,
+      "sha256": "d2d569d04075518418991cba6cd1e754abd623df55e5bcf9e575845d246435a8",
+      "size": 36705,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"

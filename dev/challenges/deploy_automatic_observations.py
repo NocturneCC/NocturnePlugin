@@ -244,23 +244,38 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
             states.append("after" if matches_after else "before")
             observed.append({"source": item["source_relative"], "target": str(target),
                              "before_sha256": previous["sha256"] if matches_previous else None,
-                             "after_sha256": item["after_sha256"]})
+                             "after_sha256": item["after_sha256"],
+                             "current_sha256": actual["sha256"]})
             continue
         checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
         if actual is None or any(actual.get(k) != baseline.get(k) for k in checked):
             raise DeploymentError("unsupported live file metadata drift")
-        if actual["sha256"] == item["after_sha256"] and actual["size"] == item["after_size"]:
+        same_as_before = (actual["sha256"] == baseline.get("sha256") and
+                          actual["size"] == baseline.get("size"))
+        same_as_after = (actual["sha256"] == item["after_sha256"] and
+                         actual["size"] == item["after_size"])
+        if same_as_before and same_as_after:
+            state = "stable"
+        elif same_as_after:
             state = "after"
-        elif actual["sha256"] == baseline.get("sha256") and actual["size"] == baseline.get("size"):
-            state = "before"
+        elif same_as_before:
+            state = ("previous" if item.get("source_relative") ==
+                     "dev/challenges/service/challenge_automatic_intake.py" else "before")
         else:
             raise DeploymentError("unsupported live file content drift")
         states.append(state)
         observed.append({"source": item["source_relative"], "target": str(target),
-                         "before_sha256": baseline["sha256"], "after_sha256": item["after_sha256"]})
-    if states and all(value == "before" for value in states):
+                         "before_sha256": baseline["sha256"],
+                         "after_sha256": item["after_sha256"],
+                         "current_sha256": actual["sha256"]})
+    directional = set(states) - {"stable"}
+    if states and directional == {"before"}:
         return "predecessor", observed
-    if states and all(value == "after" for value in states):
+    if states and directional == {"previous"}:
+        return "upgrade_predecessor", observed
+    if states and directional == {"after"}:
+        return "installed", observed
+    if states and not directional:
         return "installed", observed
     raise DeploymentError("mixed target file set requires operator recovery")
 
@@ -381,8 +396,12 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
                                         strict_metadata=root_authoritative)
     systemd = systemd or support.Systemd()
     units, nginx = _unit_plan(systemd, support)
-    nginx_change = file_state == "predecessor"
+    nginx_change = any(item["target"] == str(NGINX_INCLUDE) and
+                       item.get("current_sha256") != item.get("after_sha256")
+                       for item in source_files)
     inconsistent = ((file_state == "predecessor" and database_state["schema_state"] != "absent") or
+                    (file_state in {"installed", "upgrade_predecessor"} and
+                     database_state["schema_state"] not in {"present", "absent"}) or
                     (file_state == "installed" and database_state["schema_state"] != "present") or
                     database_state["schema_state"] == "unsupported")
     complete_plan = root_authoritative and database_state["metadata_verified"]

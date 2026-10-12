@@ -144,15 +144,27 @@ class TargetClassificationTests(unittest.TestCase):
                    "gid": 33, "mode": "0664", "nlink": 1, "acl_sha256": "acl-api",
                    "type": "regular"}
         item = {**self.items[0], "baseline": profile, "allow_absent": True,
-                "predecessor_kind": "absent_or_previous"}
-        others = self.items[1:]
-        self.write_before()
+                "predecessor_kind": "absent_or_previous",
+                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        others = []
+        self.write_after()
+        for other in self.items[1:]:
+            current_bytes = other["source"].read_bytes()
+            current_hash = hashlib.sha256(current_bytes).hexdigest()
+            stable = {**other, "baseline": {**other["baseline"],
+                                              "sha256": current_hash,
+                                              "size": len(current_bytes)},
+                      "after_sha256": current_hash,
+                      "after_size": len(current_bytes)}
+            others.append(stable)
+
+        path.unlink()
         state, _ = deploy._classify_files([item, *others], self.support)
         self.assertEqual("predecessor", state)
 
         path.write_bytes(previous)
         state, _ = deploy._classify_files([item, *others], self.support)
-        self.assertEqual("predecessor", state)
+        self.assertEqual("upgrade_predecessor", state)
 
         path.write_bytes(self.hashes[path][1])
         self.write_after()
@@ -162,6 +174,29 @@ class TargetClassificationTests(unittest.TestCase):
         path.write_bytes(b"one-byte-drift")
         with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
             deploy._classify_files([item, *others], self.support)
+
+    def test_exact_previous_module_plus_stable_targets_is_supported_upgrade_state(self):
+        self.write_after()
+        previous = b"previous automatic intake"
+        path = self.paths[0]
+        path.write_bytes(previous)
+        previous_hash = hashlib.sha256(previous).hexdigest()
+        baseline = {"sha256": previous_hash, "size": len(previous), "uid": 1001,
+                    "gid": 33, "mode": "0664", "nlink": 1, "acl_sha256": "acl-api",
+                    "type": "regular"}
+        automatic = {**self.items[0], "baseline": baseline, "allow_absent": True,
+                     "predecessor_kind": "absent_or_previous",
+                     "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        stable = []
+        for item in self.items[1:]:
+            current = item["source"].read_bytes()
+            digest = hashlib.sha256(current).hexdigest()
+            stable.append({**item, "baseline": {**item["baseline"], "sha256": digest,
+                                                   "size": len(current)},
+                           "after_sha256": digest, "after_size": len(current)})
+        state, observed = deploy._classify_files([automatic, *stable], self.support)
+        self.assertEqual("upgrade_predecessor", state)
+        self.assertEqual(previous_hash, observed[0]["current_sha256"])
 
     def test_unchanged_targets_are_idempotently_classified_as_installed(self):
         self.write_after()
