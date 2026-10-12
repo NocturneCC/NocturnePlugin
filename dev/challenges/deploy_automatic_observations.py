@@ -316,6 +316,22 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
         return "installed", observed
     if states and not directional:
         return "installed", observed
+    # A host may already have the exact preceding automatic-intake module
+    # while the other independently pinned targets remain at their manifest
+    # predecessor. This is a safe upgrade starting point, not a partial
+    # installation: every target was individually authenticated above. Keep
+    # the exception narrow to exactly one automatic target in "previous" and
+    # companion targets only in their manifest "before" or byte-stable state.
+    automatic_indexes = [index for index, item in enumerate(items)
+                         if item.get("source_relative") ==
+                         "dev/challenges/service/challenge_automatic_intake.py"]
+    if (directional == {"before", "previous"} and
+            len(automatic_indexes) == 1 and
+            states[automatic_indexes[0]] == "previous" and
+            all(state in {"before", "stable"}
+                for index, state in enumerate(states)
+                if index != automatic_indexes[0])):
+        return "upgrade_predecessor", observed
     raise DeploymentError("mixed target file set requires operator recovery")
 
 

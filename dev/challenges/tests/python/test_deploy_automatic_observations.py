@@ -233,6 +233,57 @@ class TargetClassificationTests(unittest.TestCase):
         self.assertEqual("upgrade_predecessor", state)
         self.assertEqual(installed_prior["sha256"], observed[0]["current_sha256"])
 
+    def test_exact_e9_live_mixed_predecessor_file_set_is_supported(self):
+        """Reproduce the exact failed e9 set with root-captured safe profiles."""
+        paths = self.paths
+        api_acl = "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89"
+        leaderboard_acl = "46cfad4815f1a30e253add93c7dca649b84384c52e6a57319eaefc26a540a3d0"
+        previous = {
+            "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
+            "size": 28178, "uid": 1001, "gid": 33, "mode": "0664",
+            "nlink": 1, "acl_sha256": api_acl, "type": "regular",
+        }
+        auto = {**self.items[0], "baseline": previous,
+                "supported_predecessors": [
+                    {**previous,
+                     "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+                     "size": 27618}, previous],
+                "allow_absent": True,
+                "after_sha256": "fe1d1b567eba44996bd2f6e75c9479961430052d3a8270271b5a408626577580",
+                "after_size": 29232,
+                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        api_before = {"sha256": "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
+                      "size": 24095, "uid": 1001, "gid": 33, "mode": "0664",
+                      "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
+        api_after = {"sha256": "9b6ecdbc48dd4fe4c03714d341b6123a32d6f6facbeb5d1e6db71c117da1a6ff",
+                     "size": 25201, "uid": 1001, "gid": 33, "mode": "0664",
+                     "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
+        leaderboard = {"sha256": "a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c",
+                       "size": 24209, "uid": 1001, "gid": 33, "mode": "0755",
+                       "nlink": 1, "acl_sha256": leaderboard_acl, "type": "regular"}
+        nginx = {"sha256": "fac7b3d526ab5bd56a150612c170493f7aa9a77e774002dd64ae835df82270d8",
+                 "size": 1439, "uid": 1001, "gid": 33, "mode": "0664",
+                 "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
+        live = dict(zip(paths, (previous, api_before, leaderboard, nginx)))
+        self.support.capture_file = lambda path: {**live[path], "acl_text": "fixture\n"}
+        api = {**self.items[1], "baseline": api_before,
+               "after_sha256": api_after["sha256"], "after_size": api_after["size"]}
+        stable = []
+        for item, profile in zip(self.items[2:], (leaderboard, nginx)):
+            stable.append({**item, "baseline": profile,
+                           "after_sha256": profile["sha256"], "after_size": profile["size"]})
+
+        state, observed = deploy._classify_files([auto, api, *stable], self.support)
+        self.assertEqual("upgrade_predecessor", state)
+        self.assertEqual(previous["sha256"], observed[0]["current_sha256"])
+        self.assertEqual(api_before["sha256"], observed[1]["current_sha256"])
+
+        # A companion already at the new API source is not this pinned
+        # predecessor shape and must still be rejected as a mixed install.
+        live[paths[1]] = api_after
+        with self.assertRaisesRegex(deploy.DeploymentError, "mixed target file set"):
+            deploy._classify_files([auto, api, *stable], self.support)
+
     def test_installed_prior_release_file_set_can_be_captured_for_backup(self):
         """Exercise a later exact-pinned predecessor through backup capture."""
         self.write_after()
