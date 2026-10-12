@@ -16,8 +16,8 @@
       "extension_reason": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
       "normalization": null,
       "path": "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md",
-      "sha256": "9983b6c3c0399316e543c6d1ea62cc3e4bfdffe95135ee192b2e023762e505b1",
-      "size": 7322,
+      "sha256": "eec0973322820f0c502c82248ac63cdea5fe1dd7cf507b1bf36a2286a05c2789",
+      "size": 7491,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -99,8 +99,8 @@
       "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
       "normalization": null,
       "path": "dev/challenges/deploy_automatic_observations.py",
-      "sha256": "11bdff662a03e1d894ad49a665d17cf0ee1b481b2c46a78f919f67366cfc1bab",
-      "size": 64032,
+      "sha256": "c3f735574950b47c86e5da6a917df47c625a168bd641885666c34e2224dafd63",
+      "size": 68094,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -472,8 +472,8 @@
       "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
-      "sha256": "d2d569d04075518418991cba6cd1e754abd623df55e5bcf9e575845d246435a8",
-      "size": 36705,
+      "sha256": "653a8afe33c809ca1239144dee2479e84ddff02e6ce440b7471f58033c4a530d",
+      "size": 42666,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -549,8 +549,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/verify_automatic_observation_scope.py",
-      "sha256": "039d0da70fd3b166f03392f6a27f104e22ee92eaa1f3c87312a41a22c491a3b5",
-      "size": 11926,
+      "sha256": "a42dea0a2eba27ab8e7cd395bab478f34e4d09f31c658908b6ff1a0f73925d90",
+      "size": 12104,
       "source": null,
       "type": "regular"
     },

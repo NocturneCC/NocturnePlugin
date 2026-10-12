@@ -37,8 +37,14 @@ MANIFEST_REL = "dev/challenges/source-manifest.json"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OBSERVATION_BODY = 8192
 SCHEMA_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
-PREVIOUS_AUTOMATIC_INTAKE_SHA256 = "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03"
-PREVIOUS_AUTOMATIC_INTAKE_SIZE = 27618
+LEGACY_AUTOMATIC_INTAKE_PREDECESSORS = (
+    ("9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03", 27618),
+)
+# Exact source installed by the immediately preceding published automatic-
+# observation release. Keep the older original predecessor explicitly
+# supported for hosts that have not yet installed that release.
+PREVIOUS_AUTOMATIC_INTAKE_SHA256 = "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3"
+PREVIOUS_AUTOMATIC_INTAKE_SIZE = 28178
 
 # This is the complete install set for the feature.  The first file is a
 # repository-owned source may be absent on the original predecessor or match
@@ -170,13 +176,15 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
         raise DeploymentError("API metadata profile is unavailable for automatic intake")
     automatic = next(item for item in result
                      if item["target"] == SERVICE_ROOT / "challenge_automatic_intake.py")
-    automatic["supported_previous"] = {
-        **{key: api_baseline[key] for key in ("uid", "gid", "mode", "nlink", "acl_sha256")},
-        "sha256": PREVIOUS_AUTOMATIC_INTAKE_SHA256,
-        "size": PREVIOUS_AUTOMATIC_INTAKE_SIZE,
-        "type": "regular",
-    }
-    automatic["baseline"] = dict(automatic["supported_previous"])
+    metadata_profile = {key: api_baseline[key]
+                        for key in ("uid", "gid", "mode", "nlink", "acl_sha256")}
+    automatic["supported_predecessors"] = [
+        {**metadata_profile, "sha256": digest, "size": size, "type": "regular"}
+        for digest, size in (*LEGACY_AUTOMATIC_INTAKE_PREDECESSORS,
+                             (PREVIOUS_AUTOMATIC_INTAKE_SHA256,
+                              PREVIOUS_AUTOMATIC_INTAKE_SIZE))
+    ]
+    automatic["baseline"] = dict(automatic["supported_predecessors"][-1])
     automatic["allow_absent"] = True
     return result
 
@@ -207,6 +215,17 @@ def _expected_live_matches(actual: dict[str, Any], record: dict[str, Any]) -> bo
                for key in ("sha256", "uid", "gid", "mode", "nlink", "size", "acl_sha256"))
 
 
+def _supported_automatic_predecessor(actual: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the exact pinned installed predecessor matching this target."""
+    records = item.get("supported_predecessors")
+    if not isinstance(records, list):
+        # Compatibility for direct fixture callers using the former single
+        # predecessor representation; production plans always use the list.
+        records = [item.get("supported_previous") or item.get("baseline")]
+    return next((record for record in records
+                 if isinstance(record, dict) and _expected_live_matches(actual, record)), None)
+
+
 def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool = True) -> tuple[str, list[dict[str, Any]]]:
     states: list[str] = []
     observed: list[dict[str, Any]] = []
@@ -219,6 +238,25 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
             states.append("before")
             observed.append({"source": item["source_relative"], "target": str(target),
                              "before_sha256": None, "after_sha256": item["after_sha256"]})
+            continue
+        is_automatic_target = item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py"
+        if is_automatic_target:
+            current_predecessor = _supported_automatic_predecessor(actual, item) if actual else None
+            after_match = bool(actual and actual["sha256"] == item["after_sha256"] and
+                               actual["size"] == item["after_size"])
+            checked = (("mode", "nlink", "acl_sha256") if not strict_owner else
+                       ("uid", "gid", "mode", "nlink", "acl_sha256"))
+            profile = next((x["baseline"] for x in items
+                            if x["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
+            if (actual is None or not (current_predecessor or after_match) or
+                    any(actual.get(key) != profile.get(key) for key in checked)):
+                raise DeploymentError("unsupported live file content or metadata drift")
+            state = "after" if after_match else "previous"
+            states.append(state)
+            observed.append({"source": item["source_relative"], "target": str(target),
+                             "before_sha256": None if after_match else actual["sha256"],
+                             "after_sha256": item["after_sha256"],
+                             "current_sha256": actual["sha256"]})
             continue
         if baseline is None:
             if actual is None:
@@ -250,8 +288,9 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
         checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
         if actual is None or any(actual.get(k) != baseline.get(k) for k in checked):
             raise DeploymentError("unsupported live file metadata drift")
-        same_as_before = (actual["sha256"] == baseline.get("sha256") and
-                          actual["size"] == baseline.get("size"))
+        automatic_predecessor = (isinstance(item.get("supported_predecessors"), list) and
+                                 _supported_automatic_predecessor(actual, item) is not None)
+        same_as_before = (_expected_live_matches(actual, baseline) or automatic_predecessor)
         same_as_after = (actual["sha256"] == item["after_sha256"] and
                          actual["size"] == item["after_size"])
         if same_as_before and same_as_after:
@@ -376,29 +415,47 @@ def _unit_plan(systemd, support) -> tuple[dict[str, dict[str, str]], dict[str, d
     return snapshot, nginx
 
 
+def _preflight_step(category: str, function, *args, **kwargs):
+    """Attach a fixed, bounded category while retaining the exception cause."""
+    try:
+        return function(*args, **kwargs)
+    except Exception as exc:
+        raise DeploymentError(f"preflight failed diagnostic_category={category}") from exc
+
+
 def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
               database: Path = DATABASE, release: Path | None = None, support=None,
               systemd=None) -> dict[str, Any]:
     if not FULL_SHA.fullmatch(commit):
-        raise DeploymentError("commit must be a lowercase full Git SHA")
+        raise DeploymentError("preflight failed diagnostic_category=commit_preflight_failed")
     if repo != REPO or runtime_root != RUNTIME or database != DATABASE:
-        raise DeploymentError("deployment paths are fixed")
+        raise DeploymentError("preflight failed diagnostic_category=deployment_path_preflight_failed")
     release = release or runtime_root / "releases" / commit
     support = support or _load_support(release, runtime_root)
-    support.verify_git(repo, commit)
+    _preflight_step("checkout_preflight_failed", support.verify_git, repo, commit)
     root_authoritative = os.geteuid() == 0
-    release_manifest, source_manifest = _read_manifest(release, commit, support,
-                                                         require_prepared=root_authoritative)
-    items = _manifest_target_items(release, commit, release_manifest, source_manifest, support)
-    file_state, source_files = _classify_files(items, support, strict_owner=root_authoritative)
-    config_module, automatic_module = _load_release_modules(release)
-    database_state = _database_snapshot(database, config_module, automatic_module, support,
-                                        strict_metadata=root_authoritative)
+    release_manifest, source_manifest = _preflight_step(
+        "immutable_release_preflight_failed", _read_manifest, release, commit, support,
+        require_prepared=root_authoritative)
+    items = _preflight_step("target_contract_preflight_failed", _manifest_target_items,
+                            release, commit, release_manifest, source_manifest, support)
+    file_state, source_files = _preflight_step(
+        "file_set_classification_failed", _classify_files, items, support,
+        strict_owner=root_authoritative)
+    config_module, automatic_module = _preflight_step(
+        "runtime_import_preflight_failed", _load_release_modules, release)
+    database_state = _preflight_step(
+        "database_preflight_failed", _database_snapshot, database, config_module,
+        automatic_module, support, strict_metadata=root_authoritative)
     systemd = systemd or support.Systemd()
-    units, nginx = _unit_plan(systemd, support)
+    units, nginx = _preflight_step("service_state_preflight_failed", _unit_plan,
+                                   systemd, support)
     nginx_change = any(item["target"] == str(NGINX_INCLUDE) and
                        item.get("current_sha256") != item.get("after_sha256")
                        for item in source_files)
+    release_manifest_sha256 = _preflight_step(
+        "immutable_release_preflight_failed", support._sha_file,
+        release / "RELEASE-MANIFEST.json")
     inconsistent = ((file_state == "predecessor" and database_state["schema_state"] != "absent") or
                     (file_state in {"installed", "upgrade_predecessor"} and
                      database_state["schema_state"] not in {"present", "absent"}) or
@@ -410,7 +467,7 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
                    "read_only_plan_only" if not complete_plan else
                    "already_installed" if file_state == "installed" else "dry_run"),
         "target_commit": commit,
-        "release_manifest_sha256": support._sha_file(release / "RELEASE-MANIFEST.json"),
+        "release_manifest_sha256": release_manifest_sha256,
         "current_file_set": "unsupported" if inconsistent else file_state,
         "canonical_prepared_check": "status=prepared" if root_authoritative else "deferred_root_required",
         "live_metadata_authoritative": complete_plan,
@@ -494,7 +551,11 @@ def _create_file_backups(tx: Transaction, support) -> None:
             record = {**item, "before_sha256": None, "before_metadata": None,
                       "backup_path": None, "backup_sha256": None, "was_absent": True}
         else:
-            if before is None or not _expected_live_matches(before, baseline):
+            is_automatic_target = item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py"
+            predecessor_match = bool(before and is_automatic_target and
+                                     _supported_automatic_predecessor(before, item))
+            baseline_match = bool(before and _expected_live_matches(before, baseline))
+            if before is None or not (baseline_match or predecessor_match):
                 raise DeploymentError("target changed immediately before backup")
             data = support._read_regular(item["target"], max(int(before["size"]) + 1, 1))
             if _sha_bytes(data) != before["sha256"]:
@@ -1092,10 +1153,10 @@ def _cli(argv: list[str] | None = None) -> int:
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 0
         if args.commit is None or not FULL_SHA.fullmatch(args.commit):
-            raise DeploymentError("a full target commit SHA is required")
+            raise DeploymentError("preflight failed diagnostic_category=commit_preflight_failed")
         release = RUNTIME / "releases" / args.commit
-        support = _load_support(release)
-        systemd = support.Systemd()
+        support = _preflight_step("runtime_support_preflight_failed", _load_support, release)
+        systemd = _preflight_step("service_manager_preflight_failed", support.Systemd)
         lock_fd = None
         if args.apply:
             if os.geteuid() != 0:

@@ -217,8 +217,10 @@ def verify_scope(repo: Path = ROOT) -> dict[str, object]:
            if isinstance(item, dict)):
         raise ScopeError("new automatic-observation target acquired an unreviewed live baseline")
     if (getattr(deployer, "PREVIOUS_AUTOMATIC_INTAKE_SHA256", None) !=
-            "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03" or
-            getattr(deployer, "PREVIOUS_AUTOMATIC_INTAKE_SIZE", None) != 27618):
+            "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3" or
+            getattr(deployer, "PREVIOUS_AUTOMATIC_INTAKE_SIZE", None) != 28178 or
+            getattr(deployer, "LEGACY_AUTOMATIC_INTAKE_PREDECESSORS", None) != (
+                ("9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03", 27618),)):
         raise ScopeError("automatic-observation installed/predecessor contract changed")
     _verify_import_closure(repo)
     return {

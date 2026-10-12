@@ -11,7 +11,7 @@ commit separately before applying it.
 
 | Immutable source | Live target | Supported predecessor |
 | --- | --- | --- |
-| `dev/challenges/service/challenge_automatic_intake.py` | `/srv/projects/nocturne-services/challenge_automatic_intake.py` | Absent or exact previous module SHA-256 `9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03` (27,618 bytes), with the API's captured ownership/mode/ACL profile |
+| `dev/challenges/service/challenge_automatic_intake.py` | `/srv/projects/nocturne-services/challenge_automatic_intake.py` | Absent, exact original predecessor SHA-256 `9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03` (27,618 bytes), or exact installed `3e0e0f611c774503709768078a2142feeb883ee9` version SHA-256 `52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3` (28,178 bytes), each with the API's captured ownership/mode/ACL profile |
 | `dev/challenges/service/challenge_intake_api.py` | `/srv/projects/nocturne-services/challenge_intake_api.py` | Exact source-manifest baseline only |
 | `dev/challenges/service/leaderboard_challenge_ingest.py` | `/srv/projects/nocturne-services/leaderboard_challenge_ingest.py` | Exact source-manifest baseline only |
 | `dev/challenges/integration/routes/nocturne-challenge-intake.location.conf` | `/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf` | Exact source-manifest baseline only |

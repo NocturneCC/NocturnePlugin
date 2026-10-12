@@ -172,7 +172,7 @@ class TargetClassificationTests(unittest.TestCase):
         self.assertEqual("installed", state)
 
         path.write_bytes(b"one-byte-drift")
-        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
+        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
             deploy._classify_files([item, *others], self.support)
 
     def test_exact_previous_module_plus_stable_targets_is_supported_upgrade_state(self):
@@ -197,6 +197,109 @@ class TargetClassificationTests(unittest.TestCase):
         state, observed = deploy._classify_files([automatic, *stable], self.support)
         self.assertEqual("upgrade_predecessor", state)
         self.assertEqual(previous_hash, observed[0]["current_sha256"])
+
+    def test_installed_prior_release_file_set_is_supported_upgrade_state(self):
+        """Reproduce the live 3e0e release target and unchanged companion files."""
+        self.write_after()
+        auto_path = self.paths[0]
+        api_profile = self.items[1]["baseline"]
+        installed_prior = {
+            "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
+            "size": 28178, "uid": api_profile["uid"], "gid": api_profile["gid"],
+            "mode": api_profile["mode"], "nlink": 1,
+            "acl_sha256": api_profile["acl_sha256"], "type": "regular",
+        }
+        older_prior = {
+            **installed_prior,
+            "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+            "size": 27618,
+        }
+        auto = {**self.items[0], "baseline": installed_prior,
+                "supported_predecessors": [older_prior, installed_prior],
+                "allow_absent": True,
+                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        actual = {**installed_prior, "acl_text": "fixture ACL\n"}
+        self.support.capture_file = lambda path: actual if path == auto_path else self.capture(path)
+        stable = []
+        for item in self.items[1:]:
+            data = item["source"].read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            stable.append({**item, "baseline": {**item["baseline"],
+                                                   "sha256": digest, "size": len(data)},
+                           "after_sha256": digest, "after_size": len(data)})
+
+        state, observed = deploy._classify_files([auto, *stable], self.support)
+
+        self.assertEqual("upgrade_predecessor", state)
+        self.assertEqual(installed_prior["sha256"], observed[0]["current_sha256"])
+
+    def test_installed_prior_release_file_set_can_be_captured_for_backup(self):
+        """Exercise a later exact-pinned predecessor through backup capture."""
+        self.write_after()
+        old_bytes = b"fixture bytes for an exact later automatic-intake predecessor"
+        self.paths[0].write_bytes(old_bytes)
+        api_profile = self.items[1]["baseline"]
+        prior = {
+            "sha256": hashlib.sha256(old_bytes).hexdigest(), "size": len(old_bytes),
+            "uid": api_profile["uid"], "gid": api_profile["gid"],
+            "mode": api_profile["mode"], "nlink": 1,
+            "acl_sha256": api_profile["acl_sha256"], "type": "regular",
+        }
+        older = {**prior,
+                 "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+                 "size": 27618}
+        automatic = {**self.items[0], "baseline": prior,
+                     "supported_predecessors": [older, prior], "allow_absent": True,
+                     "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        stable = [automatic]
+        for item in self.items[1:]:
+            data = item["source"].read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            stable.append({**item, "baseline": {**item["baseline"],
+                                                   "sha256": digest, "size": len(data)},
+                           "after_sha256": digest, "after_size": len(data)})
+        # Capture the old module with the same trusted metadata profile as the
+        # installed API; companions are unchanged at their exact target bytes.
+        def capture(path):
+            if path == self.paths[0]:
+                return {**prior, "acl_text": "user::rw-\ngroup::rw-\nother::r--\n"}
+            return self.capture(path)
+        self.support.capture_file = capture
+        self.support._read_regular = lambda path, _limit: path.read_bytes()
+        self.support._write_private = lambda path, data: path.write_bytes(data)
+        self.support._verify_private_file = lambda _path, _uid: None
+        self.support._fsync_dir = lambda _path: None
+        txdir = self.root / "transaction"
+        txdir.mkdir()
+        tx = deploy.Transaction(directory=txdir, commit="a" * 40, items=stable,
+                                prior_units={}, prior_nginx={}, database_before={},
+                                database_backup=txdir / "database.backup")
+
+        deploy._create_file_backups(tx, self.support)
+
+        self.assertEqual(4, len(tx.file_backups))
+        self.assertEqual(prior["sha256"], tx.file_backups[0]["before_sha256"])
+        self.assertEqual(old_bytes, Path(tx.file_backups[0]["backup_path"]).read_bytes())
+
+    def test_unsupported_auto_target_drift_is_rejected(self):
+        self.write_after()
+        profile = {"sha256": "a" * 64, "size": 10, "uid": 1001, "gid": 33,
+                   "mode": "0664", "nlink": 1, "acl_sha256": "acl-api", "type": "regular"}
+        auto = {**self.items[0], "baseline": profile, "supported_predecessors": [profile],
+                "allow_absent": True,
+                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
+        self.support.capture_file = lambda path: (
+            {**profile, "sha256": "b" * 64, "size": 11}
+            if path == self.paths[0] else self.capture(path))
+        stable = []
+        for item in self.items[1:]:
+            data = item["source"].read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            stable.append({**item, "baseline": {**item["baseline"],
+                                                   "sha256": digest, "size": len(data)},
+                           "after_sha256": digest, "after_size": len(data)})
+        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
+            deploy._classify_files([auto, *stable], self.support)
 
     def test_unchanged_targets_are_idempotently_classified_as_installed(self):
         self.write_after()
@@ -352,6 +455,8 @@ class NewFileMetadataTests(unittest.TestCase):
             deploy.DeploymentError("diagnostic_category=sidecar_quiescence_failure")))
         self.assertEqual("preflight_blocked", deploy._diagnostic_category(
             deploy.DeploymentError("some private raw detail")))
+        self.assertEqual("file_set_classification_failed", deploy._diagnostic_category(
+            deploy.DeploymentError("preflight failed diagnostic_category=file_set_classification_failed")))
 
 
 class NginxAndSmokeTests(unittest.TestCase):
