@@ -37,7 +37,12 @@ ACTIVITIES = {
     "tombs_of_amascut": ("tombs_of_amascut", "overall"),
     "chambers_of_xeric": ("chambers_of_xeric", "overall"),
     "chambers_of_xeric_challenge_mode": ("chambers_of_xeric_cm", "overall"),
+    # The canonical solo PNM identity mirrors the published content/mode pair.
+    "phosanis_nightmare": ("phosanis_nightmare", "overall"),
 }
+# PNM has one supported solo mode. Pin its Challenge destination independently
+# of the mutable published mode row so an altered mode cannot redirect credit.
+ACTIVITY_BOSS_KEYS = {"phosanis_nightmare": "phosanis"}
 
 MIGRATION_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
 
@@ -303,6 +308,9 @@ def _active_policy(conn: sqlite3.Connection, payload: dict[str, Any]) -> tuple[i
         return version_id, {}, mode, "disabled"
     boss_key = mode.get("boss_key")
     if not isinstance(boss_key, str) or not boss_key:
+        raise ObservationError("invalid", "unsupported_mode")
+    expected_boss_key = ACTIVITY_BOSS_KEYS.get(payload["activity_key"])
+    if expected_boss_key is not None and boss_key != expected_boss_key:
         raise ObservationError("invalid", "unsupported_mode")
     bosses = [row for row in document.get("bosses", []) if row.get("boss_key") == boss_key]
     if len(bosses) != 1:

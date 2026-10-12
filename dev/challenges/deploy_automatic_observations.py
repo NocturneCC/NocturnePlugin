@@ -37,14 +37,16 @@ MANIFEST_REL = "dev/challenges/source-manifest.json"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OBSERVATION_BODY = 8192
 SCHEMA_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
+PREVIOUS_AUTOMATIC_INTAKE_SHA256 = "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03"
+PREVIOUS_AUTOMATIC_INTAKE_SIZE = 27618
 
 # This is the complete install set for the feature.  The first file is a
-# repository-owned new source and must be absent on the supported predecessor.
-# The other predecessor hashes are bound by source-manifest.json and checked
-# against the exact host-root metadata captured there.
+# repository-owned source may be absent on the original predecessor or match
+# the exact preceding implementation. Other predecessor hashes are bound by
+# source-manifest.json and checked against the captured host-root metadata.
 TARGETS = (
     ("dev/challenges/service/challenge_automatic_intake.py",
-     SERVICE_ROOT / "challenge_automatic_intake.py", "absent"),
+     SERVICE_ROOT / "challenge_automatic_intake.py", "absent_or_previous"),
     ("dev/challenges/service/challenge_intake_api.py",
      SERVICE_ROOT / "challenge_intake_api.py", "manifest"),
     ("dev/challenges/service/leaderboard_challenge_ingest.py",
@@ -141,9 +143,12 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
         if bundle.get("source_relationship") != "repository_owned_extension":
             raise DeploymentError("target source is not declared as a reviewed repository extension")
         if target == SERVICE_ROOT / "challenge_automatic_intake.py":
-            # This new module intentionally has no live-source predecessor.
+            # Its prior version is pinned here; target metadata is constrained
+            # by the authenticated intake API predecessor below.
             if relative in live or any(item.get("path") == str(target) for item in source_manifest.get("live_sources", [])):
-                raise DeploymentError("new intake source unexpectedly has a live predecessor")
+                raise DeploymentError("automatic intake target acquired an unreviewed live baseline")
+            if predecessor_kind != "absent_or_previous":
+                raise DeploymentError("automatic intake predecessor contract rejected")
             baseline = None
         else:
             baseline = live.get(str(target))
@@ -159,6 +164,20 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
         result.append({"source_relative": relative, "source": source, "target": target,
                        "after_sha256": after_digest, "after_size": int(bundle["size"]),
                        "baseline": baseline, "predecessor_kind": predecessor_kind})
+    api_baseline = next((item["baseline"] for item in result
+                         if item["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
+    if not isinstance(api_baseline, dict):
+        raise DeploymentError("API metadata profile is unavailable for automatic intake")
+    automatic = next(item for item in result
+                     if item["target"] == SERVICE_ROOT / "challenge_automatic_intake.py")
+    automatic["supported_previous"] = {
+        **{key: api_baseline[key] for key in ("uid", "gid", "mode", "nlink", "acl_sha256")},
+        "sha256": PREVIOUS_AUTOMATIC_INTAKE_SHA256,
+        "size": PREVIOUS_AUTOMATIC_INTAKE_SIZE,
+        "type": "regular",
+    }
+    automatic["baseline"] = dict(automatic["supported_previous"])
+    automatic["allow_absent"] = True
     return result
 
 
@@ -196,13 +215,24 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
         support._safe_parent(target)
         actual = _capture_target(target, support)
         baseline = item["baseline"]
+        if item.get("allow_absent") and actual is None:
+            states.append("before")
+            observed.append({"source": item["source_relative"], "target": str(target),
+                             "before_sha256": None, "after_sha256": item["after_sha256"]})
+            continue
         if baseline is None:
             if actual is None:
                 states.append("before")
                 observed.append({"source": item["source_relative"], "target": str(target),
                                  "before_sha256": None, "after_sha256": item["after_sha256"]})
                 continue
-            if (actual["sha256"] != item["after_sha256"] or actual["nlink"] != 1):
+            previous = item.get("supported_previous")
+            matches_previous = (isinstance(previous, dict) and
+                                actual["sha256"] == previous["sha256"] and
+                                actual["size"] == previous["size"])
+            matches_after = (actual["sha256"] == item["after_sha256"] and
+                             actual["size"] == item["after_size"])
+            if (not (matches_previous or matches_after) or actual["nlink"] != 1):
                 raise DeploymentError("unsupported live file drift")
             # The new module must match the established intake module's
             # ownership/permission/ACL profile, not an arbitrary safe-looking
@@ -211,17 +241,18 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
             checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
             if not profile or any(actual.get(k) != profile.get(k) for k in checked):
                 raise DeploymentError("new intake module metadata is unsupported")
-            states.append("after")
+            states.append("after" if matches_after else "before")
             observed.append({"source": item["source_relative"], "target": str(target),
-                             "before_sha256": None, "after_sha256": item["after_sha256"]})
+                             "before_sha256": previous["sha256"] if matches_previous else None,
+                             "after_sha256": item["after_sha256"]})
             continue
         checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
         if actual is None or any(actual.get(k) != baseline.get(k) for k in checked):
             raise DeploymentError("unsupported live file metadata drift")
-        if actual["sha256"] == baseline.get("sha256") and actual["size"] == baseline.get("size"):
-            state = "before"
-        elif actual["sha256"] == item["after_sha256"] and actual["size"] == item["after_size"]:
+        if actual["sha256"] == item["after_sha256"] and actual["size"] == item["after_size"]:
             state = "after"
+        elif actual["sha256"] == baseline.get("sha256") and actual["size"] == baseline.get("size"):
+            state = "before"
         else:
             raise DeploymentError("unsupported live file content drift")
         states.append(state)
@@ -435,7 +466,10 @@ def _create_file_backups(tx: Transaction, support) -> None:
     for index, item in enumerate(tx.items):
         before = _capture_target(item["target"], support)
         baseline = item["baseline"]
-        if baseline is None:
+        if item.get("allow_absent") and before is None:
+            record = {**item, "before_sha256": None, "before_metadata": None,
+                      "backup_path": None, "backup_sha256": None, "was_absent": True}
+        elif baseline is None:
             if before is not None:
                 raise DeploymentError("new source target appeared before backup")
             record = {**item, "before_sha256": None, "before_metadata": None,
@@ -972,17 +1006,20 @@ def rollback_record(*, record_path: Path, support, systemd, commit: str | None =
             raise DeploymentError("rollback file manifest ambiguous")
         seen.add(entry["target"])
         expected = target_by_path[entry["target"]]
+        expected_absent = expected["baseline"] is None or bool(expected.get("allow_absent") and entry.get("was_absent"))
         if (entry.get("source_relative") != expected["source_relative"] or
                 entry.get("after_sha256") != expected["after_sha256"] or
                 entry.get("after_size") != expected["after_size"] or
-                bool(entry.get("was_absent")) != (expected["baseline"] is None)):
+                bool(entry.get("was_absent")) != expected_absent):
             raise DeploymentError("rollback file manifest does not match immutable release")
         if not entry["was_absent"]:
             backup = Path(str(entry.get("backup_path") or ""))
             if backup.parent != record_path.parent or support._sha_file(backup) != entry.get("backup_sha256"):
                 raise DeploymentError("rollback file backup rejected")
             support._verify_private_file(backup, 0)
-            if not isinstance(entry.get("before_metadata"), dict) or entry.get("before_sha256") != expected["baseline"]["sha256"]:
+            if not isinstance(entry.get("before_metadata"), dict) or (
+                    expected["baseline"] is not None and
+                    entry.get("before_sha256") != expected["baseline"]["sha256"]):
                 raise DeploymentError("rollback file predecessor metadata rejected")
         else:
             if entry.get("backup_path") is not None or entry.get("before_sha256") is not None:

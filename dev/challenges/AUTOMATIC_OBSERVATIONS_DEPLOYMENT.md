@@ -11,7 +11,7 @@ commit separately before applying it.
 
 | Immutable source | Live target | Supported predecessor |
 | --- | --- | --- |
-| `dev/challenges/service/challenge_automatic_intake.py` | `/srv/projects/nocturne-services/challenge_automatic_intake.py` | Absent only |
+| `dev/challenges/service/challenge_automatic_intake.py` | `/srv/projects/nocturne-services/challenge_automatic_intake.py` | Absent or exact previous module SHA-256 `9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03` (27,618 bytes), with the API's captured ownership/mode/ACL profile |
 | `dev/challenges/service/challenge_intake_api.py` | `/srv/projects/nocturne-services/challenge_intake_api.py` | Exact source-manifest baseline only |
 | `dev/challenges/service/leaderboard_challenge_ingest.py` | `/srv/projects/nocturne-services/leaderboard_challenge_ingest.py` | Exact source-manifest baseline only |
 | `dev/challenges/integration/routes/nocturne-challenge-intake.location.conf` | `/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf` | Exact source-manifest baseline only |
@@ -106,3 +106,16 @@ version, and no observation tables. Host ACL ownership and systemd state could
 not be treated as authoritative inside the no-new-privileges sandbox; the
 helper keeps those checks mandatory, and no production dry-run/apply or
 immutable preparation was performed here.
+
+## Scoped publication validation
+
+For an isolated automatic-observation/plugin publication, run
+`python3 -B dev/challenges/verify_automatic_observation_scope.py` and the
+focused tests listed in the change procedure. This offline gate hashes only
+the automatic-observation runtime/import closure, exact deployment targets,
+directly used preparation/runtime helpers, service-unit references, and
+focused regressions. Unrelated Midgard products and their external-reference
+fingerprints are intentionally excluded. `prepare.py --verify-bundle` remains
+available as a broad infrastructure audit, but is not the publication gate for
+this isolated feature. Actual immutable preparation and deployment still
+retain the canonical commit-bound prepared-check requirement described above.

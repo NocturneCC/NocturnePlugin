@@ -137,6 +137,7 @@ class AutomaticObservationTests(unittest.TestCase):
             "tob_2": "segment", "tob_3": "segment", "tob_5": "segment",
             "hmt_5": "overall", "toa_1_300": "overall", "cox_1": "overall",
             "cm_1": "overall", "cm_3": "overall", "cm_5": "overall",
+            "phosanis": "overall",
         }
         for boss in document["bosses"]:
             scope = scope_by_boss.get(boss["boss_key"])
@@ -233,6 +234,93 @@ class AutomaticObservationTests(unittest.TestCase):
                     self.assertEqual(conn.execute(
                         "SELECT selected_timing_scope,selected_duration_ms FROM challenge_automatic_observations ORDER BY observation_id DESC LIMIT 1"
                     ).fetchone(), ("overall", 1802460))
+
+    def pnm_payload(self, **updates):
+        roster = updates.pop("roster", ["Primary One"])
+        values = {"room_time_ms": None, "overall_time_ms": 358200,
+                  "completion_count": 1394}
+        values.update(updates)
+        return self.payload(
+            "phosanis_nightmare", "phosani_nightmare", roster,
+            **values,
+        )
+
+    def test_phosani_nightmare_accepts_only_solo_overall_observation(self):
+        response = self.post(self.pnm_payload())
+        self.assertEqual((response.status_code, response.get_json()), (201, {"state": "accepted"}))
+        with self.db(self.challenge_path) as conn:
+            observation = conn.execute(
+                """SELECT activity_key,mode_key,overall_time_ms,selected_timing_scope,
+                          selected_duration_ms,observed_group_size,disposition
+                     FROM challenge_automatic_observations"""
+            ).fetchone()
+            participant = conn.execute(
+                "SELECT normalized_rsn FROM challenge_automatic_observation_participants"
+            ).fetchall()
+            submission = conn.execute(
+                "SELECT boss_key,metric_value,source_system FROM challenge_submissions"
+            ).fetchone()
+        self.assertEqual(observation, (
+            "phosanis_nightmare", "phosani_nightmare", 358200,
+            "overall", 358200, 1, "accepted",
+        ))
+        self.assertEqual(participant, [("primaryone",)])
+        self.assertEqual(submission, ("phosanis", 358200, "runelite_automatic"))
+
+    def test_phosani_nightmare_manual_unconfigured_and_mismatched_scope_are_not_accepted(self):
+        self.publish_policy("phosanis", "overall", "manual_only")
+        manual = self.post(self.pnm_payload())
+        self.assertEqual(manual.get_json(), {"state": "ignored", "reason": "manual_only"})
+        self.assertEqual(self.counts()[1], 0)
+
+        self.publish_policy("phosanis", "unconfigured", "manual_only")
+        unconfigured = self.post(self.pnm_payload(completion_count=1395))
+        self.assertEqual(unconfigured.get_json(), {"state": "ignored", "reason": "unconfigured"})
+        self.assertEqual(self.counts()[1], 0)
+
+        self.publish_policy("phosanis", "segment", "enabled")
+        mismatched = self.post(self.pnm_payload(completion_count=1396))
+        self.assertEqual(mismatched.get_json(), {
+            "state": "invalid", "reason": "unsupported_timing_policy",
+        })
+        self.assertEqual(self.counts()[1], 0)
+
+    def test_phosani_nightmare_rejects_wrong_activity_or_mode_identity(self):
+        wrong_activity = self.post(self.pnm_payload(activity_key="phosanis"))
+        self.assertEqual(wrong_activity.get_json()["reason"], "unsupported_activity")
+        wrong_mode = self.post(self.pnm_payload(mode_key="tob_solo"))
+        self.assertEqual(wrong_mode.get_json()["reason"], "unsupported_mode")
+
+    def test_phosani_nightmare_rejects_published_mode_redirect_to_another_boss(self):
+        from challenge_automatic_intake import config_document as load_config_document
+
+        def redirected_config(conn, version_id):
+            document = load_config_document(conn, version_id)
+            mode = next(row for row in document["leaderboard_modes"]
+                        if row["mode_key"] == "phosani_nightmare")
+            mode["boss_key"] = "jad"
+            return document
+
+        with patch("challenge_automatic_intake.config_document", side_effect=redirected_config):
+            response = self.post(self.pnm_payload())
+        self.assertEqual(response.get_json(), {"state": "invalid", "reason": "unsupported_mode"})
+        self.assertEqual(self.counts()[1], 0)
+
+    def test_phosani_nightmare_enforces_solo_roster(self):
+        payload = self.pnm_payload(roster=["Primary One", "Party Two"], group_size=2)
+        self.assertEqual(self.post(payload).get_json()["reason"], "invalid_group_size")
+        self.assertEqual(self.counts()[1], 0)
+
+    def test_phosani_nightmare_event_idempotency_and_payload_conflict(self):
+        payload = self.pnm_payload()
+        self.assertEqual(self.post(payload).status_code, 201)
+        self.assertEqual(self.post(payload).get_json(), {"state": "duplicate"})
+        changed = {**payload, "overall_time_ms": 358201}
+        response = self.post(changed)
+        self.assertEqual((response.status_code, response.get_json()),
+                         (409, {"state": "idempotency_conflict"}))
+        self.assertEqual(self.counts()[1], 1)
+        self.assertEqual(self.counts()[2], 1)
 
     def test_solo_complete_all_clan_and_mixed_roster_projection(self):
         solo = self.post(self.payload("tombs_of_amascut", "toa_expert_solo", ["Primary One"]))

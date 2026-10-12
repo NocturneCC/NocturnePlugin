@@ -136,6 +136,44 @@ class TargetClassificationTests(unittest.TestCase):
         with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
             deploy._classify_files(self.items, self.support)
 
+    def test_automatic_module_accepts_only_absent_exact_previous_or_installed(self):
+        path = self.paths[0]
+        previous = b"previous automatic intake"
+        previous_hash = hashlib.sha256(previous).hexdigest()
+        profile = {"sha256": previous_hash, "size": len(previous), "uid": 1001,
+                   "gid": 33, "mode": "0664", "nlink": 1, "acl_sha256": "acl-api",
+                   "type": "regular"}
+        item = {**self.items[0], "baseline": profile, "allow_absent": True,
+                "predecessor_kind": "absent_or_previous"}
+        others = self.items[1:]
+        self.write_before()
+        state, _ = deploy._classify_files([item, *others], self.support)
+        self.assertEqual("predecessor", state)
+
+        path.write_bytes(previous)
+        state, _ = deploy._classify_files([item, *others], self.support)
+        self.assertEqual("predecessor", state)
+
+        path.write_bytes(self.hashes[path][1])
+        self.write_after()
+        state, _ = deploy._classify_files([item, *others], self.support)
+        self.assertEqual("installed", state)
+
+        path.write_bytes(b"one-byte-drift")
+        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
+            deploy._classify_files([item, *others], self.support)
+
+    def test_unchanged_targets_are_idempotently_classified_as_installed(self):
+        self.write_after()
+        # One installed source may intentionally have identical before/after
+        # bytes; classify it as current rather than creating a mixed state.
+        item = dict(self.items[1])
+        item["after_sha256"] = item["baseline"]["sha256"]
+        item["after_size"] = item["baseline"]["size"]
+        self.paths[1].write_bytes(self.hashes[self.paths[1]][0])
+        state, _ = deploy._classify_files([self.items[0], item, *self.items[2:]], self.support)
+        self.assertEqual("installed", state)
+
 
 class NewFileMetadataTests(unittest.TestCase):
     ACL_TEXT = "user::rw-\ngroup::rw-\nother::r--\n"

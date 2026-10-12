@@ -5,8 +5,8 @@
       "extension_reason": "Documents the repository-owned public observation contract and trust boundary.",
       "normalization": null,
       "path": "dev/challenges/AUTOMATIC_OBSERVATIONS.md",
-      "sha256": "140a13812a5aaf3e9cb88bee2c491e29bd987b58065cc217ea8dc64e2dd7402a",
-      "size": 5569,
+      "sha256": "4f049faccaec59f09df920ddddd58929dda28570be0ebd17c2d87cbb8ec2aa8a",
+      "size": 7509,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -16,8 +16,8 @@
       "extension_reason": "Documents the repository-owned guarded automatic-observation deployment boundary and operator procedure.",
       "normalization": null,
       "path": "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md",
-      "sha256": "f52191b19dd00fd18edca981343dbc6d1a7bc81ea92789a57af36c211824ff9f",
-      "size": 6380,
+      "sha256": "9983b6c3c0399316e543c6d1ea62cc3e4bfdffe95135ee192b2e023762e505b1",
+      "size": 7322,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -99,8 +99,8 @@
       "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
       "normalization": null,
       "path": "dev/challenges/deploy_automatic_observations.py",
-      "sha256": "57652284545dfd39e0beb225bcd763268b7b7f2e8444ed8049a79ef142911ade",
-      "size": 60677,
+      "sha256": "d2399c61251ce56ee8756ca03a0b6f7576daf7190f03238a513357279253f562",
+      "size": 63064,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -240,8 +240,8 @@
       "extension_reason": "Adds the repository-owned, tokenless server-authoritative RuneLite observation boundary and reversible additive schema.",
       "normalization": null,
       "path": "dev/challenges/service/challenge_automatic_intake.py",
-      "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
-      "size": 27618,
+      "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
+      "size": 28178,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -400,11 +400,20 @@
     },
     {
       "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/tests/python/test_automatic_observation_scope.py",
+      "sha256": "8ae488f027af1764ccc00ea0416cc348badf6c8ff87cc5c1ad72a71f8393da12",
+      "size": 4461,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
       "extension_reason": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_challenge_automatic_intake.py",
-      "sha256": "5c42eb1897f3e5da660225371ccdc7d5161c0e0a7cfbb0419865f851e3f00332",
-      "size": 22220,
+      "sha256": "a3d58772bc9288b67b6359affee8c617d996a3efbc90b44aae3f65ab8210709d",
+      "size": 26775,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -463,8 +472,8 @@
       "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
-      "sha256": "3dc5d3c451b210e67c1c05592d47633b1d9664182a41d7e493b62efebec2aa2f",
-      "size": 32820,
+      "sha256": "3d1a0a24dc652b321a3d808985cd139cf9879f9a20da71a26512de583ec1c9ea",
+      "size": 34732,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -533,6 +542,15 @@
       "path": "dev/challenges/tests/python/test_source_adoption.py",
       "sha256": "425227b63884c2464ad22482894c513223c80324f94ba541d2a330701a83c8bc",
       "size": 6407,
+      "source": null,
+      "type": "regular"
+    },
+    {
+      "executable": false,
+      "normalization": null,
+      "path": "dev/challenges/verify_automatic_observation_scope.py",
+      "sha256": "0d31bdb01667915d0ee9e972d06b5d6756fec4b8d738986916df6de6390a227a",
+      "size": 11369,
       "source": null,
       "type": "regular"
     },
@@ -1790,8 +1808,8 @@
       "mode": "0664",
       "nlink": 1,
       "path": "/srv/projects/nocturne-services/challenge_config.py",
-      "sha256": "81421a75ca6cccc1a08011e8a9f02fa43833d9534ad2f58ab9f3181c3de5f0e5",
-      "size": 91244,
+      "sha256": "e2961b26b5a0c870289a0b2f48b8a97c344ed05da9f28dacecb0502554772383",
+      "size": 103707,
       "type": "regular",
       "uid": 1001
     },
@@ -1834,8 +1852,8 @@
       "mode": "0664",
       "nlink": 1,
       "path": "/srv/projects/nocturne-services/challenge_intake_api.py",
-      "sha256": "18ed7786854e56c3a24f31adeb7acfb6bbc25cc15daef874e48eeaf4b389e7b2",
-      "size": 20931,
+      "sha256": "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
+      "size": 24095,
       "type": "regular",
       "uid": 1001
     },
@@ -1900,8 +1918,8 @@
       "mode": "0755",
       "nlink": 1,
       "path": "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py",
-      "sha256": "4004ce3352885e5273a7aac785d5f1d7cd202ff1a7331df5da5f26f68a0e4330",
-      "size": 21812,
+      "sha256": "a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c",
+      "size": 24209,
       "type": "regular",
       "uid": 1001
     },
@@ -1955,8 +1973,8 @@
       "mode": "0664",
       "nlink": 1,
       "path": "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf",
-      "sha256": "3f753e60ac08e69bdf94d860818dfad2c2545068cbf10d9b39611abc5ceefe73",
-      "size": 711,
+      "sha256": "fac7b3d526ab5bd56a150612c170493f7aa9a77e774002dd64ae835df82270d8",
+      "size": 1439,
       "type": "regular",
       "uid": 1001
     },

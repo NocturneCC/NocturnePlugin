@@ -52,6 +52,37 @@ The server maps only these canonical activities:
 | `tombs_of_amascut` | `tombs_of_amascut` | `overall` / `overall_time_ms` |
 | `chambers_of_xeric` | `chambers_of_xeric` | `overall` / `overall_time_ms` |
 | `chambers_of_xeric_challenge_mode` | `chambers_of_xeric_cm` | `overall` / `overall_time_ms` |
+| `phosanis_nightmare` | `phosanis_nightmare` | `overall` / `overall_time_ms` |
+
+Phosani's Nightmare uses the exact payload identity
+`activity_key="phosanis_nightmare"`, `mode_key="phosani_nightmare"`. That
+published solo mode must resolve to `boss_key="phosanis"`; the active boss
+configuration must explicitly enable automatic capture with overall timing.
+Its roster is exactly the reporting player's normalized public RSN (`group_size`
+1). No party-member identities are accepted or inferred for this activity.
+
+### Client completion correlation
+
+The client must identify the completed activity from its existing encounter
+and loot-tracking context, never from an exact boss-specific timing sentence.
+Maintain a bounded ring buffer of eligible game/system chat messages and a
+short-lived completion context with activity identity, completion timestamp,
+party context, and stable encounter/event identity. Correlate eligible messages
+before or after the completion event by message type, time proximity, and
+current encounter; activity wording may help but is optional.
+
+Use a generic duration recognizer for ordinary OSRS duration formats, including
+fractional seconds. Exclude values identified as personal-best/reference values
+and capture the current completion whether or not it is a PB. For ordinary
+single-timer bosses, submit one unambiguous non-PB duration without requiring a
+boss-specific phrase. For activities with multiple valid metrics (such as
+ToB/HMT), use only the published timing policy and a small activity-level
+metric-selection rule. If candidates remain ambiguous, fail closed and retain
+only a bounded diagnostic reason. Deterministic event IDs must suppress replayed
+chat and duplicate completion events. The PNM fixture
+`Team size: Solo Fight duration: 5:58.20. Personal best: 4:48.60` is a parser
+regression fixture, not a production message-format requirement: select
+358200 ms and never select the PB value.
 
 `mode_key` must identify exactly one active leaderboard mode in that same
 published version and accept the full observed group size. The mode must link
