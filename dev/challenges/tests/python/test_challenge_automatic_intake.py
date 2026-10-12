@@ -120,7 +120,13 @@ class AutomaticObservationTests(unittest.TestCase):
                 conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(?,?,?,'active')",
                              (member_id, name, normalized))
             conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(7,?,?, 'active')",
-                         ("Doctor Arden", "doctorarden"))
+                         ("Doctor Arden", "doctor_arden"))
+            conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(8,?,?, 'active')",
+                         ("Linked Parent", "linked_parent"))
+            conn.execute("INSERT INTO member_accounts(account_id,member_id,rsn,normalized_rsn,is_primary,is_active) VALUES(3,8,?,?,0,1)",
+                         ("Linked Hero", "linked_hero"))
+            conn.execute("INSERT INTO member_accounts(account_id,member_id,rsn,normalized_rsn,is_primary,is_active) VALUES(4,8,?,?,0,0)",
+                         ("Inactive Alt", "inactive_alt"))
         self.app = create_app({
             "TESTING": True, "CHALLENGES_DB": self.challenge_path,
             "MEMBERS_DB": self.members_path, "INTAKE_TOKEN": "test-token-never-returned",
@@ -314,6 +320,101 @@ class AutomaticObservationTests(unittest.TestCase):
         )
         self.assertEqual((retry.status_code, retry.get_json()), (200, {"state": "duplicate"}))
         self.assertEqual(self.counts(), (1, 1, 1))
+
+    def test_challenge_and_authoritative_member_databases_are_separate(self):
+        with self.db(self.challenge_path) as challenges:
+            challenge_tables = {row[0] for row in challenges.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        with self.db(self.members_path) as members:
+            member_tables = {row[0] for row in members.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn("members", challenge_tables)
+        self.assertIn("members", member_tables)
+        self.assertIn("member_accounts", member_tables)
+
+    def test_active_primary_rsn_accepts_space_or_underscore_normalization(self):
+        for completion_count, reporter in enumerate(("Doctor Arden", "Doctor_Arden"), 1394):
+            with self.subTest(reporter=reporter):
+                response = self.post(self.pnm_payload(
+                    reporter_rsn="Doctor Arden", roster=[reporter], completion_count=completion_count))
+                self.assertEqual((response.status_code, response.get_json()),
+                                 (201, {"state": "accepted"}))
+        with self.db(self.challenge_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM challenge_automatic_observations WHERE reporter_normalized_rsn='doctorarden'"
+            ).fetchone()[0], 2)
+
+    def test_active_linked_rsn_resolves_to_parent_member(self):
+        response = self.post(self.pnm_payload(
+            reporter_rsn="Linked Hero", roster=["Linked Hero"]))
+        self.assertEqual((response.status_code, response.get_json()),
+                         (201, {"state": "accepted"}))
+        with self.db(self.challenge_path) as conn:
+            participant = conn.execute(
+                """SELECT member_id,normalized_rsn_snapshot,identity_resolution_method
+                     FROM challenge_submission_participants"""
+            ).fetchone()
+            observation = conn.execute(
+                "SELECT reporter_normalized_rsn,observed_group_size FROM challenge_automatic_observations"
+            ).fetchone()
+        self.assertEqual(participant, (8, "linkedhero", "member_accounts.normalized_rsn"))
+        self.assertEqual(observation, ("linkedhero", 1))
+
+    def test_inactive_member_linked_account_unknown_and_ambiguous_rsn_are_rejected(self):
+        with self.db(self.members_path) as conn:
+            conn.execute("UPDATE members SET status='inactive' WHERE member_id=7")
+        inactive_member = self.post(self.pnm_payload(roster=["Doctor Arden"]))
+        self.assertEqual((inactive_member.status_code, inactive_member.get_json()),
+                         (422, {"state": "invalid", "reason": "reporter_not_eligible"}))
+
+        inactive_account = self.post(self.pnm_payload(
+            reporter_rsn="Inactive Alt", roster=["Inactive Alt"]))
+        self.assertEqual((inactive_account.status_code, inactive_account.get_json()),
+                         (422, {"state": "invalid", "reason": "reporter_not_eligible"}))
+
+        with self.db(self.members_path) as conn:
+            conn.execute("UPDATE members SET status='inactive' WHERE member_id=8")
+        inactive_parent = self.post(self.pnm_payload(
+            reporter_rsn="Linked Hero", roster=["Linked Hero"]))
+        self.assertEqual((inactive_parent.status_code, inactive_parent.get_json()),
+                         (422, {"state": "invalid", "reason": "reporter_not_eligible"}))
+
+        unknown = self.post(self.pnm_payload(
+            reporter_rsn="Unknown RSN", roster=["Unknown RSN"]))
+        self.assertEqual((unknown.status_code, unknown.get_json()),
+                         (422, {"state": "invalid", "reason": "reporter_not_eligible"}))
+
+        with self.db(self.members_path) as conn:
+            conn.execute("UPDATE members SET status='active' WHERE member_id=7")
+            conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(9,?,?, 'active')",
+                         ("Doctor Arden Alt", "doctorarden"))
+        ambiguous = self.post(self.pnm_payload(roster=["Doctor Arden"]))
+        self.assertEqual((ambiguous.status_code, ambiguous.get_json()),
+                         (422, {"state": "invalid", "reason": "reporter_not_eligible"}))
+        self.assertEqual(self.counts(), (0, 0, 0))
+
+    def test_missing_schema_and_unsafe_member_database_paths_fail_closed(self):
+        empty_members = Path(self.temp.name) / "empty-members.db"
+        with self.db(empty_members):
+            pass
+        self.app.config["MEMBERS_DB"] = empty_members
+        missing_schema = self.post(self.pnm_payload())
+        self.assertEqual((missing_schema.status_code, missing_schema.get_json()),
+                         (503, {"state": "server_failure"}))
+
+        self.app.config["MEMBERS_DB"] = Path(self.temp.name) / "missing-members.db"
+        missing_file = self.post(self.pnm_payload())
+        self.assertEqual((missing_file.status_code, missing_file.get_json()),
+                         (503, {"state": "server_failure"}))
+        self.assertFalse(self.app.config["MEMBERS_DB"].exists())
+
+        symlink = Path(self.temp.name) / "members-link.db"
+        symlink.symlink_to(self.members_path)
+        self.app.config["MEMBERS_DB"] = symlink
+        unsafe_path = self.post(self.pnm_payload())
+        self.assertEqual((unsafe_path.status_code, unsafe_path.get_json()),
+                         (503, {"state": "server_failure"}))
+        self.assertEqual(self.counts(), (0, 0, 0))
 
     def test_phosani_nightmare_manual_unconfigured_and_mismatched_scope_are_not_accepted(self):
         self.publish_policy("phosanis", "overall", "manual_only")

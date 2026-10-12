@@ -94,6 +94,21 @@ class AutomaticObservationScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(scope.ScopeError, "runtime reference drift"):
             scope.verify_scope(self.repo)
 
+    def test_membership_database_path_and_read_only_service_boundary_are_pinned(self):
+        relative = "dev/challenges/service/challenge_intake_api.py"
+        source = self.repo / relative
+        source.write_text(source.read_text().replace(
+            "/srv/projects/database/Members.db", "/tmp/untrusted-members.db"))
+        manifest_path = self.repo / scope.MANIFEST
+        manifest = json.loads(manifest_path.read_text())
+        record = next(row for row in manifest["bundle_files"] if row["path"] == relative)
+        data = source.read_bytes()
+        record["size"] = len(data)
+        record["sha256"] = hashlib.sha256(data).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(scope.ScopeError, "membership database boundary"):
+            scope.verify_scope(self.repo)
+
 
 if __name__ == "__main__":
     unittest.main()

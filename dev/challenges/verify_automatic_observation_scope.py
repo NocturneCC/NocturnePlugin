@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path("dev/challenges/source-manifest.json")
 DEPLOYER = Path("dev/challenges/deploy_automatic_observations.py")
 AUTO_TARGET = "/srv/projects/nocturne-services/challenge_automatic_intake.py"
+AUTHORITATIVE_MEMBERS_DB = "/srv/projects/database/Members.db"
 EXPECTED_TARGETS = (
     ("dev/challenges/service/challenge_automatic_intake.py", AUTO_TARGET, "absent_or_previous"),
     ("dev/challenges/service/challenge_intake_api.py",
@@ -197,6 +198,12 @@ def verify_scope(repo: Path = ROOT) -> dict[str, object]:
     )
     if any(value not in unit_text for value in required_runtime_wiring):
         raise ScopeError("automatic-observation service unit reference changed")
+    intake_api = (repo / "dev/challenges/service/challenge_intake_api.py").read_text(encoding="utf-8")
+    if (f'DEFAULT_MEMBERS_DB = Path("{AUTHORITATIVE_MEMBERS_DB}")' not in intake_api or
+            'MEMBERS_DB=DEFAULT_MEMBERS_DB' not in intake_api or
+            'conn = ro_connection(path)' not in intake_api or
+            f'ReadOnlyPaths={AUTHORITATIVE_MEMBERS_DB}' not in unit_text):
+        raise ScopeError("automatic-observation authoritative membership database boundary changed")
     live_paths = frozenset(target for _source, target, kind in EXPECTED_TARGETS if kind == "manifest")
     live_records = _records(manifest.get("live_sources"), live_paths, "live predecessor")
     if set(live_records) != live_paths:

@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import sqlite3
+import stat
 import threading
 import time
 from collections import defaultdict, deque
@@ -99,7 +100,28 @@ def create_app(config: dict | None = None) -> Flask:
         return rw_connection(Path(app.config["CHALLENGES_DB"]))
 
     def members_db() -> sqlite3.Connection:
-        return ro_connection(Path(app.config["MEMBERS_DB"]))
+        path = Path(app.config["MEMBERS_DB"])
+        if not path.is_absolute() or any(value in str(path) for value in ("?", "#", "%")):
+            raise RuntimeError("authoritative member database path is unsafe")
+        try:
+            before = path.lstat()
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("authoritative member database is unavailable") from exc
+        if (resolved != path or stat.S_ISLNK(before.st_mode) or
+                not stat.S_ISREG(before.st_mode) or before.st_nlink != 1):
+            raise RuntimeError("authoritative member database path is unsafe")
+        conn = ro_connection(path)
+        try:
+            after = path.lstat()
+            if (path.resolve(strict=True) != path or stat.S_ISLNK(after.st_mode) or
+                    not stat.S_ISREG(after.st_mode) or after.st_nlink != 1 or
+                    (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)):
+                raise RuntimeError("authoritative member database identity changed")
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     def body_hash(raw: bytes) -> str:
         return hashlib.sha256(raw).hexdigest()

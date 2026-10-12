@@ -39,9 +39,16 @@ to 24 hours. Timestamps must include a timezone, be no more than 24 hours old,
 and no more than two minutes in the future. The complete roster has 1–10
 distinct normalized RSNs, contains the reporter exactly once, and its length
 must equal `group_size`. The reporter must resolve to a current eligible clan
-member. Other names that do not resolve remain in the observation roster and
-count toward group classification, but receive no member or leaderboard
-association. Duplicate aliases resolving to one member fail closed.
+member through the intake service's read-only authoritative
+`/srv/projects/database/Members.db` connection. An active primary RSN in
+`members` or an active linked RSN in `member_accounts` resolves to its parent
+`member_id`; RuneScape spaces and underscores use the shared canonical RSN
+normalization. Inactive members/accounts, missing or ambiguous identities, and
+conflicting matches fail closed. The Challenge database is not a membership
+source and must not contain copied member rows. Other names that do not resolve
+remain in the observation roster and count toward group classification, but
+receive no member or leaderboard association. Duplicate aliases resolving to
+one member fail closed.
 
 The server maps only these canonical activities:
 

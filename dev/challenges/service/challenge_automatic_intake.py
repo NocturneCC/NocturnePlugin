@@ -273,20 +273,39 @@ def payload_hash(payload: dict[str, Any]) -> str:
 
 
 def _resolve_member(members: sqlite3.Connection, normalized_rsn: str) -> tuple[int | None, str | None, str | None]:
-    """Resolve one public RSN against current, non-left member/account/alias rows."""
+    """Resolve an active primary or linked RSN from authoritative Members.db.
+
+    Members.db preserves word separators in normalized_rsn (for example,
+    ``doctor_arden``), while the shared RuneScape normalizer removes them.
+    Apply the same separator folding to the stored canonical columns before
+    comparing. Include inactive matches in the candidate set so they cannot
+    accidentally shadow or conflict with another identity and still be
+    accepted. Missing tables/columns raise and are handled fail-closed by the
+    intake route.
+    """
     rows = members.execute(
-        """SELECT DISTINCT m.member_id,m.rsn
+        """SELECT m.member_id,m.rsn,m.status,1 AS identity_active,
+                  'members.normalized_rsn' AS method,0 AS priority
              FROM members m
-             LEFT JOIN member_accounts a ON a.member_id=m.member_id AND a.normalized_rsn=? AND COALESCE(a.is_active,1)=1
-             LEFT JOIN member_aliases x ON x.member_id=m.member_id AND x.normalized_alias_rsn=?
-            WHERE COALESCE(m.status,'active')!='left'
-              AND (m.normalized_rsn=? OR a.member_id IS NOT NULL OR x.member_id IS NOT NULL)
-            ORDER BY m.member_id""",
-        (normalized_rsn, normalized_rsn, normalized_rsn),
+            WHERE lower(replace(replace(replace(m.normalized_rsn,'_',''),'-',''),' ',''))=?
+            UNION ALL
+           SELECT m.member_id,m.rsn,m.status,a.is_active AS identity_active,
+                  'member_accounts.normalized_rsn' AS method,1 AS priority
+             FROM member_accounts a
+             LEFT JOIN members m ON m.member_id=a.member_id
+            WHERE lower(replace(replace(replace(a.normalized_rsn,'_',''),'-',''),' ',''))=?
+            ORDER BY priority,member_id""",
+        (normalized_rsn, normalized_rsn),
     ).fetchall()
-    if len(rows) != 1:
+    # Any inactive or orphaned matching identity, or any cross-member
+    # collision after canonical separator folding, is ambiguous and rejected.
+    if (not rows or any(row["status"] != "active" or row["identity_active"] != 1
+                        for row in rows) or
+            len({int(row["member_id"]) for row in rows if row["member_id"] is not None}) != 1 or
+            any(row["member_id"] is None for row in rows)):
         return None, None, None
-    return int(rows[0]["member_id"]), str(rows[0]["rsn"] or normalized_rsn), "members_rsn_alias"
+    row = rows[0]
+    return int(row["member_id"]), str(row["rsn"] or normalized_rsn), str(row["method"])
 
 
 def _active_policy(conn: sqlite3.Connection, payload: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, Any], str | None]:
