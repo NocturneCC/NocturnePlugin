@@ -3,10 +3,14 @@ package com.nocturne;
 import java.time.Instant;
 import java.util.function.Consumer;
 
-/** Consent gate and user-facing outcome policy, kept separate from parsing and transport. */
+/** Consent gate and user-facing outcome policy, kept separate from parsing and transport.
+ * Active published capture policy is enforced by every POST; the v1 server contract has no
+ * client policy-read endpoint and never lets cached client state approve an observation.
+ */
 final class ChallengeCompletionCapture
 {
 	private final ChallengeCompletionCorrelator correlator;
+	private final GenericCompletionCorrelator genericCorrelator = new GenericCompletionCorrelator();
 	private final ChallengeObservationService service;
 	private final Consumer<String> feedback;
 	private final Consumer<String> diagnostic;
@@ -23,21 +27,56 @@ final class ChallengeCompletionCapture
 	void onMessage(String text, RaidCompletionEvidence evidence, String reporter, boolean consent,
 		boolean diagnostics, Instant now)
 	{
-		if (!consent) { correlator.clearPartial(); return; }
+		onMessage("GAMEMESSAGE", text, evidence, reporter, consent, diagnostics, now, 0);
+	}
+
+	void onMessage(String category, String text, RaidCompletionEvidence evidence, String reporter, boolean consent,
+		boolean diagnostics, Instant now, long gameCycle)
+	{
+		if (!consent) { clearPartial(); return; }
+		ChallengeObservation generic = genericCorrelator.onMessage(category, text, gameCycle,
+			System.nanoTime(), now);
+		if (generic != null) submit(generic, diagnostics);
 		ChallengeObservation observation = correlator.accept(text, evidence, reporter, now);
 		if (observation != null) submit(observation, diagnostics);
 	}
 
-	void reset() { correlator.reset(); }
-	void clearPartial() { correlator.clearPartial(); }
+	void onBossCompletion(String source, String reporter, String clientSessionId, long gameCycle, boolean consent,
+		boolean diagnostics, Instant now)
+	{
+		if (!consent) { clearPartial(); return; }
+		BossCompletionContext context = BossCompletionContext.fromNpcLoot(source, reporter, clientSessionId,
+			gameCycle, System.nanoTime(), now);
+		ChallengeObservation observation = genericCorrelator.onCompletion(context, System.nanoTime(), now);
+		if (observation != null) submit(observation, diagnostics);
+	}
+
+	void onSystemMessage(String category, String text, long gameCycle, boolean consent,
+		boolean diagnostics, Instant now)
+	{
+		if (!consent) { clearPartial(); return; }
+		ChallengeObservation observation = genericCorrelator.onMessage(category, text, gameCycle,
+			System.nanoTime(), now);
+		if (observation != null) submit(observation, diagnostics);
+	}
+
+	void onTick(boolean consent, boolean diagnostics, Instant now)
+	{
+		if (!consent) { clearPartial(); return; }
+		ChallengeObservation observation = genericCorrelator.poll(System.nanoTime(), now);
+		if (observation != null) submit(observation, diagnostics);
+	}
+
+	void reset() { correlator.reset(); genericCorrelator.reset(); }
+	void clearPartial() { correlator.clearPartial(); genericCorrelator.clearPartial(); }
 	void onEvidence(RaidCompletionEvidence evidence, String reporter, boolean consent,
 		boolean diagnostics, Instant now)
 	{
-		if (!consent) { correlator.clearPartial(); return; }
+		if (!consent) { clearPartial(); return; }
 		ChallengeObservation observation = correlator.onEvidence(evidence, reporter, now);
 		if (observation != null) submit(observation, diagnostics);
 	}
-	void close() { correlator.clear(); service.cancelPending(); }
+	void close() { correlator.clear(); genericCorrelator.clear(); service.cancelPending(); }
 
 	private void submit(ChallengeObservation observation, boolean diagnostics)
 	{

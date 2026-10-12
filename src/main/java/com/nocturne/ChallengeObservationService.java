@@ -5,7 +5,6 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -44,7 +43,9 @@ final class ChallengeObservationService implements AutoCloseable
 	synchronized String submit(ChallengeObservation observation, Consumer<ChallengeObservationResponse> callback)
 	{
 		if (closed || observation == null || pending.size() >= MAX_PENDING) return null;
-		String id = UUID.randomUUID().toString();
+		String id = observation.eventId;
+		Pending existing = pending.get(id);
+		if (existing != null) return id;
 		String body = gson.toJson(observation.payload(gson, id));
 		Pending item = new Pending(id, body, callback);
 		pending.put(id, item);

@@ -3,6 +3,7 @@ package com.nocturne;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -11,10 +12,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import net.runelite.client.util.Text;
 
-/** Validated, semantic v1 observation. Event UUID is added only by the HTTP service. */
+/** Validated, semantic v1 observation with a deterministic idempotency UUID. */
 final class ChallengeObservation
 {
 	static final int SCHEMA_VERSION = 1;
@@ -33,10 +35,12 @@ final class ChallengeObservation
 	final Instant occurredAt;
 	final long displayDurationMillis;
 	final String displayName;
+	final String eventId;
 
 	private ChallengeObservation(String activityKey, String modeKey, String reporterRsn,
 		List<String> roster, Long roomTimeMillis, Long overallTimeMillis,
-		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName)
+		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName,
+		String encounterIdentity)
 	{
 		this.activityKey = activityKey;
 		this.modeKey = modeKey;
@@ -49,13 +53,27 @@ final class ChallengeObservation
 		this.occurredAt = occurredAt;
 		this.displayDurationMillis = displayDurationMillis;
 		this.displayName = displayName;
+		String identity = encounterIdentity + '|' + activityKey + '|' + modeKey + '|'
+			+ roomTimeMillis + '|' + overallTimeMillis + '|'
+			+ String.join("|", roster.stream().map(ChallengeObservation::identityKey).toArray(String[]::new));
+		this.eventId = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
 	}
 
 	static ChallengeObservation create(String activityKey, String modeKey,
 		Long roomTimeMillis, Long overallTimeMillis, Integer completionCount,
 		GroupSnapshot snapshot, String localReporter, Instant occurredAt)
 	{
-		if (snapshot == null || snapshot.status != GroupSnapshot.Status.MATCHED
+		String identity = activityKey + '|' + modeKey + '|' + localReporter + '|'
+			+ occurredAt + '|' + roomTimeMillis + '|' + overallTimeMillis;
+		return create(activityKey, modeKey, roomTimeMillis, overallTimeMillis, completionCount,
+			snapshot, localReporter, occurredAt, identity);
+	}
+
+	static ChallengeObservation create(String activityKey, String modeKey,
+		Long roomTimeMillis, Long overallTimeMillis, Integer completionCount,
+		GroupSnapshot snapshot, String localReporter, Instant occurredAt, String encounterIdentity)
+	{
+		if (snapshot == null || snapshot.status != GroupSnapshot.Status.MATCHED || encounterIdentity == null
 			|| snapshot.expectedSize < 1 || snapshot.expectedSize > MAX_ROSTER
 			|| snapshot.names.size() != snapshot.expectedSize || occurredAt == null
 			|| completionCount != null && (completionCount < 1
@@ -99,10 +117,19 @@ final class ChallengeObservation
 			if (overallTimeMillis == null) return null;
 			displayDuration = overallTimeMillis;
 			displayName = "theatre_of_blood_hard_mode".equals(activityKey) ? "HMT"
+				: "phosanis_nightmare".equals(activityKey) ? "Phosani's Nightmare"
 				: "tombs_of_amascut".equals(activityKey) ? "Tombs of Amascut" : "Chambers of Xeric";
 		}
 		return new ChallengeObservation(activityKey, modeKey, reporter, normalizedRoster,
-			roomTimeMillis, overallTimeMillis, completionCount, occurredAt, displayDuration, displayName);
+			roomTimeMillis, overallTimeMillis, completionCount, occurredAt, displayDuration, displayName,
+			encounterIdentity);
+	}
+
+	static ChallengeObservation createPhosani(long durationMillis, GroupSnapshot snapshot,
+		String reporter, Instant occurredAt, String encounterIdentity)
+	{
+		return create("phosanis_nightmare", "phosani_nightmare", null, durationMillis, null,
+			snapshot, reporter, occurredAt, encounterIdentity);
 	}
 
 	JsonObject payload(Gson gson, String eventId)
@@ -164,6 +191,7 @@ final class ChallengeObservation
 
 	private static int expectedSize(String activity, String mode)
 	{
+		if ("phosanis_nightmare".equals(activity)) return "phosani_nightmare".equals(mode) ? 1 : -1;
 		if ("theatre_of_blood".equals(activity))
 		{
 			switch (mode)

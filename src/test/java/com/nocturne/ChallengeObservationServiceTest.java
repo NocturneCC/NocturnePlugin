@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
@@ -64,11 +65,59 @@ public class ChallengeObservationServiceTest
 			String id = service.submit(observation(), result -> { results.add(result); finished.countDown(); });
 			assertNotNull(id); assertTrue(finished.await(6, TimeUnit.SECONDS));
 			java.util.UUID.fromString(id);
+			assertEquals(observation().eventId, id);
 			assertEquals(List.of(id, id), ids); assertEquals(bodies.get(0), bodies.get(1));
 			assertEquals(ChallengeObservationResponse.State.ACCEPTED, results.get(0).state);
 			assertEquals(List.of("POST", "POST"), methods);
 		}
 		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void phosaniPayloadUsesCanonicalSoloIdentityAndDeterministicEventId() throws Exception
+	{
+		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of("Local Name"), 1,
+			GroupSnapshot.Status.MATCHED, "solo encounter");
+		ChallengeObservation observation = ChallengeObservation.createPhosani(358_200L, solo,
+			"Local Name", Instant.parse("2026-10-12T12:00:00Z"), "pnm-encounter-fixture-1");
+		assertNotNull(observation);
+		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+		java.util.concurrent.atomic.AtomicReference<String> eventId = new java.util.concurrent.atomic.AtomicReference<>();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		CountDownLatch finished = new CountDownLatch(1);
+		CountDownLatch requestEntered = new CountDownLatch(1);
+		CountDownLatch releaseRequest = new CountDownLatch(1);
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			assertEquals(ChallengeObservationService.ENDPOINT, chain.request().url().toString());
+			assertNull(chain.request().header("Authorization"));
+			okio.Buffer body = new okio.Buffer(); chain.request().body().writeTo(body);
+			JsonObject payload = new Gson().fromJson(body.readUtf8(), JsonObject.class);
+			assertEquals("phosanis_nightmare", payload.get("activity_key").getAsString());
+			assertEquals("phosani_nightmare", payload.get("mode_key").getAsString());
+			assertEquals(358_200L, payload.get("overall_time_ms").getAsLong());
+			assertFalse(payload.has("room_time_ms"));
+			assertEquals(1, payload.get("group_size").getAsInt());
+			assertEquals(1, payload.getAsJsonArray("roster").size());
+			eventId.set(payload.get("event_id").getAsString());
+			calls.incrementAndGet();
+			requestEntered.countDown();
+			try { releaseRequest.await(); }
+			catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new java.io.IOException("interrupted"); }
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			AtomicInteger callbacks = new AtomicInteger();
+			assertEquals(observation.eventId, service.submit(observation, result -> { callbacks.incrementAndGet(); finished.countDown(); }));
+			assertTrue(requestEntered.await(2, TimeUnit.SECONDS));
+			assertEquals(observation.eventId, service.submit(observation, result -> callbacks.incrementAndGet()));
+			releaseRequest.countDown();
+			assertTrue(finished.await(3, TimeUnit.SECONDS));
+			assertEquals(observation.eventId, eventId.get());
+			assertEquals(1, calls.get());
+			assertEquals(1, callbacks.get());
+		}
+		finally { releaseRequest.countDown(); service.close(); scheduler.shutdownNow(); }
 	}
 
 	@Test public void shutdownCancelsPendingCall()
@@ -132,6 +181,52 @@ public class ChallengeObservationServiceTest
 		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
 	}
 
+	@Test public void failedCorrelationNeverContactsObservationEndpoint()
+	{
+		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			calls.incrementAndGet();
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), service,
+			message -> fail("failed correlation has no user feedback"), message -> fail("diagnostics are disabled"));
+		try
+		{
+			capture.onMessage("CLAN_CHAT", "Fight duration: 5:58.20", null, "Local Name", true,
+				false, Instant.now(), 10);
+			capture.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20", null, "Local Name", true,
+				false, Instant.now(), 11);
+			assertEquals(0, calls.get());
+			assertEquals(0, service.pendingCount());
+		}
+		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void disabledChallengeConsentDoesNotBufferOrSubmitPnm()
+	{
+		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			calls.incrementAndGet();
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), service,
+			message -> fail("disabled consent is quiet"), message -> fail("diagnostics are disabled"));
+		try
+		{
+			capture.onBossCompletion("Phosani's Nightmare", "Local Name", "session", 10,
+				false, false, Instant.now());
+			capture.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20", null, "Local Name", false,
+				false, Instant.now(), 11);
+			assertEquals(0, calls.get());
+			assertEquals(0, service.pendingCount());
+		}
+		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
+	}
+
 	@Test public void invalidAndRateLimitedResponsesAreNotRetried() throws Exception
 	{
 		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
@@ -146,12 +241,44 @@ public class ChallengeObservationServiceTest
 		}).build(), new Gson(), scheduler);
 		try
 		{
-			service.submit(observation(), result -> { states.add(result.state); finished.countDown(); });
-			service.submit(observation(), result -> { states.add(result.state); finished.countDown(); });
+			ChallengeObservation first = observation();
+			ChallengeObservation second = ChallengeObservation.create("theatre_of_blood", "tob_duo", 901200L,
+				1714070L, 42, new GroupSnapshot("fixture", List.of("Local Name", "Party Name"), 2,
+					GroupSnapshot.Status.MATCHED, "fixture"), "Local Name", Instant.parse("2026-10-03T12:34:57Z"));
+			service.submit(first, result -> { states.add(result.state); finished.countDown(); });
+			service.submit(second, result -> { states.add(result.state); finished.countDown(); });
 			assertTrue(finished.await(3, TimeUnit.SECONDS));
 			assertEquals(2, calls.get());
 			assertTrue(states.contains(ChallengeObservationResponse.State.INVALID));
 			assertTrue(states.contains(ChallengeObservationResponse.State.RATE_LIMITED));
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void disabledManualOnlyAndUnconfiguredServerPoliciesAreTerminal() throws Exception
+	{
+		String[] reasons = {"disabled", "manual_only", "unconfigured"};
+		java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+		CountDownLatch finished = new CountDownLatch(reasons.length);
+		List<ChallengeObservationResponse.State> states = new CopyOnWriteArrayList<>();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			int index = calls.getAndIncrement();
+			return response(chain.request(), 200, "{\"state\":\"ignored\",\"reason\":\"" + reasons[index] + "\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			for (int i = 0; i < reasons.length; i++)
+			{
+				ChallengeObservation item = ChallengeObservation.create("theatre_of_blood", "tob_duo", 901200L,
+					1714070L, null, new GroupSnapshot("fixture", List.of("Local Name", "Party Name"), 2,
+						GroupSnapshot.Status.MATCHED, "fixture"), "Local Name", Instant.parse("2026-10-03T12:40:0" + i + "Z"));
+				service.submit(item, result -> { states.add(result.state); finished.countDown(); });
+			}
+			assertTrue(finished.await(3, TimeUnit.SECONDS));
+			assertEquals(3, calls.get());
+			assertEquals(3, states.stream().filter(s -> s == ChallengeObservationResponse.State.IGNORED).count());
 		}
 		finally { service.close(); scheduler.shutdownNow(); }
 	}

@@ -28,8 +28,8 @@ public interface NocturneConfig extends Config
 
 	@ConfigItem(
 		keyName = "submitChallengeTimes",
-		name = "Submit raid completion times",
-		description = "When enabled, sends your RSN, supported raid completion times and public in-game party RSNs to nocturne.events for server-side Challenge review. No chat text, PB claim, Discord ID or automatic award is sent.",
+		name = "Submit Challenge completion times",
+		description = "When enabled, sends your RSN and supported Challenge completion times to nocturne.events. Public party RSNs are included only for supported group activities; Phosani's Nightmare sends only your RSN. Raw chat, PB claims, Discord IDs and automatic awards are never sent.",
 		warning = "This feature transmits public player information and your IP address to a 3rd-party server not controlled or verified by RuneLite developers",
 		position = 2
 	)

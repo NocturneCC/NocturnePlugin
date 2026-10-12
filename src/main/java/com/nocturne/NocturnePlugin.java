@@ -101,6 +101,8 @@ public class NocturnePlugin extends Plugin
 	private String activeRsn;
 	private volatile String historyRsn;
 	private volatile long historyGeneration;
+	private long gameTick;
+	private String clientSessionId;
 	private final AtomicBoolean emojiRegistrationDiagnosticLogged = new AtomicBoolean();
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
@@ -115,7 +117,9 @@ public class NocturnePlugin extends Plugin
 	{
 		Object token = new Object();
 		lifecycle = token;
+		clientSessionId = java.util.UUID.randomUUID().toString();
 		groups = new GroupTracker(client);
+		gameTick = 0;
 		groups.setDiagnosticsEnabled(config.showDiagnostics());
 		derivedValues = DerivedValueCatalogue.load(gson);
 		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
@@ -217,6 +221,7 @@ public class NocturnePlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = null;
+		clientSessionId = null;
 		SubmissionService sender = submissions;
 		submissions = null;
 		if (sender != null) sender.close();
@@ -264,12 +269,15 @@ public class NocturnePlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		gameTick++;
 		updatePlayer();
 		GroupTracker tracker = groups;
 		if (tracker != null)
 		{
 			tracker.onTick();
 			observeCompletion(null, tracker);
+			if (challengeCapture != null)
+				challengeCapture.onTick(config.submitChallengeTimes(), config.showDiagnostics(), java.time.Instant.now());
 			RaidPresenceService presence = raidPresence;
 			if (presence != null && tracker.isActiveChambers())
 			{
@@ -339,6 +347,11 @@ public class NocturnePlugin extends Plugin
 	public void onNpcLootReceived(NpcLootReceived event)
 	{
 		String source = event.getNpc() == null ? null : event.getNpc().getName();
+		Player local = client.getLocalPlayer();
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null && local != null && local.getName() != null && client.getGameState() == GameState.LOGGED_IN)
+			capture.onBossCompletion(source, local.getName(), clientSessionId, gameTick, config.submitChallengeTimes(),
+				config.showDiagnostics(), java.time.Instant.now());
 		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), LootOrigin.NPC);
 	}
 
@@ -403,21 +416,33 @@ public class NocturnePlugin extends Plugin
 	public void onChatMessage(ChatMessage event)
 	{
 		GroupTracker tracker = groups;
-		if (tracker != null
-			&& (event.getType() == ChatMessageType.GAMEMESSAGE || event.getType() == ChatMessageType.FRIENDSCHATNOTIFICATION))
+		String category = event.getType().name();
+		if (tracker != null && (event.getType() == ChatMessageType.GAMEMESSAGE
+			|| event.getType() == ChatMessageType.FRIENDSCHATNOTIFICATION))
 		{
 			if (tracker.onGameMessage(event.getMessage()))
 			{
 				RaidPresenceService presence = raidPresence;
 				if (presence != null) presence.submit(tracker.presenceReport("completion"), this::updateRaidVerification);
 			}
-			observeCompletion(event.getMessage(), tracker);
+			observeCompletion(category, event.getMessage(), tracker);
+		}
+		else if (tracker != null && CompletionMessageBuffer.eligibleCategory(category))
+		{
+			ChallengeCompletionCapture capture = challengeCapture;
+			if (capture != null) capture.onSystemMessage(category, event.getMessage(), gameTick,
+				config.submitChallengeTimes(), config.showDiagnostics(), java.time.Instant.now());
 		}
 		EmojiRenderer renderer = emojiRenderer;
 		if (renderer != null) renderer.onChatMessage(event);
 	}
 
 	private void observeCompletion(String message, GroupTracker tracker)
+	{
+		observeCompletion(message == null ? null : "GAMEMESSAGE", message, tracker);
+	}
+
+	private void observeCompletion(String category, String message, GroupTracker tracker)
 	{
 		ChallengeCompletionCapture capture = challengeCapture;
 		if (capture == null || !config.submitChallengeTimes() || client.getGameState() != GameState.LOGGED_IN) return;
@@ -430,8 +455,8 @@ public class NocturnePlugin extends Plugin
 		}
 		else
 		{
-			capture.onMessage(message, tracker.completionEvidence(), local.getName(), true,
-				config.showDiagnostics(), java.time.Instant.now());
+			capture.onMessage(category, message, tracker.completionEvidence(), local.getName(), true,
+				config.showDiagnostics(), java.time.Instant.now(), gameTick);
 		}
 	}
 
