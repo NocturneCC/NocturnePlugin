@@ -247,109 +247,75 @@ def _supported_automatic_predecessor(actual: dict[str, Any], item: dict[str, Any
 def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool = True) -> tuple[str, list[dict[str, Any]]]:
     states: list[str] = []
     observed: list[dict[str, Any]] = []
+    checked = (("uid", "gid", "mode", "nlink", "acl_sha256") if strict_owner else
+               ("mode", "nlink", "acl_sha256"))
+    api_profile = next((item["baseline"] for item in items
+                        if item["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
     for item in items:
         target = item["target"]
         support._safe_parent(target)
         actual = _capture_target(target, support)
         baseline = item["baseline"]
-        if item.get("allow_absent") and actual is None:
-            states.append("before")
-            observed.append({"source": item["source_relative"], "target": str(target),
-                             "before_sha256": None, "after_sha256": item["after_sha256"]})
-            continue
-        is_automatic_target = item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py"
-        if is_automatic_target:
-            current_predecessor = _supported_automatic_predecessor(actual, item) if actual else None
-            after_match = bool(actual and actual["sha256"] == item["after_sha256"] and
-                               actual["size"] == item["after_size"])
-            checked = (("mode", "nlink", "acl_sha256") if not strict_owner else
-                       ("uid", "gid", "mode", "nlink", "acl_sha256"))
-            profile = next((x["baseline"] for x in items
-                            if x["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
-            if (actual is None or not (current_predecessor or after_match) or
-                    any(actual.get(key) != profile.get(key) for key in checked)):
+        if actual is None:
+            absent_is_predecessor = (item.get("predecessor_kind") in {"absent", "absent_or_previous"}
+                                     and item.get("allow_absent"))
+            if not absent_is_predecessor:
                 raise DeploymentError("unsupported live file content or metadata drift")
-            state = "after" if after_match else "previous"
-            states.append(state)
+            states.append("new")
             observed.append({"source": item["source_relative"], "target": str(target),
-                             "before_sha256": None if after_match else actual["sha256"],
-                             "after_sha256": item["after_sha256"],
-                             "current_sha256": actual["sha256"]})
+                             "before_sha256": None, "after_sha256": item["after_sha256"],
+                             "current_sha256": None})
             continue
-        if baseline is None:
-            if actual is None:
-                states.append("before")
-                observed.append({"source": item["source_relative"], "target": str(target),
-                                 "before_sha256": None, "after_sha256": item["after_sha256"]})
-                continue
-            previous = item.get("supported_previous")
-            matches_previous = (isinstance(previous, dict) and
-                                actual["sha256"] == previous["sha256"] and
-                                actual["size"] == previous["size"])
-            matches_after = (actual["sha256"] == item["after_sha256"] and
-                             actual["size"] == item["after_size"])
-            if (not (matches_previous or matches_after) or actual["nlink"] != 1):
-                raise DeploymentError("unsupported live file drift")
-            # The new module must match the established intake module's
-            # ownership/permission/ACL profile, not an arbitrary safe-looking
-            # file. Its source was absent at the exact predecessor.
-            profile = next((x["baseline"] for x in items if x["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
-            checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
-            if not profile or any(actual.get(k) != profile.get(k) for k in checked):
-                raise DeploymentError("new intake module metadata is unsupported")
-            states.append("after" if matches_after else "before")
-            observed.append({"source": item["source_relative"], "target": str(target),
-                             "before_sha256": previous["sha256"] if matches_previous else None,
-                             "after_sha256": item["after_sha256"],
-                             "current_sha256": actual["sha256"]})
-            continue
-        checked = ("mode", "nlink", "acl_sha256") if not strict_owner else ("uid", "gid", "mode", "nlink", "acl_sha256")
-        if actual is None or any(actual.get(k) != baseline.get(k) for k in checked):
-            raise DeploymentError("unsupported live file metadata drift")
-        automatic_predecessor = (isinstance(item.get("supported_predecessors"), list) and
-                                 _supported_automatic_predecessor(actual, item) is not None)
-        same_as_before = (_expected_live_matches(actual, baseline) or automatic_predecessor)
-        same_as_after = (actual["sha256"] == item["after_sha256"] and
-                         actual["size"] == item["after_size"])
-        if same_as_before and same_as_after:
+        # Files created by this installer inherit the established API target's
+        # owner/mode/ACL profile. Existing targets use their exact pinned
+        # predecessor metadata. Type and link-count are also enforced by the
+        # no-follow regular-file capture before these comparisons.
+        profile = baseline if isinstance(baseline, dict) else api_profile
+        if (not isinstance(profile, dict) or
+                any(actual.get(key) != profile.get(key) for key in checked) or
+                actual.get("nlink") != 1):
+            raise DeploymentError("unsupported live file content or metadata drift")
+
+        after = {"sha256": item["after_sha256"], "size": item["after_size"]}
+        matches_after = all(actual.get(key) == value for key, value in after.items())
+        is_pinned_automatic_target = (
+            item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py" and
+            item.get("predecessor_kind") == "absent_or_previous")
+        predecessor_records = (item.get("supported_predecessors")
+                               if is_pinned_automatic_target else None)
+        if not isinstance(predecessor_records, list):
+            predecessor_records = [baseline]
+        matches_predecessor = any(
+            isinstance(record, dict) and
+            all(actual.get(key) == record.get(key)
+                for key in ("sha256", "size", *checked))
+            for record in predecessor_records
+        )
+        before_equals_after = (isinstance(baseline, dict) and
+                               baseline.get("sha256") == item["after_sha256"] and
+                               baseline.get("size") == item["after_size"])
+        if before_equals_after and matches_after and matches_predecessor:
             state = "stable"
-        elif same_as_after:
-            state = "after"
-        elif same_as_before:
-            state = ("previous" if item.get("source_relative") ==
-                     "dev/challenges/service/challenge_automatic_intake.py" else "before")
+        elif matches_after:
+            state = "installed"
+        elif matches_predecessor:
+            state = "predecessor"
         else:
-            raise DeploymentError("unsupported live file content drift")
+            raise DeploymentError("unsupported live file content or metadata drift")
         states.append(state)
         observed.append({"source": item["source_relative"], "target": str(target),
-                         "before_sha256": baseline["sha256"],
+                         "before_sha256": (baseline.get("sha256") if isinstance(baseline, dict) else None),
                          "after_sha256": item["after_sha256"],
                          "current_sha256": actual["sha256"]})
-    directional = set(states) - {"stable"}
-    if states and directional == {"before"}:
-        return "predecessor", observed
-    if states and directional == {"previous"}:
+    if not states:
+        raise DeploymentError("deployment target set is empty")
+    changed = [state for state in states if state != "stable"]
+    if not changed:
+        return "already_installed", observed
+    if all(state in {"predecessor", "new"} for state in changed):
         return "upgrade_predecessor", observed
-    if states and directional == {"after"}:
-        return "installed", observed
-    if states and not directional:
-        return "installed", observed
-    # A host may already have the exact preceding automatic-intake module
-    # while the other independently pinned targets remain at their manifest
-    # predecessor. This is a safe upgrade starting point, not a partial
-    # installation: every target was individually authenticated above. Keep
-    # the exception narrow to exactly one automatic target in "previous" and
-    # companion targets only in their manifest "before" or byte-stable state.
-    automatic_indexes = [index for index, item in enumerate(items)
-                         if item.get("source_relative") ==
-                         "dev/challenges/service/challenge_automatic_intake.py"]
-    if (directional == {"before", "previous"} and
-            len(automatic_indexes) == 1 and
-            states[automatic_indexes[0]] == "previous" and
-            all(state in {"before", "stable"}
-                for index, state in enumerate(states)
-                if index != automatic_indexes[0])):
-        return "upgrade_predecessor", observed
+    if all(state == "installed" for state in changed):
+        return "already_installed", observed
     raise DeploymentError("mixed target file set requires operator recovery")
 
 
@@ -513,16 +479,13 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
     release_manifest_sha256 = _preflight_step(
         "immutable_release_preflight_failed", support._sha_file,
         release / "RELEASE-MANIFEST.json")
-    inconsistent = ((file_state == "predecessor" and database_state["schema_state"] != "absent") or
-                    (file_state in {"installed", "upgrade_predecessor"} and
-                     database_state["schema_state"] not in {"present", "catalog_absent", "absent"}) or
-                    (file_state == "installed" and database_state["schema_state"] != "present") or
-                    database_state["schema_state"] == "unsupported")
+    inconsistent = (file_state == "already_installed" and database_state["schema_state"] != "present") or \
+                   database_state["schema_state"] == "unsupported"
     complete_plan = root_authoritative and database_state["metadata_verified"]
     return {
         "status": ("blocked_inconsistent_state" if inconsistent else
                    "read_only_plan_only" if not complete_plan else
-                   "already_installed" if file_state == "installed" else "dry_run"),
+                   "already_installed" if file_state == "already_installed" else "dry_run"),
         "target_commit": commit,
         "release_manifest_sha256": release_manifest_sha256,
         "current_file_set": "unsupported" if inconsistent else file_state,

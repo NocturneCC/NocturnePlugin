@@ -104,7 +104,8 @@ class TargetClassificationTests(unittest.TestCase):
             self.hashes[path] = (baseline_data, source.read_bytes(), baseline)
             self.items.append({"source_relative": f"source-{index}", "source": source, "target": path,
                                "after_sha256": after, "after_size": len(source.read_bytes()),
-                               "baseline": baseline, "predecessor_kind": "absent" if index == 0 else "manifest"})
+                               "baseline": baseline, "predecessor_kind": "absent" if index == 0 else "manifest",
+                               "allow_absent": baseline is None})
         self.support = SimpleNamespace(_safe_parent=lambda _path: None, capture_file=self.capture)
 
     def capture(self, path):
@@ -125,24 +126,89 @@ class TargetClassificationTests(unittest.TestCase):
         for path, (_old, new, _baseline) in zip(self.paths, self.hashes.values()):
             path.write_bytes(new)
 
+    def classify_dispositions(self, dispositions):
+        profile = {"uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
+                   "acl_sha256": "fixture-acl", "type": "regular"}
+        live = {}
+        items = []
+        for index, disposition in enumerate(dispositions):
+            if index == 0:
+                name = "challenge_automatic_intake.py"
+                source_relative = "dev/challenges/service/challenge_automatic_intake.py"
+            elif index == 1:
+                name = "challenge_intake_api.py"
+                source_relative = "dev/challenges/service/challenge_intake_api.py"
+            else:
+                name = f"target-{index}.conf"
+                source_relative = f"dev/challenges/fixture/{name}"
+            target = self.root / name
+            source = self.root / f"desired-{index}"
+            after_bytes = f"desired-{index}".encode()
+            source.write_bytes(after_bytes)
+            after_hash = hashlib.sha256(after_bytes).hexdigest()
+            if disposition == "new":
+                baseline = None
+                predecessor_kind = "absent"
+                item = {"allow_absent": True}
+            else:
+                before_bytes = (after_bytes if disposition == "stable"
+                                else f"predecessor-{index}".encode())
+                baseline = {**profile, "sha256": hashlib.sha256(before_bytes).hexdigest(),
+                            "size": len(before_bytes)}
+                predecessor_kind = "manifest"
+                item = {}
+                if disposition == "predecessor":
+                    live[target] = {**baseline, "acl_text": "fixture ACL\n"}
+                else:
+                    live[target] = {**profile, "sha256": after_hash,
+                                    "size": len(after_bytes), "acl_text": "fixture ACL\n"}
+            items.append({**item, "source_relative": source_relative, "source": source,
+                          "target": target, "after_sha256": after_hash,
+                          "after_size": len(after_bytes), "baseline": baseline,
+                          "predecessor_kind": predecessor_kind})
+
+        def capture(path):
+            if path not in live:
+                raise FileNotFoundError(path)
+            return live[path]
+
+        support = SimpleNamespace(_safe_parent=lambda _path: None, capture_file=capture)
+        return deploy._classify_files(items, support)
+
     def test_fresh_predecessor_and_already_installed_classification(self):
         self.write_before()
         state, items = deploy._classify_files(self.items, self.support)
-        self.assertEqual("predecessor", state)
+        self.assertEqual("upgrade_predecessor", state)
         self.assertEqual(4, len(items))
         self.write_after()
         state, _items = deploy._classify_files(self.items, self.support)
-        self.assertEqual("installed", state)
+        self.assertEqual("already_installed", state)
 
     def test_one_byte_or_partial_drift_fails_closed(self):
         self.write_before()
         self.paths[1].write_bytes(b"changed")
-        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
+        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
             deploy._classify_files(self.items, self.support)
         self.write_after()
         self.paths[2].write_bytes(b"changed")
-        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content drift"):
+        with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
             deploy._classify_files(self.items, self.support)
+
+    def test_unknown_owner_mode_link_or_acl_metadata_fails_closed(self):
+        target = self.paths[1]
+        capture = self.support.capture_file
+        for key, value in (("uid", 2000), ("gid", 2000), ("mode", "0600"),
+                           ("nlink", 2), ("acl_sha256", "unknown-acl")):
+            with self.subTest(field=key):
+                self.write_before()
+                baseline_capture = capture(target)
+                changed = {**baseline_capture, key: value}
+                self.support.capture_file = lambda path, changed=changed: (
+                    changed if path == target else capture(path))
+                with self.assertRaisesRegex(
+                        deploy.DeploymentError, "unsupported live file content or metadata drift"):
+                    deploy._classify_files(self.items, self.support)
+        self.support.capture_file = capture
 
     def test_automatic_module_accepts_only_absent_exact_previous_or_installed(self):
         path = self.paths[0]
@@ -168,7 +234,7 @@ class TargetClassificationTests(unittest.TestCase):
 
         path.unlink()
         state, _ = deploy._classify_files([item, *others], self.support)
-        self.assertEqual("predecessor", state)
+        self.assertEqual("upgrade_predecessor", state)
 
         path.write_bytes(previous)
         state, _ = deploy._classify_files([item, *others], self.support)
@@ -177,120 +243,97 @@ class TargetClassificationTests(unittest.TestCase):
         path.write_bytes(self.hashes[path][1])
         self.write_after()
         state, _ = deploy._classify_files([item, *others], self.support)
-        self.assertEqual("installed", state)
+        self.assertEqual("already_installed", state)
 
         path.write_bytes(b"one-byte-drift")
         with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
             deploy._classify_files([item, *others], self.support)
 
-    def test_exact_previous_module_plus_stable_targets_is_supported_upgrade_state(self):
-        self.write_after()
-        previous = b"previous automatic intake"
-        path = self.paths[0]
-        path.write_bytes(previous)
-        previous_hash = hashlib.sha256(previous).hexdigest()
-        baseline = {"sha256": previous_hash, "size": len(previous), "uid": 1001,
-                    "gid": 33, "mode": "0664", "nlink": 1, "acl_sha256": "acl-api",
-                    "type": "regular"}
-        automatic = {**self.items[0], "baseline": baseline, "allow_absent": True,
-                     "predecessor_kind": "absent_or_previous",
-                     "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
-        stable = []
-        for item in self.items[1:]:
-            current = item["source"].read_bytes()
-            digest = hashlib.sha256(current).hexdigest()
-            stable.append({**item, "baseline": {**item["baseline"], "sha256": digest,
-                                                   "size": len(current)},
-                           "after_sha256": digest, "after_size": len(current)})
-        state, observed = deploy._classify_files([automatic, *stable], self.support)
-        self.assertEqual("upgrade_predecessor", state)
-        self.assertEqual(previous_hash, observed[0]["current_sha256"])
+    def test_table_driven_aggregate_classification(self):
+        cases = [
+            ("one stable", ["stable"], "already_installed"),
+            ("many stable", ["stable"] * 9, "already_installed"),
+            ("new catalog among stable targets", ["stable", "stable", "new"] + ["stable"] * 5,
+             "upgrade_predecessor"),
+            ("all predecessor", ["predecessor"] * 6, "upgrade_predecessor"),
+            ("all installed", ["installed"] * 6, "already_installed"),
+        ]
+        for label, dispositions, expected in cases:
+            with self.subTest(label=label):
+                state, _observed = self.classify_dispositions(dispositions)
+                self.assertEqual(expected, state)
 
-    def test_installed_prior_release_file_set_is_supported_upgrade_state(self):
-        """Reproduce the live 3e0e release target and unchanged companion files."""
-        self.write_after()
-        auto_path = self.paths[0]
-        api_profile = self.items[1]["baseline"]
-        installed_prior = {
-            "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
-            "size": 28178, "uid": api_profile["uid"], "gid": api_profile["gid"],
-            "mode": api_profile["mode"], "nlink": 1,
-            "acl_sha256": api_profile["acl_sha256"], "type": "regular",
-        }
-        older_prior = {
-            **installed_prior,
-            "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
-            "size": 27618,
-        }
-        auto = {**self.items[0], "baseline": installed_prior,
-                "supported_predecessors": [older_prior, installed_prior],
-                "allow_absent": True,
-                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
-        actual = {**installed_prior, "acl_text": "fixture ACL\n"}
-        self.support.capture_file = lambda path: actual if path == auto_path else self.capture(path)
-        stable = []
-        for item in self.items[1:]:
-            data = item["source"].read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            stable.append({**item, "baseline": {**item["baseline"],
-                                                   "sha256": digest, "size": len(data)},
-                           "after_sha256": digest, "after_size": len(data)})
+    def test_table_driven_partial_installations_are_rejected(self):
+        for dispositions in (["installed", "predecessor"],
+                             ["installed", "new", "stable"]):
+            with self.subTest(dispositions=dispositions), self.assertRaisesRegex(
+                    deploy.DeploymentError, "mixed target file set"):
+                self.classify_dispositions(dispositions)
 
-        state, observed = deploy._classify_files([auto, *stable], self.support)
-
-        self.assertEqual("upgrade_predecessor", state)
-        self.assertEqual(installed_prior["sha256"], observed[0]["current_sha256"])
-
-    def test_exact_e9_live_mixed_predecessor_file_set_is_supported(self):
-        """Reproduce the exact failed e9 set with root-captured safe profiles."""
-        paths = self.paths
+    def test_exact_dcd_five_target_predecessor_shape(self):
+        """The dcd release has three predecessors, one stable target, and one absent new module."""
         api_acl = "1ee74ae96020306a844213e0c3edb809eb71156ea17acfb2629c70b1ad5c6e89"
         leaderboard_acl = "46cfad4815f1a30e253add93c7dca649b84384c52e6a57319eaefc26a540a3d0"
-        previous = {
-            "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
-            "size": 28178, "uid": 1001, "gid": 33, "mode": "0664",
-            "nlink": 1, "acl_sha256": api_acl, "type": "regular",
-        }
-        auto = {**self.items[0], "baseline": previous,
-                "supported_predecessors": [
-                    {**previous,
-                     "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
-                     "size": 27618}, previous],
-                "allow_absent": True,
-                "after_sha256": "fe1d1b567eba44996bd2f6e75c9479961430052d3a8270271b5a408626577580",
-                "after_size": 29232,
-                "source_relative": "dev/challenges/service/challenge_automatic_intake.py"}
-        api_before = {"sha256": "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
-                      "size": 24095, "uid": 1001, "gid": 33, "mode": "0664",
-                      "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
-        api_after = {"sha256": "9b6ecdbc48dd4fe4c03714d341b6123a32d6f6facbeb5d1e6db71c117da1a6ff",
-                     "size": 25201, "uid": 1001, "gid": 33, "mode": "0664",
-                     "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
-        leaderboard = {"sha256": "a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c",
-                       "size": 24209, "uid": 1001, "gid": 33, "mode": "0755",
-                       "nlink": 1, "acl_sha256": leaderboard_acl, "type": "regular"}
-        nginx = {"sha256": "fac7b3d526ab5bd56a150612c170493f7aa9a77e774002dd64ae835df82270d8",
-                 "size": 1439, "uid": 1001, "gid": 33, "mode": "0664",
-                 "nlink": 1, "acl_sha256": api_acl, "type": "regular"}
-        live = dict(zip(paths, (previous, api_before, leaderboard, nginx)))
-        self.support.capture_file = lambda path: {**live[path], "acl_text": "fixture\n"}
-        api = {**self.items[1], "baseline": api_before,
-               "after_sha256": api_after["sha256"], "after_size": api_after["size"]}
-        stable = []
-        for item, profile in zip(self.items[2:], (leaderboard, nginx)):
-            stable.append({**item, "baseline": profile,
-                           "after_sha256": profile["sha256"], "after_size": profile["size"]})
+        api_profile = {"uid": 1001, "gid": 33, "mode": "0664", "nlink": 1,
+                       "acl_sha256": api_acl, "type": "regular"}
+        leaderboard_profile = {"uid": 1001, "gid": 33, "mode": "0755", "nlink": 1,
+                               "acl_sha256": leaderboard_acl, "type": "regular"}
+        facts = [
+            ("dev/challenges/service/challenge_automatic_intake.py",
+             "challenge_automatic_intake.py", "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
+             28178, api_profile, "predecessor"),
+            ("dev/challenges/service/challenge_intake_api.py", "challenge_intake_api.py",
+             "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
+             24095, api_profile, "predecessor"),
+            ("dev/challenges/service/plugin_tracking_catalog.py", "plugin_tracking_catalog.py",
+             None, None, None, "new"),
+            ("dev/challenges/service/leaderboard_challenge_ingest.py", "leaderboard_challenge_ingest.py",
+             "a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c",
+             24209, leaderboard_profile, "stable"),
+            ("dev/challenges/integration/routes/nocturne-challenge-intake.location.conf", "routes.conf",
+             "fac7b3d526ab5bd56a150612c170493f7aa9a77e774002dd64ae835df82270d8",
+             1439, api_profile, "predecessor"),
+        ]
+        live = {}
+        items = []
+        for index, (source_relative, name, before_hash, before_size, profile, state) in enumerate(facts):
+            target = self.root / name
+            source = TREE.parents[1] / source_relative
+            desired = source.read_bytes()
+            after_hash = hashlib.sha256(desired).hexdigest()
+            if state == "new":
+                baseline = None
+            else:
+                baseline = {**profile, "sha256": before_hash, "size": before_size}
+                if state == "predecessor":
+                    live[target] = {**baseline, "acl_text": "fixture ACL\n"}
+                else:
+                    # Stable targets retain their exact manifest bytes and metadata.
+                    self.assertEqual(before_hash, after_hash)
+                    self.assertEqual(before_size, len(desired))
+                    live[target] = {**baseline, "acl_text": "fixture ACL\n"}
+            items.append({"source_relative": source_relative, "source": source, "target": target,
+                          "after_sha256": after_hash, "after_size": len(desired),
+                          "baseline": baseline, "predecessor_kind": "absent" if baseline is None else "manifest",
+                          "allow_absent": baseline is None})
+        # The automatic-intake target's older supported hashes remain explicitly pinned.
+        items[0]["predecessor_kind"] = "absent_or_previous"
+        items[0]["allow_absent"] = True
+        items[0]["supported_predecessors"] = [items[0]["baseline"], {
+            **items[0]["baseline"],
+            "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+            "size": 27618,
+        }]
+        def capture(path):
+            if path not in live:
+                raise FileNotFoundError(path)
+            return live[path]
 
-        state, observed = deploy._classify_files([auto, api, *stable], self.support)
+        support = SimpleNamespace(_safe_parent=lambda _path: None, capture_file=capture)
+        state, observed = deploy._classify_files(items, support)
         self.assertEqual("upgrade_predecessor", state)
-        self.assertEqual(previous["sha256"], observed[0]["current_sha256"])
-        self.assertEqual(api_before["sha256"], observed[1]["current_sha256"])
-
-        # A companion already at the new API source is not this pinned
-        # predecessor shape and must still be rejected as a mixed install.
-        live[paths[1]] = api_after
-        with self.assertRaisesRegex(deploy.DeploymentError, "mixed target file set"):
-            deploy._classify_files([auto, api, *stable], self.support)
+        self.assertEqual(5, len(observed))
+        self.assertIsNone(observed[2]["current_sha256"])
 
     def test_installed_prior_release_file_set_can_be_captured_for_backup(self):
         """Exercise a later exact-pinned predecessor through backup capture."""
@@ -369,7 +412,7 @@ class TargetClassificationTests(unittest.TestCase):
         item["after_size"] = item["baseline"]["size"]
         self.paths[1].write_bytes(self.hashes[self.paths[1]][0])
         state, _ = deploy._classify_files([self.items[0], item, *self.items[2:]], self.support)
-        self.assertEqual("installed", state)
+        self.assertEqual("already_installed", state)
 
 
 class NewFileMetadataTests(unittest.TestCase):
