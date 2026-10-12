@@ -92,6 +92,10 @@ final class ChallengeCompletionCapture
 	{
 		String id = service.submit(observation, result ->
 		{
+			if (result.httpStatus >= 400)
+				diagnostic.accept("automatic Challenge observation response http_status=" + result.httpStatus
+					+ " state=" + result.state.name().toLowerCase(java.util.Locale.ROOT)
+					+ " reason=" + (result.reason == null ? "none" : result.reason));
 			switch (result.state)
 			{
 				case ACCEPTED:
@@ -101,7 +105,9 @@ final class ChallengeCompletionCapture
 				case SERVER_FAILURE: feedback.accept("Nocturne could not confirm this completion. Please try again later."); break;
 				case RATE_LIMITED: feedback.accept("Nocturne is receiving reports too quickly. This completion was not confirmed."); break;
 				case INVALID: case CONFLICT: case PROTOCOL_ERROR:
-					if (diagnostics) diagnostic.accept("automatic Challenge observation rejected category=" + result.state.name().toLowerCase(java.util.Locale.ROOT));
+					if (diagnostics && result.httpStatus < 400)
+						diagnostic.accept("automatic Challenge observation rejected category="
+							+ result.state.name().toLowerCase(java.util.Locale.ROOT));
 					break;
 				case IGNORED: break;
 				default: break;

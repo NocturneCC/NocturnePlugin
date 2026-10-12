@@ -412,8 +412,8 @@
       "extension_reason": "Adds repository-owned fixtures for automatic observation validation, persistence, idempotency, and projection.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_challenge_automatic_intake.py",
-      "sha256": "a3d58772bc9288b67b6359affee8c617d996a3efbc90b44aae3f65ab8210709d",
-      "size": 26775,
+      "sha256": "6d06fb5d9054ed573511e84718482d065dbf4e5251f388e71dc8a41f032dc410",
+      "size": 29625,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"

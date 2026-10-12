@@ -15,6 +15,14 @@ public class ChallengeObservationResponseTest
 		for (String reason : new String[]{"manual_only", "unconfigured", "disabled"})
 			assertEquals(ChallengeObservationResponse.State.IGNORED, parse(200, "{\"state\":\"ignored\",\"reason\":\"" + reason + "\"}").state);
 		assertEquals(ChallengeObservationResponse.State.INVALID, parse(422, "{\"state\":\"invalid\",\"reason\":\"policy\"}").state);
+		ChallengeObservationResponse rejected = parse(422,
+			"{\"state\":\"invalid\",\"reason\":\"reporter_not_eligible\"}");
+		assertEquals(422, rejected.httpStatus);
+		assertEquals("reporter_not_eligible", rejected.reason);
+		ChallengeObservationResponse unsafeReason = parse(422,
+			"{\"state\":\"invalid\",\"reason\":\"secret-token-value\"}");
+		assertEquals(422, unsafeReason.httpStatus);
+		assertEquals("unrecognized", unsafeReason.reason);
 		assertEquals(ChallengeObservationResponse.State.CONFLICT, parse(409, "{\"state\":\"idempotency_conflict\"}").state);
 		assertEquals(ChallengeObservationResponse.State.RATE_LIMITED, parse(429, "{\"state\":\"rate_limited\"}").state);
 		assertEquals(ChallengeObservationResponse.State.SERVER_FAILURE, parse(503, "{\"state\":\"server_failure\"}").state);

@@ -119,6 +119,8 @@ class AutomaticObservationTests(unittest.TestCase):
                 normalized = "".join(ch.lower() for ch in name if ch.isalnum())
                 conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(?,?,?,'active')",
                              (member_id, name, normalized))
+            conn.execute("INSERT INTO members(member_id,rsn,normalized_rsn,status) VALUES(7,?,?, 'active')",
+                         ("Doctor Arden", "doctorarden"))
         self.app = create_app({
             "TESTING": True, "CHALLENGES_DB": self.challenge_path,
             "MEMBERS_DB": self.members_path, "INTAKE_TOKEN": "test-token-never-returned",
@@ -266,6 +268,52 @@ class AutomaticObservationTests(unittest.TestCase):
         ))
         self.assertEqual(participant, [("primaryone",)])
         self.assertEqual(submission, ("phosanis", 358200, "runelite_automatic"))
+
+    def test_java_serialized_pnm_request_is_accepted_and_retry_is_idempotent(self):
+        fixture = Path(__file__).resolve().parents[4] / "src/test/resources/pnm-automatic-observation.json"
+        request_body = fixture.read_bytes()
+        java_payload = json.loads(request_body)
+        self.assertRegex(java_payload["event_id"],
+                         r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        self.assertEqual(java_payload["reporter_rsn"], "Doctor Arden")
+        self.assertEqual(java_payload["roster"], ["Doctor Arden"])
+        self.assertEqual(java_payload["overall_time_ms"], 308400)
+        self.assertNotIn("room_time_ms", java_payload)
+        self.assertNotIn("pb", java_payload)
+        self.assertNotIn("config_version_id", java_payload)
+        self.assertEqual(java_payload["plugin_version"], "0.3.2")
+        response = self.client.post(
+            "/api/challenges/intake/observations", data=request_body,
+            content_type="application/json; charset=utf-8",
+        )
+        self.assertEqual((response.status_code, response.get_json()), (201, {"state": "accepted"}))
+        with self.db(self.challenge_path) as conn:
+            observation = conn.execute(
+                """SELECT activity_key,mode_key,reporter_normalized_rsn,overall_time_ms,
+                          room_time_ms,selected_timing_scope,selected_duration_ms,observed_group_size,
+                          occurred_at,plugin_version,config_version_id
+                     FROM challenge_automatic_observations"""
+            ).fetchone()
+            active_version = conn.execute(
+                "SELECT config_version_id FROM challenge_config_versions WHERE status='active'"
+            ).fetchone()[0]
+            participants = conn.execute(
+                "SELECT normalized_rsn FROM challenge_automatic_observation_participants"
+            ).fetchall()
+            result_value = conn.execute("SELECT boss_key,metric_value FROM challenge_submissions").fetchone()
+        self.assertEqual(observation, (
+            "phosanis_nightmare", "phosani_nightmare", "doctorarden", 308400,
+            None, "overall", 308400, 1, "2026-10-12T19:45:17.000Z", "0.3.2", active_version,
+        ))
+        self.assertEqual(participants, [("doctorarden",)])
+        self.assertEqual(result_value, ("phosanis", 308400))
+
+        retry = self.client.post(
+            "/api/challenges/intake/observations", data=request_body,
+            content_type="application/json; charset=utf-8",
+        )
+        self.assertEqual((retry.status_code, retry.get_json()), (200, {"state": "duplicate"}))
+        self.assertEqual(self.counts(), (1, 1, 1))
 
     def test_phosani_nightmare_manual_unconfigured_and_mismatched_scope_are_not_accepted(self):
         self.publish_policy("phosanis", "overall", "manual_only")

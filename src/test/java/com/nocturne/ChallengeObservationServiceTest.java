@@ -2,6 +2,8 @@ package com.nocturne;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -11,6 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
@@ -119,6 +122,73 @@ public class ChallengeObservationServiceTest
 			assertEquals(1, callbacks.get());
 		}
 		finally { releaseRequest.countDown(); service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void javaRequestBuilderMatchesSharedCrossLanguagePnmFixture() throws Exception
+	{
+		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of("Doctor Arden"), 1,
+			GroupSnapshot.Status.MATCHED, "solo encounter");
+		ChallengeObservation observation = ChallengeObservation.createPhosani(308_400L, solo,
+			"Doctor Arden", Instant.parse("2026-10-12T19:45:17Z"),
+			"fixture-session|phosanis|doctor arden|fixture-encounter-1");
+		assertNotNull(observation);
+		String expected;
+		try (InputStream fixture = getClass().getResourceAsStream("/pnm-automatic-observation.json"))
+		{
+			assertNotNull(fixture);
+			expected = new String(fixture.readAllBytes(), StandardCharsets.UTF_8).trim();
+		}
+		AtomicReference<String> capturedBody = new AtomicReference<>();
+		AtomicReference<String> contentType = new AtomicReference<>();
+		CountDownLatch complete = new CountDownLatch(1);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			contentType.set(chain.request().body().contentType().toString());
+			okio.Buffer requestBody = new okio.Buffer();
+			chain.request().body().writeTo(requestBody);
+			capturedBody.set(requestBody.readUtf8());
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			assertNotNull(service.submit(observation, result -> complete.countDown()));
+			assertTrue(complete.await(3, TimeUnit.SECONDS));
+			assertEquals("application/json; charset=utf-8", contentType.get());
+			assertEquals(expected, capturedBody.get());
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void validationResponseStatusAndAllowlistedReasonAreLoggedWithoutEnablingDiagnostics() throws Exception
+	{
+		AtomicLong clock = new AtomicLong(1_000_000_000L);
+		CountDownLatch logged = new CountDownLatch(1);
+		AtomicReference<String> diagnostic = new AtomicReference<>();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+			response(chain.request(), 422, "{\"state\":\"invalid\",\"reason\":\"reporter_not_eligible\"}")).build(),
+			new Gson(), scheduler);
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), service,
+			message -> fail("validation response does not add user-facing clutter"), message ->
+			{
+				diagnostic.set(message);
+				logged.countDown();
+			}, clock::get);
+		try
+		{
+			Instant now = Instant.parse("2026-10-12T19:45:17Z");
+			capture.onBossCompletion("Phosani's Nightmare", "Doctor Arden", "session", 10, true, false, now);
+			clock.set(1_100_000_000L);
+			capture.onMessage("GAMEMESSAGE", "Fight duration: 5:08.40. Personal best: 4:48.60",
+				null, "Doctor Arden", true, false, now, 11);
+			clock.set(2_700_000_001L);
+			capture.onTick(true, false, now);
+			assertTrue(logged.await(3, TimeUnit.SECONDS));
+			assertEquals("automatic Challenge observation response http_status=422 state=invalid reason=reporter_not_eligible",
+				diagnostic.get());
+		}
+		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
 	}
 
 	@Test public void encounterScopedDedupAllowsIdenticalSecondPnmKillAndStaleChatDoesNotResubmit() throws Exception
