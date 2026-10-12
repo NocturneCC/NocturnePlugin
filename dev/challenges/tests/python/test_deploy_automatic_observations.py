@@ -249,6 +249,57 @@ class TargetClassificationTests(unittest.TestCase):
         with self.assertRaisesRegex(deploy.DeploymentError, "unsupported live file content or metadata drift"):
             deploy._classify_files([item, *others], self.support)
 
+    def test_3cf99e7_installed_predecessor_file_set_is_supported(self):
+        """Pin the committed deployment's automatic/API predecessor pair."""
+        self.write_before()
+        items = [dict(item) for item in self.items]
+        auto_path, api_path = items[0]["target"], items[1]["target"]
+        api_metadata = {key: items[1]["baseline"].get(key, "regular" if key == "type" else None)
+                        for key in ("uid", "gid", "mode", "nlink", "acl_sha256", "type")}
+        auto_before = {
+            **api_metadata,
+            "sha256": "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3",
+            "size": 28178,
+        }
+        installed_auto = {
+            **api_metadata,
+            "sha256": "fe1d1b567eba44996bd2f6e75c9479961430052d3a8270271b5a408626577580",
+            "size": 29232,
+        }
+        items[0].update({
+            "baseline": auto_before,
+            "predecessor_kind": "absent_or_previous",
+            "allow_absent": True,
+            "source_relative": "dev/challenges/service/challenge_automatic_intake.py",
+            "supported_predecessors": [
+                auto_before,
+                {**api_metadata,
+                 "sha256": "9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03",
+                 "size": 27618},
+                installed_auto,
+            ],
+        })
+        items[1]["baseline"] = {
+            **api_metadata,
+            "sha256": "9b6ecdbc48dd4fe4c03714d341b6123a32d6f6facbeb5d1e6db71c117da1a6ff",
+            "size": 25201,
+        }
+        items[1]["source_relative"] = "dev/challenges/service/challenge_intake_api.py"
+        original_capture = self.support.capture_file
+
+        def capture(path):
+            if path == auto_path:
+                return {**installed_auto, "acl_text": "fixture ACL\n"}
+            if path == api_path:
+                return {**items[1]["baseline"], "acl_text": "fixture ACL\n"}
+            return original_capture(path)
+
+        self.support.capture_file = capture
+        state, observed = deploy._classify_files(items, self.support)
+        self.assertEqual("upgrade_predecessor", state)
+        self.assertEqual(installed_auto["sha256"], observed[0]["current_sha256"])
+        self.assertEqual(items[1]["baseline"]["sha256"], observed[1]["current_sha256"])
+
     def test_table_driven_aggregate_classification(self):
         cases = [
             ("one stable", ["stable"], "already_installed"),

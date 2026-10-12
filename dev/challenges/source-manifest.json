@@ -110,8 +110,8 @@
       "extension_reason": "Adds a repository-owned dry-run-first, immutable-release-bound installer with transactional database backup, WAL quiescence, rollback, and non-mutating verification.",
       "normalization": null,
       "path": "dev/challenges/deploy_automatic_observations.py",
-      "sha256": "0a267efccf6b7b13702aa6aa34e2a9e1a7182fc1564bd041ca20058d0b0a0e68",
-      "size": 70022,
+      "sha256": "fbcf755ef87aca292a612ab6da844edb49419d4bb3e3e517fa60056042a246b7",
+      "size": 70178,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -498,8 +498,8 @@
       "extension_reason": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
       "normalization": null,
       "path": "dev/challenges/tests/python/test_deploy_automatic_observations.py",
-      "sha256": "e317775012a2e2eae64eb3a643a9408ab6ff25c819b6a949f6e8a176e8417934",
-      "size": 48740,
+      "sha256": "4127c4146f06ff208af3a36283f610c724e052ab69fd9f4e741e35ee574af05b",
+      "size": 51066,
       "source": null,
       "source_relationship": "repository_owned_extension",
       "type": "regular"
@@ -586,8 +586,8 @@
       "executable": false,
       "normalization": null,
       "path": "dev/challenges/verify_automatic_observation_scope.py",
-      "sha256": "00f6681f43db3cad03fac85d6602b7d8f9241734c76cdedb6932484aac28bb62",
-      "size": 15331,
+      "sha256": "f4e788c46d811e3502a0664d96367c78102e29621e70e47624cf1f4014688da0",
+      "size": 15423,
       "source": null,
       "type": "regular"
     },
@@ -1911,8 +1911,8 @@
       "mode": "0664",
       "nlink": 1,
       "path": "/srv/projects/nocturne-services/challenge_intake_api.py",
-      "sha256": "b7f839af4197e867b18149c0d36e820374682881e05e966c916f7fb68f1601f0",
-      "size": 24095,
+      "sha256": "9b6ecdbc48dd4fe4c03714d341b6123a32d6f6facbeb5d1e6db71c117da1a6ff",
+      "size": 25201,
       "type": "regular",
       "uid": 1001
     },

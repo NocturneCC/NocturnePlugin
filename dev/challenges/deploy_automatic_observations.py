@@ -40,6 +40,8 @@ SCHEMA_TABLES = ("challenge_automatic_observations", "challenge_automatic_observ
 TRACKING_TABLES = ("plugin_tracking_observations", "plugin_tracking_observation_participants")
 LEGACY_AUTOMATIC_INTAKE_PREDECESSORS = (
     ("9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03", 27618),
+    # Installed by the committed 3cf99e7 automatic-observation deployment.
+    ("fe1d1b567eba44996bd2f6e75c9479961430052d3a8270271b5a408626577580", 29232),
 )
 # Exact source installed by the immediately preceding published automatic-
 # observation release. Keep the older original predecessor explicitly
