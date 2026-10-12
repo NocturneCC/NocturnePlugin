@@ -10,14 +10,13 @@ final class ChallengeCompletionCorrelator
 {
 	static final long WINDOW_NANOS = 20_000_000_000L;
 	static final long OPTIONAL_COUNT_GRACE_NANOS = 2_000_000_000L;
-	private static final int MAX_FINGERPRINTS = 256;
-	private static final long FINGERPRINT_TTL_NANOS = 86_400_000_000_000L;
+	private static final int MAX_RESOLVED_CONTEXTS = 8;
 	private final ChallengeCompletionParser parser;
 	private final LongSupplier nanoTime;
 	private Partial partial;
 	private long blockedRunEpoch = Long.MIN_VALUE;
 	private ChallengeCompletionParser.Family blockedFamily;
-	private final LinkedHashMap<String, Long> sent = new LinkedHashMap<>();
+	private final LinkedHashMap<String, Long> resolvedContexts = new LinkedHashMap<>();
 
 	ChallengeCompletionCorrelator() { this(new ChallengeCompletionParser(), System::nanoTime); }
 	ChallengeCompletionCorrelator(ChallengeCompletionParser parser, LongSupplier nanoTime)
@@ -30,6 +29,7 @@ final class ChallengeCompletionCorrelator
 	{
 		long current = nanoTime.getAsLong();
 		prune(current);
+		if (evidence != null && isResolved(evidence, current)) return null;
 		if (partial != null && (current - partial.started > WINDOW_NANOS
 			|| evidence == null || partial.runEpoch != evidence.runEpoch || !compatible(partial.family, evidence.raid))) partial = null;
 		ChallengeCompletionParser.Message message = parser.parse(raw);
@@ -87,6 +87,7 @@ final class ChallengeCompletionCorrelator
 	{
 		long current = nanoTime.getAsLong();
 		prune(current);
+		if (evidence != null && isResolved(evidence, current)) return null;
 		if (partial == null || evidence == null || partial.runEpoch != evidence.runEpoch
 			|| !compatible(partial.family, evidence.raid) || current - partial.started > WINDOW_NANOS)
 		{
@@ -97,9 +98,9 @@ final class ChallengeCompletionCorrelator
 	}
 
 	void reset() { partial = null; blockedRunEpoch = Long.MIN_VALUE; blockedFamily = null; }
-	void clear() { reset(); sent.clear(); }
+	void clear() { reset(); resolvedContexts.clear(); }
 	void clearPartial() { partial = null; }
-	int rememberedCount() { return sent.size(); }
+	int rememberedCount() { return resolvedContexts.size(); }
 
 	private ChallengeObservation assemble(Partial p, RaidCompletionEvidence evidence, String reporter, Instant now)
 	{
@@ -136,12 +137,11 @@ final class ChallengeCompletionCorrelator
 		}
 		if (mode == null) return null;
 		ChallengeObservation result = ChallengeObservation.create(activity, mode, p.room, p.overall,
-			p.count, evidence.roster, reporter, now);
+			p.count, evidence.roster, reporter, now, "raid|" + p.family.name() + "|" + p.runEpoch);
 		if (result == null) return null;
-		String fingerprint = result.fingerprint();
-		if (sent.containsKey(fingerprint)) { partial = null; return null; }
-		sent.put(fingerprint, nanoTime.getAsLong());
-		while (sent.size() > MAX_FINGERPRINTS) sent.remove(sent.keySet().iterator().next());
+		resolvedContexts.put(contextKey(p.family, p.runEpoch), nanoTime.getAsLong());
+		while (resolvedContexts.size() > MAX_RESOLVED_CONTEXTS)
+			resolvedContexts.remove(resolvedContexts.keySet().iterator().next());
 		partial = null;
 		return result;
 	}
@@ -170,7 +170,26 @@ final class ChallengeCompletionCorrelator
 	private void prune(long now)
 	{
 		if (partial != null && now - partial.started > WINDOW_NANOS) partial = null;
-		sent.entrySet().removeIf(e -> now - e.getValue() > FINGERPRINT_TTL_NANOS);
+		resolvedContexts.entrySet().removeIf(e -> now - e.getValue() > WINDOW_NANOS);
+	}
+	private boolean isResolved(RaidCompletionEvidence evidence, long now)
+	{
+		ChallengeCompletionParser.Family family = familyFor(evidence.raid);
+		return family != null && resolvedContexts.containsKey(contextKey(family, evidence.runEpoch));
+	}
+	private static String contextKey(ChallengeCompletionParser.Family family, long runEpoch)
+	{
+		return family.name() + "|" + runEpoch;
+	}
+	private static ChallengeCompletionParser.Family familyFor(RaidType raid)
+	{
+		switch (raid)
+		{
+			case TOB: return ChallengeCompletionParser.Family.TOB;
+			case TOA: return ChallengeCompletionParser.Family.TOA;
+			case COX: return ChallengeCompletionParser.Family.COX;
+			default: return null;
+		}
 	}
 	private static boolean compatible(ChallengeCompletionParser.Family family, RaidType type)
 	{

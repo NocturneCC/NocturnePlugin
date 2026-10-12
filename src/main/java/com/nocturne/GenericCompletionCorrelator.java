@@ -13,11 +13,13 @@ final class GenericCompletionCorrelator
 	static final long BEFORE_WINDOW_NANOS = 8_000_000_000L;
 	static final long AFTER_WINDOW_NANOS = 8_000_000_000L;
 	static final long QUIET_WINDOW_NANOS = 1_500_000_000L;
+	static final long RESOLVED_CONTEXT_TTL_NANOS = 30_000_000_000L;
 	static final int MAX_CONTEXTS = 8;
+	static final int MAX_RESOLVED_CONTEXTS = 32;
 	private final CompletionDurationParser parser = new CompletionDurationParser();
 	private final CompletionMessageBuffer buffer = new CompletionMessageBuffer();
 	private final LinkedHashMap<String, Pending> pending = new LinkedHashMap<>();
-	private final LinkedHashMap<String, Boolean> resolved = new LinkedHashMap<>();
+	private final LinkedHashMap<String, Long> resolved = new LinkedHashMap<>();
 	private final java.util.Map<Long, String> messageOwners = new LinkedHashMap<>();
 	private final Set<Long> consumedMessages = new LinkedHashSet<>();
 	private String lastDiagnosticReason;
@@ -25,6 +27,7 @@ final class GenericCompletionCorrelator
 	synchronized ChallengeObservation onMessage(String category, String text, long gameCycle,
 		long nowNanos, Instant now)
 	{
+		pruneResolved(nowNanos);
 		CompletionMessageBuffer.Entry entry = buffer.offer(category, text, gameCycle, nowNanos, parser);
 		if (entry != null) assign(entry);
 		return resolve(nowNanos, now);
@@ -32,6 +35,7 @@ final class GenericCompletionCorrelator
 
 	synchronized ChallengeObservation onCompletion(BossCompletionContext context, long nowNanos, Instant now)
 	{
+		pruneResolved(nowNanos);
 		if (context == null || resolved.containsKey(context.encounterIdentity)
 			|| pending.containsKey(context.encounterIdentity)) return null;
 		pending.put(context.encounterIdentity, new Pending(context));
@@ -152,8 +156,8 @@ final class GenericCompletionCorrelator
 				lastDiagnosticReason = "observation_invalid";
 				continue;
 			}
-			resolved.put(state.context.encounterIdentity, Boolean.TRUE);
-			while (resolved.size() > 256) resolved.remove(resolved.keySet().iterator().next());
+			resolved.put(state.context.encounterIdentity, nowNanos);
+			while (resolved.size() > MAX_RESOLVED_CONTEXTS) resolved.remove(resolved.keySet().iterator().next());
 			lastDiagnosticReason = null;
 			return observation;
 		}
@@ -179,6 +183,11 @@ final class GenericCompletionCorrelator
 	{
 		for (Pending state : new ArrayList<>(pending.values()))
 			if (nowNanos - state.context.completionNanos > AFTER_WINDOW_NANOS) remove(state.context.encounterIdentity);
+	}
+
+	private void pruneResolved(long nowNanos)
+	{
+		resolved.entrySet().removeIf(entry -> nowNanos - entry.getValue() > RESOLVED_CONTEXT_TTL_NANOS);
 	}
 
 	private static final class Pending

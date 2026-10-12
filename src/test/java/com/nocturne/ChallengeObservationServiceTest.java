@@ -10,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
@@ -118,6 +119,72 @@ public class ChallengeObservationServiceTest
 			assertEquals(1, callbacks.get());
 		}
 		finally { releaseRequest.countDown(); service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void encounterScopedDedupAllowsIdenticalSecondPnmKillAndStaleChatDoesNotResubmit() throws Exception
+	{
+		AtomicLong clock = new AtomicLong(1_000_000_000L);
+		AtomicInteger calls = new AtomicInteger();
+		List<String> ids = new CopyOnWriteArrayList<>();
+		CountDownLatch completed = new CountDownLatch(2);
+		CountDownLatch firstRequest = new CountDownLatch(1);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			assertEquals(ChallengeObservationService.ENDPOINT, chain.request().url().toString());
+			okio.Buffer requestBody = new okio.Buffer();
+			chain.request().body().writeTo(requestBody);
+			JsonObject payload = new Gson().fromJson(requestBody.readUtf8(), JsonObject.class);
+			assertEquals(358_200L, payload.get("overall_time_ms").getAsLong());
+			assertEquals(1, payload.get("group_size").getAsInt());
+			ids.add(payload.get("event_id").getAsString());
+			calls.incrementAndGet();
+			firstRequest.countDown();
+			completed.countDown();
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(
+			new ChallengeCompletionCorrelator(), service, message -> { }, message -> fail("diagnostics disabled"), clock::get);
+		try
+		{
+			Instant now = Instant.parse("2026-10-12T12:00:00Z");
+			clock.set(900_000_000L);
+			capture.onMessage("GAMEMESSAGE", "Team size: Solo Fight duration: 5:58.20. Personal best: 4:48.60",
+				null, "Local Name", true, false, now, 9);
+			clock.set(1_000_000_000L);
+			capture.onBossCompletion("Phosani's Nightmare", "Local Name", "session", 10, true, false, now);
+			capture.onBossCompletion("Phosani's Nightmare", "Local Name", "session", 10, true, false, now);
+			clock.set(1_400_000_000L);
+			capture.onMessage("GAMEMESSAGE", "Team size: Solo Fight duration: 5:58.20. Personal best: 4:48.60",
+				null, "Local Name", true, false, now, 11);
+			clock.set(2_600_000_001L);
+			capture.onTick(true, false, now);
+			assertTrue(firstRequest.await(3, TimeUnit.SECONDS));
+
+			// A replay without a new encounter, followed by the duplicate loot trigger,
+			// must not resurrect the completed context.
+			clock.set(3_000_000_000L);
+			capture.onMessage("GAMEMESSAGE", "Team size: Solo Fight duration: 5:58.20. Personal best: 4:48.60",
+				null, "Local Name", true, false, now, 12);
+			capture.onBossCompletion("Phosani's Nightmare", "Local Name", "session", 10, true, false, now);
+			clock.set(4_600_000_001L);
+			capture.onTick(true, false, now);
+			assertEquals(1, calls.get());
+
+			// Same reporter, roster, boss, and duration, but a distinct encounter identity.
+			clock.set(8_000_000_000L);
+			capture.onBossCompletion("Phosani's Nightmare", "Local Name", "session", 20, true, false, now);
+			clock.set(8_100_000_000L);
+			capture.onMessage("GAMEMESSAGE", "Team size: Solo Fight duration: 5:58.20. Personal best: 4:48.60",
+				null, "Local Name", true, false, now, 21);
+			clock.set(9_700_000_001L);
+			capture.onTick(true, false, now);
+			assertTrue(completed.await(3, TimeUnit.SECONDS));
+			assertEquals(2, calls.get());
+			assertEquals(2, ids.size());
+			assertNotEquals(ids.get(0), ids.get(1));
+		}
+		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
 	}
 
 	@Test public void shutdownCancelsPendingCall()

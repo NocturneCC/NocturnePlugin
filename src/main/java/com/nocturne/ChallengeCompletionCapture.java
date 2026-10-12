@@ -2,6 +2,7 @@ package com.nocturne;
 
 import java.time.Instant;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /** Consent gate and user-facing outcome policy, kept separate from parsing and transport.
  * Active published capture policy is enforced by every POST; the v1 server contract has no
@@ -14,14 +15,22 @@ final class ChallengeCompletionCapture
 	private final ChallengeObservationService service;
 	private final Consumer<String> feedback;
 	private final Consumer<String> diagnostic;
+	private final LongSupplier nanoTime;
 
 	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
 		Consumer<String> feedback, Consumer<String> diagnostic)
+	{
+		this(correlator, service, feedback, diagnostic, System::nanoTime);
+	}
+
+	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
+		Consumer<String> feedback, Consumer<String> diagnostic, LongSupplier nanoTime)
 	{
 		this.correlator = correlator;
 		this.service = service;
 		this.feedback = feedback;
 		this.diagnostic = diagnostic;
+		this.nanoTime = nanoTime;
 	}
 
 	void onMessage(String text, RaidCompletionEvidence evidence, String reporter, boolean consent,
@@ -35,7 +44,7 @@ final class ChallengeCompletionCapture
 	{
 		if (!consent) { clearPartial(); return; }
 		ChallengeObservation generic = genericCorrelator.onMessage(category, text, gameCycle,
-			System.nanoTime(), now);
+		nanoTime.getAsLong(), now);
 		if (generic != null) submit(generic, diagnostics);
 		ChallengeObservation observation = correlator.accept(text, evidence, reporter, now);
 		if (observation != null) submit(observation, diagnostics);
@@ -45,9 +54,10 @@ final class ChallengeCompletionCapture
 		boolean diagnostics, Instant now)
 	{
 		if (!consent) { clearPartial(); return; }
+		long completionNanos = nanoTime.getAsLong();
 		BossCompletionContext context = BossCompletionContext.fromNpcLoot(source, reporter, clientSessionId,
-			gameCycle, System.nanoTime(), now);
-		ChallengeObservation observation = genericCorrelator.onCompletion(context, System.nanoTime(), now);
+			gameCycle, completionNanos, now);
+		ChallengeObservation observation = genericCorrelator.onCompletion(context, completionNanos, now);
 		if (observation != null) submit(observation, diagnostics);
 	}
 
@@ -56,14 +66,14 @@ final class ChallengeCompletionCapture
 	{
 		if (!consent) { clearPartial(); return; }
 		ChallengeObservation observation = genericCorrelator.onMessage(category, text, gameCycle,
-			System.nanoTime(), now);
+			nanoTime.getAsLong(), now);
 		if (observation != null) submit(observation, diagnostics);
 	}
 
 	void onTick(boolean consent, boolean diagnostics, Instant now)
 	{
 		if (!consent) { clearPartial(); return; }
-		ChallengeObservation observation = genericCorrelator.poll(System.nanoTime(), now);
+		ChallengeObservation observation = genericCorrelator.poll(nanoTime.getAsLong(), now);
 		if (observation != null) submit(observation, diagnostics);
 	}
 

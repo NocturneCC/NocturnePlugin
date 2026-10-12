@@ -132,4 +132,41 @@ public class GenericCompletionCorrelatorTest
 		assertNotEquals(accepted.eventId, replay.eventId);
 		assertEquals(accepted.fingerprint(), replay.fingerprint());
 	}
+
+	@Test public void identicalPnmTimesInDistinctEncounterContextsRemainDistinct()
+	{
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		BossCompletionContext firstContext = BossCompletionContext.fromNpcLoot(
+			"Phosani's Nightmare", "Local Name", "same-session", 101, 1_000_000_000L, NOW);
+		BossCompletionContext secondContext = BossCompletionContext.fromNpcLoot(
+			"Phosani's Nightmare", "Local Name", "same-session", 202, 5_000_000_000L, NOW);
+		ChallengeObservation first = complete(correlator, firstContext, "5:58.20");
+		ChallengeObservation second = complete(correlator, secondContext, "5:58.20");
+
+		assertEquals(first.fingerprint(), second.fingerprint());
+		assertEquals(358_200L, first.overallTimeMillis.longValue());
+		assertEquals(358_200L, second.overallTimeMillis.longValue());
+		assertNotEquals(first.eventId, second.eventId);
+	}
+
+	@Test public void staleReplayedChatWithoutANewEncounterContextCannotCreateObservation()
+	{
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		correlator.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20", 1, 1_000_000_000L, NOW);
+		assertNull(correlator.poll(2_600_000_001L, NOW));
+		assertNull(correlator.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20", 2,
+			3_000_000_000L, NOW));
+		assertEquals(0, correlator.pendingContexts());
+	}
+
+	private static ChallengeObservation complete(GenericCompletionCorrelator correlator,
+		BossCompletionContext context, String duration)
+	{
+		correlator.onCompletion(context, context.completionNanos, NOW);
+		correlator.onMessage("GAMEMESSAGE", "Fight duration: " + duration, context.gameCycle + 1,
+			context.completionNanos + 100_000_000L, NOW);
+		ChallengeObservation result = correlator.poll(context.completionNanos + 1_700_000_001L, NOW);
+		assertNotNull(result);
+		return result;
+	}
 }

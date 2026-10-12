@@ -28,6 +28,25 @@ public class ChallengeCompletionCorrelatorTest
 		assertEquals(Integer.valueOf(42), o.completionCount);
 		assertNull(c.accept("Theatre of Blood completion time: 15:01.20", e, "Local Name", NOW));
 	}
+	@Test public void identicalRaidResultsDeduplicateOnlyWithinTheirRunEpoch()
+	{
+		ChallengeCompletionCorrelator c = new ChallengeCompletionCorrelator();
+		RaidCompletionEvidence firstEvidence = evidence(RaidType.TOB, 101, false, true, "Local Name", "Partner Name");
+		RaidCompletionEvidence secondEvidence = evidence(RaidType.TOB, 202, false, true, "Local Name", "Partner Name");
+		ChallengeObservation first = completeRegularTob(c, firstEvidence);
+		assertNull(c.accept("Theatre of Blood completion time: 15:01.20", firstEvidence, "Local Name", NOW));
+		ChallengeObservation second = completeRegularTob(c, secondEvidence);
+		assertEquals(first.fingerprint(), second.fingerprint());
+		assertNotEquals(first.eventId, second.eventId);
+	}
+	private static ChallengeObservation completeRegularTob(ChallengeCompletionCorrelator c, RaidCompletionEvidence e)
+	{
+		c.accept("Theatre of Blood total completion time: 28:34.07", e, "Local Name", NOW);
+		c.accept("Theatre of Blood completion time: 15:01.20", e, "Local Name", NOW);
+		ChallengeObservation result = c.accept("Your completed Theatre of Blood count is: 42", e, "Local Name", NOW);
+		assertNotNull(result);
+		return result;
+	}
 	@Test public void hmtNeedsHardConfirmationAndSelectsOverall()
 	{
 		ChallengeCompletionCorrelator c = new ChallengeCompletionCorrelator();
