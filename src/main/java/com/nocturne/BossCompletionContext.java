@@ -16,14 +16,17 @@ final class BossCompletionContext
 	final long completionNanos;
 	final long gameCycle;
 	final Instant occurredAt;
+	final PluginActivityCatalog.Entry activity;
 
 	private BossCompletionContext(String bossKey, String activityKey, String modeKey, String timingScope, String reporterRsn,
-		GroupSnapshot roster, String encounterIdentity, long completionNanos, long gameCycle, Instant occurredAt)
+		GroupSnapshot roster, String encounterIdentity, long completionNanos, long gameCycle, Instant occurredAt,
+		PluginActivityCatalog.Entry activity)
 	{
 		this.bossKey = bossKey; this.activityKey = activityKey; this.modeKey = modeKey;
 		this.timingScope = timingScope;
 		this.reporterRsn = reporterRsn; this.roster = roster; this.encounterIdentity = encounterIdentity;
 		this.completionNanos = completionNanos; this.gameCycle = gameCycle; this.occurredAt = occurredAt;
+		this.activity = activity;
 	}
 
 	static BossCompletionContext fromNpcLoot(String source, String reporter, long cycle, long nowNanos, Instant now)
@@ -35,13 +38,31 @@ final class BossCompletionContext
 		long cycle, long nowNanos, Instant now)
 	{
 		if (source == null || reporter == null || clientSessionId == null || now == null) return null;
-		String normalized = source.replace('\u2019', '\'').replace('\u2018', '\'').trim();
-		if (!"phosani's nightmare".equalsIgnoreCase(normalized)) return null;
-		String encounter = clientSessionId + "|phosanis|"
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
+		if (activity == null || !activity.ttkTrackingEnabled || activity.challengeBossKey == null
+			|| !"overall".equals(activity.timingScope) || !activity.supportsSolo) return null;
+		String encounter = clientSessionId + "|" + activity.challengeBossKey + "|"
 			+ reporter.trim().toLowerCase(java.util.Locale.ROOT) + "|" + cycle;
 		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of(reporter), 1,
 			GroupSnapshot.Status.MATCHED, "solo encounter");
-		return new BossCompletionContext("phosanis", "phosanis_nightmare", "phosani_nightmare", "overall",
-			reporter, solo, encounter, nowNanos, cycle, now);
+		return new BossCompletionContext(activity.challengeBossKey, activity.activityKey,
+			activity.modeKey, activity.timingScope,
+			reporter, solo, encounter, nowNanos, cycle, now, activity);
+	}
+
+	static BossCompletionContext fromTrackedActivity(String source, String reporter, GroupSnapshot roster,
+		String clientSessionId, long cycle, long nowNanos, Instant now)
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
+		if (activity == null || !activity.lootTrackingEnabled || !activity.ttkTrackingEnabled
+			|| !"overall".equals(activity.timingScope) || reporter == null || now == null
+			|| clientSessionId == null || roster == null || roster.status != GroupSnapshot.Status.MATCHED
+			|| roster.names.size() != roster.expectedSize || roster.expectedSize < 1 || roster.expectedSize > 10
+			|| roster.expectedSize == 1 && !activity.supportsSolo
+			|| roster.expectedSize > 1 && !activity.supportsGroup) return null;
+		String encounter = clientSessionId + "|" + activity.activityKey + "|"
+			+ reporter.trim().toLowerCase(java.util.Locale.ROOT) + "|" + cycle;
+		return new BossCompletionContext(activity.challengeBossKey, activity.activityKey, activity.modeKey,
+			activity.timingScope, reporter, roster, encounter, nowNanos, cycle, now, activity);
 	}
 }

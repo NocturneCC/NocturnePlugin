@@ -3,6 +3,7 @@
 CHALLENGE_CONFIG_TOKEN_FILE = Path("/etc/nocturne/challenge-intake.token")
 CHALLENGE_INTERNAL_BASE = "http://127.0.0.1:5011/internal/challenges"
 CHALLENGE_CONFIG_INTERNAL_BASE = "http://127.0.0.1:5011/internal/challenges/config"
+PLUGIN_TRACKING_INTERNAL_BASE = "http://127.0.0.1:5011/internal/plugin/tracking/catalog"
 CHALLENGE_DB_PATH = Path("/srv/projects/database/Challenges.db")
 CHALLENGE_ARTWORK_DIR = Path("/srv/projects/website/media/challenge-bosses")
 CHALLENGE_ARTWORK_URL_PREFIX = "/media/challenge-bosses"
@@ -158,9 +159,50 @@ def register_challenge_config_admin_routes():
         return forward("/draft/reorder", "POST")
 
 
+def register_plugin_tracking_admin_routes():
+    """Separate staff-authorized Plugin Tracking catalog editor proxy."""
+
+    def forward_tracking(path, method="GET"):
+        try:
+            token = CHALLENGE_CONFIG_TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if len(token) < 48:
+                raise RuntimeError("service credential unavailable")
+            identity = current_admin()
+            actor = str(identity.get("discord_id") or identity.get("username") or "admin-proxy")[:128]
+            body = request.get_json(silent=True) if method != "GET" else None
+            response = requests.request(
+                method, PLUGIN_TRACKING_INTERNAL_BASE + path, json=body,
+                headers={"Authorization": f"Bearer {token}", "X-Challenge-Admin": actor},
+                timeout=10, allow_redirects=False,
+            )
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {"ok": False, "error": "plugin_tracking_service_invalid_response"}
+            return jsonify(payload), response.status_code
+        except (requests.RequestException, OSError, RuntimeError):
+            return jsonify({"ok": False, "error": "plugin_tracking_service_unavailable"}), 503
+
+    @app.get("/admin/api/plugin-tracking/catalog/published")
+    @require_noc_super_admin
+    def plugin_tracking_published():
+        return forward_tracking("/published")
+
+    @app.route("/admin/api/plugin-tracking/catalog/draft", methods=["GET", "PUT"])
+    @require_noc_super_admin
+    def plugin_tracking_draft():
+        return forward_tracking("/draft", request.method)
+
+    @app.post("/admin/api/plugin-tracking/catalog/draft/publish")
+    @require_noc_super_admin
+    def plugin_tracking_publish():
+        return forward_tracking("/draft/publish", "POST")
+
+
 # Writes remain in the Simon-owned loopback challenge service; this process
 # supplies the existing Discord/Cottus staff authorization boundary.
 register_challenge_config_admin_routes()
+register_plugin_tracking_admin_routes()
 def _png_dimensions(path: Path):
     """Return PNG dimensions without decoding or modifying the image."""
     try:

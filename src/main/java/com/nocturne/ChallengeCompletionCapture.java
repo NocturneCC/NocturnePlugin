@@ -53,10 +53,19 @@ final class ChallengeCompletionCapture
 	void onBossCompletion(String source, String reporter, String clientSessionId, long gameCycle, boolean consent,
 		boolean diagnostics, Instant now)
 	{
+		onActivityCompletion(source, reporter, null, clientSessionId, gameCycle, consent, diagnostics, now);
+	}
+
+	void onActivityCompletion(String source, String reporter, GroupSnapshot stableRoster, String clientSessionId,
+		long gameCycle, boolean consent, boolean diagnostics, Instant now)
+	{
 		if (!consent) { clearPartial(); return; }
 		long completionNanos = nanoTime.getAsLong();
-		BossCompletionContext context = BossCompletionContext.fromNpcLoot(source, reporter, clientSessionId,
-			gameCycle, completionNanos, now);
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
+		BossCompletionContext context = activity == null ? null : activity.challengeBossKey != null
+			? BossCompletionContext.fromNpcLoot(source, reporter, clientSessionId, gameCycle, completionNanos, now)
+			: BossCompletionContext.fromTrackedActivity(source, reporter, stableRoster, clientSessionId,
+				gameCycle, completionNanos, now);
 		ChallengeObservation observation = genericCorrelator.onCompletion(context, completionNanos, now);
 		if (observation != null) submit(observation, diagnostics);
 	}

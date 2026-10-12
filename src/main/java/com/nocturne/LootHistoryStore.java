@@ -262,6 +262,9 @@ final class LootHistoryStore
 		object.addProperty("occurredAt", record.occurredAt);
 		object.addProperty("rsn", record.rsn);
 		object.addProperty("source", record.source);
+		if (record.activityKey != null) object.addProperty("activityKey", record.activityKey);
+		if (record.activityDisplayName != null) object.addProperty("activityDisplayName", record.activityDisplayName);
+		if (record.modeKey != null) object.addProperty("modeKey", record.modeKey);
 		object.add("items", gson.toJsonTree(record.items));
 		object.add("group", gson.toJsonTree(record.group));
 		object.addProperty("submission", record.submission.name());
@@ -293,7 +296,15 @@ final class LootHistoryStore
 				if (item == null || item.id <= 0 || item.quantity <= 0 || item.name == null
 					|| item.name.isEmpty() || item.unitPriceGp < 0) return null;
 			}
-			return new LootRecord(id, occurred, rsn, source, List.of(items), group, status);
+			String activityKey = object.has("activityKey") && !object.get("activityKey").isJsonNull()
+				? object.get("activityKey").getAsString() : null;
+			String activityDisplayName = object.has("activityDisplayName")
+				&& !object.get("activityDisplayName").isJsonNull()
+				? object.get("activityDisplayName").getAsString() : null;
+			String modeKey = object.has("modeKey") && !object.get("modeKey").isJsonNull()
+				? object.get("modeKey").getAsString() : null;
+			return new LootRecord(id, occurred, rsn, source, List.of(items), group, status,
+				activityKey, activityDisplayName, modeKey);
 		}
 		catch (RuntimeException e) { return null; }
 	}

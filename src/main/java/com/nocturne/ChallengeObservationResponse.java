@@ -28,7 +28,7 @@ final class ChallengeObservationResponse
 		if (json == null || json.size() < 1 || json.size() > 2 || !json.has("state") || !json.get("state").isJsonPrimitive()
 			|| !json.getAsJsonPrimitive("state").isString()) return new ChallengeObservationResponse(State.PROTOCOL_ERROR, null, status);
 		String state = json.get("state").getAsString();
-		if ("accepted".equals(state) && status == 201 && json.size() == 1) return new ChallengeObservationResponse(State.ACCEPTED, null, status);
+		if ("accepted".equals(state) && (status == 200 || status == 201) && json.size() == 1) return new ChallengeObservationResponse(State.ACCEPTED, null, status);
 		if ("duplicate".equals(state) && status == 200 && json.size() == 1) return new ChallengeObservationResponse(State.DUPLICATE, null, status);
 		if ("ignored".equals(state) && status == 200 && json.has("reason") && json.size() == 2)
 		{
@@ -40,7 +40,7 @@ final class ChallengeObservationResponse
 			return new ChallengeObservationResponse(State.INVALID, safeReason(string(json, "reason")), status);
 		if ("idempotency_conflict".equals(state) && status == 409 && json.size() == 1) return new ChallengeObservationResponse(State.CONFLICT, null, status);
 		if ("rate_limited".equals(state) && status == 429 && json.size() == 1) return new ChallengeObservationResponse(State.RATE_LIMITED, null, status);
-		if ("server_failure".equals(state) && status == 503 && json.size() == 1) return new ChallengeObservationResponse(State.SERVER_FAILURE, null, status);
+		if ("server_failure".equals(state) && (status == 500 || status == 503) && json.size() == 1) return new ChallengeObservationResponse(State.SERVER_FAILURE, null, status);
 		return new ChallengeObservationResponse(State.PROTOCOL_ERROR, null, status);
 	}
 	private static String safeReason(String reason) { return SAFE_REASONS.contains(reason) ? reason : "unrecognized"; }

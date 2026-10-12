@@ -115,8 +115,11 @@ identities.
 - `429 {"state":"rate_limited"}` — request limit reached.
 - `503 {"state":"server_failure"}` — internal/configuration/database failure; no detail is returned.
 
-No public policy-read endpoint is needed. A future client may send observations
-without fetching configuration; POST always enforces current server policy.
+`GET /api/plugin/tracking/config` is a separate, minimal, ETag-cacheable public
+read for activity recognition and client display. It contains no credentials,
+draft state, or staff identities. It is not Challenge configuration. Both
+observation POST routes independently enforce their active server policy on
+every request, whether or not the client fetched either read endpoint.
 
 ## Persistence and migration
 
@@ -143,3 +146,9 @@ legacy/manual submissions retain their historical participant-count fallback.
 Run the repository Challenge database migration only through a separately
 reviewed deployment procedure. This task does not prepare or apply it to
 production.
+
+Plugin Tracking has independent catalog version/draft and immutable timing
+observation/participant tables. Those rows never create Challenge
+submissions or leaderboard credit. See `PLUGIN_TRACKING.md` for its schema
+and routes; the deployment migration treats both systems as one additive
+transaction for backup and rollback safety.

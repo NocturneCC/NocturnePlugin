@@ -1,0 +1,104 @@
+package com.nocturne;
+
+import static org.junit.Assert.*;
+
+import com.google.gson.JsonParser;
+import java.time.Instant;
+import java.util.List;
+import net.runelite.http.api.loottracker.LootRecordType;
+import org.junit.After;
+import org.junit.Test;
+
+public class PluginActivityCatalogTest
+{
+	@After public void resetCatalog() { PluginActivityCatalog.resetForTests(); }
+
+	@Test public void pnmNpcLootKeepsCanonicalActivityAndSoloChallengeOverlay()
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("Phosani’s Nightmare");
+		assertNotNull(activity);
+		assertEquals("phosanis_nightmare", activity.activityKey);
+		assertEquals("overall", activity.timingScope);
+		assertEquals("phosanis", activity.challengeBossKey);
+		assertEquals("NPC", NocturnePlugin.classifyLoot(LootRecordType.NPC, "Phosani's Nightmare").name());
+		BossCompletionContext context = BossCompletionContext.fromNpcLoot("Phosani's Nightmare",
+			"Local Reporter", "session", 9, 100L, Instant.parse("2026-10-12T00:00:00Z"));
+		assertNotNull(context);
+		assertEquals(List.of("Local Reporter"), context.roster.names);
+	}
+
+	@Test public void corruptedGauntletRewardContainerIsRecognizedAndTimedFromCompletionContext()
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("The Corrupted Gauntlet");
+		assertNotNull(activity);
+		assertEquals("corrupted_gauntlet", activity.activityKey);
+		assertEquals("gauntlet", activity.challengeBossKey);
+		assertEquals("NPC", NocturnePlugin.classifyLoot(LootRecordType.NPC, "Corrupted Gauntlet").name());
+		BossCompletionContext context = BossCompletionContext.fromNpcLoot("Corrupted Gauntlet",
+			"Local Reporter", "session", 10, 200L, Instant.parse("2026-10-12T00:00:01Z"));
+		assertNotNull(context);
+		assertEquals("overall", context.timingScope);
+	}
+
+	@Test public void regularNightmareIsLocallyTrackedWithoutChallengeProjection()
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("The Nightmare");
+		assertNotNull(activity);
+		assertEquals("nightmare", activity.activityKey);
+		assertTrue(activity.supportsGroup);
+		assertNull(activity.challengeBossKey);
+		LootRecord record = new LootRecord("Local Reporter", "The Nightmare",
+			List.of(new LootItem(100, 1, "Fixture item")),
+			GroupSnapshot.unavailable("fixture"), activity);
+		assertEquals("nightmare", record.activityKey);
+		assertEquals("The Nightmare", record.activityDisplayName);
+		assertNull(BossCompletionContext.fromNpcLoot("The Nightmare", "Local Reporter",
+			"session", 1, 1L, Instant.now()));
+	}
+
+	@Test public void unknownAndDisabledActivitiesDoNotCreateTimingContextButRemainLocal()
+	{
+		assertNull(PluginActivityCatalog.matchSource("Unknown Encounter"));
+		assertNull(BossCompletionContext.fromNpcLoot("Unknown Encounter", "Local Reporter",
+			"session", 1, 1L, Instant.now()));
+		assertNull(new LootRecord("Local Reporter", "Unknown Encounter",
+			List.of(new LootItem(100, 1, "Fixture item")),
+			GroupSnapshot.unavailable("fixture")).activityKey);
+		String disabled = "{\"schema_version\":1,\"activities\":[{\"activity_key\":\"x\","
+			+ "\"display_name\":\"X\",\"aliases\":[],\"modes\":[{\"mode_key\":\"x\","
+			+ "\"display_name\":\"X\",\"source_names\":[\"Phosani's Nightmare\"],"
+			+ "\"supports_solo\":true,\"supports_group\":false,\"loot_tracking_enabled\":true,"
+			+ "\"ttk_tracking_enabled\":false,\"timing_scope\":\"unconfigured\","
+			+ "\"challenge_boss_key\":null,\"challenge_mode_key\":null,\"challenge_content_key\":null}]}]}";
+		assertTrue(PluginActivityCatalog.applyPublicConfig(new JsonParser().parse(disabled).getAsJsonObject()));
+		assertNotNull(PluginActivityCatalog.matchSource("Phosani's Nightmare"));
+		assertNull(BossCompletionContext.fromNpcLoot("Phosani's Nightmare", "Local Reporter",
+			"session", 1, 1L, Instant.now()));
+	}
+
+	@Test public void publicCatalogConfigReplacesAliasesAndAmbiguityFailsClosed()
+	{
+		String ambiguous = "{\"schema_version\":1,\"activities\":["
+			+ "{\"activity_key\":\"a\",\"display_name\":\"A\",\"aliases\":[],\"modes\":[{"
+			+ "\"mode_key\":\"a\",\"display_name\":\"A\",\"source_names\":[\"Same\"],"
+			+ "\"supports_solo\":true,\"supports_group\":false,\"loot_tracking_enabled\":true,"
+			+ "\"ttk_tracking_enabled\":true,\"timing_scope\":\"overall\",\"challenge_boss_key\":null,"
+			+ "\"challenge_mode_key\":null,\"challenge_content_key\":null}]},"
+			+ "{\"activity_key\":\"b\",\"display_name\":\"B\",\"aliases\":[],\"modes\":[{"
+			+ "\"mode_key\":\"b\",\"display_name\":\"B\",\"source_names\":[\"Same\"],"
+			+ "\"supports_solo\":true,\"supports_group\":false,\"loot_tracking_enabled\":true,"
+			+ "\"ttk_tracking_enabled\":true,\"timing_scope\":\"overall\",\"challenge_boss_key\":null,"
+			+ "\"challenge_mode_key\":null,\"challenge_content_key\":null}]}]}";
+		assertTrue(PluginActivityCatalog.applyPublicConfig(new JsonParser().parse(ambiguous).getAsJsonObject()));
+		assertNull(PluginActivityCatalog.matchSource("Same"));
+	}
+
+	@Test public void duplicateRewardContainerDeliveryIsBoundedToAdjacentGameCycle()
+	{
+		LootEventDeduplicator deduplicator = new LootEventDeduplicator();
+		List<LootItem> drop = List.of(new LootItem(100, 1, "Fixture item"));
+		assertFalse(deduplicator.isDuplicate("Corrupted Gauntlet", drop, 10));
+		assertTrue(deduplicator.isDuplicate("Corrupted Gauntlet", drop, 11));
+		assertFalse(deduplicator.isDuplicate("Corrupted Gauntlet", drop, 13));
+	}
+}

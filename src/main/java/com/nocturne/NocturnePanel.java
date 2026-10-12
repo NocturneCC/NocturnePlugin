@@ -99,7 +99,7 @@ final class NocturnePanel extends PluginPanel
 		announcementFeed.add(note("Announcements load in the background.", BACKGROUND));
 		header.add(announcementFeed);
 		header.add(spacer());
-		header.add(label("RECENT DROPS", PURPLE));
+		header.add(label("RECENT ACTIVITY", PURPLE));
 		header.add(count);
 		add(header, BorderLayout.NORTH);
 
@@ -492,7 +492,7 @@ final class NocturnePanel extends PluginPanel
 		loadOlder.setVisible(history.hasOlder());
 		if (history.getRecords().isEmpty())
 		{
-			feed.add(note("No recent drops yet.", CARD));
+			feed.add(note("No recent activity yet.", CARD));
 		}
 		for (LootRecord record : history.getRecords())
 		{
@@ -530,7 +530,7 @@ final class NocturnePanel extends PluginPanel
 			card.setBorder(BorderFactory.createCompoundBorder(
 				BorderFactory.createMatteBorder(0, 0, 6, 0, BACKGROUND),
 				BorderFactory.createEmptyBorder(8, 8, 8, 8)));
-			card.add(label(record.source, PURPLE));
+			card.add(label(record.activityDisplayName == null ? record.source : record.activityDisplayName, PURPLE));
 			card.add(label(TIME.format(record.time) + "  |  " + record.rsn, MUTED));
 			for (LootItem item : record.items)
 			{

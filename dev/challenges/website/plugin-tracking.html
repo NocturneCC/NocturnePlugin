@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plugin Tracking · Nocturne</title>
+  <link rel="stylesheet" href="/challenge-admin.css">
+</head>
+<body>
+  <main class="admin-shell">
+    <header><a href="/admin.html">Admin</a><h1>Plugin Tracking</h1>
+      <p>Independent RuneLite activity recognition and timing policy. Challenge scoring is configured separately.</p>
+    </header>
+    <section aria-label="Plugin Tracking catalog">
+      <p id="status" role="status">Loading catalog draft…</p>
+      <label for="catalog">Catalog JSON</label>
+      <textarea id="catalog" spellcheck="false" rows="30" aria-label="Plugin Tracking catalog JSON"></textarea>
+      <div class="actions">
+        <button id="save" type="button">Save draft</button>
+        <button id="publish" type="button">Publish catalog</button>
+      </div>
+    </section>
+  </main>
+  <script src="/plugin-tracking.js" defer></script>
+</body>
+</html>

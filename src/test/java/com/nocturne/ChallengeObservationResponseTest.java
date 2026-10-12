@@ -26,7 +26,8 @@ public class ChallengeObservationResponseTest
 		assertEquals(ChallengeObservationResponse.State.CONFLICT, parse(409, "{\"state\":\"idempotency_conflict\"}").state);
 		assertEquals(ChallengeObservationResponse.State.RATE_LIMITED, parse(429, "{\"state\":\"rate_limited\"}").state);
 		assertEquals(ChallengeObservationResponse.State.SERVER_FAILURE, parse(503, "{\"state\":\"server_failure\"}").state);
-		assertEquals(ChallengeObservationResponse.State.PROTOCOL_ERROR, parse(200, "{\"state\":\"accepted\"}").state);
+		assertEquals(ChallengeObservationResponse.State.ACCEPTED, parse(200, "{\"state\":\"accepted\"}").state);
+		assertEquals(ChallengeObservationResponse.State.PROTOCOL_ERROR, parse(202, "{\"state\":\"accepted\"}").state);
 		assertEquals(ChallengeObservationResponse.State.PROTOCOL_ERROR, parse(201, "{\"state\":\"accepted\",\"token\":\"x\"}").state);
 	}
 }

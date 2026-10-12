@@ -36,11 +36,12 @@ final class ChallengeObservation
 	final long displayDurationMillis;
 	final String displayName;
 	final String eventId;
+	final boolean challengeProjection;
 
 	private ChallengeObservation(String activityKey, String modeKey, String reporterRsn,
 		List<String> roster, Long roomTimeMillis, Long overallTimeMillis,
 		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName,
-		String encounterIdentity)
+		String encounterIdentity, boolean challengeProjection)
 	{
 		this.activityKey = activityKey;
 		this.modeKey = modeKey;
@@ -53,6 +54,7 @@ final class ChallengeObservation
 		this.occurredAt = occurredAt;
 		this.displayDurationMillis = displayDurationMillis;
 		this.displayName = displayName;
+		this.challengeProjection = challengeProjection;
 		String identity = encounterIdentity + '|' + activityKey + '|' + modeKey + '|'
 			+ roomTimeMillis + '|' + overallTimeMillis + '|'
 			+ String.join("|", roster.stream().map(ChallengeObservation::identityKey).toArray(String[]::new));
@@ -118,11 +120,41 @@ final class ChallengeObservation
 			displayDuration = overallTimeMillis;
 			displayName = "theatre_of_blood_hard_mode".equals(activityKey) ? "HMT"
 				: "phosanis_nightmare".equals(activityKey) ? "Phosani's Nightmare"
+				: "corrupted_gauntlet".equals(activityKey) ? "Corrupted Gauntlet"
 				: "tombs_of_amascut".equals(activityKey) ? "Tombs of Amascut" : "Chambers of Xeric";
 		}
 		return new ChallengeObservation(activityKey, modeKey, reporter, normalizedRoster,
 			roomTimeMillis, overallTimeMillis, completionCount, occurredAt, displayDuration, displayName,
-			encounterIdentity);
+			encounterIdentity, true);
+	}
+
+	static ChallengeObservation createTracked(BossCompletionContext context, long durationMillis)
+	{
+		if (context == null || context.activity == null || context.activity.challengeBossKey != null
+			|| !context.activity.ttkTrackingEnabled || !"overall".equals(context.timingScope)
+			|| !validDuration(durationMillis) || context.roster == null
+			|| context.roster.status != GroupSnapshot.Status.MATCHED
+			|| context.roster.names.size() != context.roster.expectedSize
+			|| context.roster.expectedSize < 1 || context.roster.expectedSize > MAX_ROSTER
+			|| context.roster.expectedSize == 1 && !context.activity.supportsSolo
+			|| context.roster.expectedSize > 1 && !context.activity.supportsGroup) return null;
+		String reporter = safeRsn(context.reporterRsn);
+		if (reporter == null) return null;
+		List<String> normalizedRoster = new ArrayList<>();
+		Set<String> identities = new HashSet<>();
+		int reporterCount = 0;
+		for (String raw : context.roster.names)
+		{
+			String rsn = safeRsn(raw);
+			if (rsn == null || !identities.add(identityKey(rsn))) return null;
+			if (identityKey(rsn).equals(identityKey(reporter))) reporterCount++;
+			normalizedRoster.add(rsn);
+		}
+		if (reporterCount != 1) return null;
+		normalizedRoster.sort(Comparator.comparing(ChallengeObservation::identityKey));
+		return new ChallengeObservation(context.activityKey, context.modeKey, reporter, normalizedRoster,
+			null, durationMillis, null, context.occurredAt, durationMillis,
+			context.activity.displayName, context.encounterIdentity, false);
 	}
 
 	static ChallengeObservation createPhosani(long durationMillis, GroupSnapshot snapshot,
@@ -192,6 +224,7 @@ final class ChallengeObservation
 	private static int expectedSize(String activity, String mode)
 	{
 		if ("phosanis_nightmare".equals(activity)) return "phosani_nightmare".equals(mode) ? 1 : -1;
+		if ("corrupted_gauntlet".equals(activity)) return "corrupted_gauntlet".equals(mode) ? 1 : -1;
 		if ("theatre_of_blood".equals(activity))
 		{
 			switch (mode)

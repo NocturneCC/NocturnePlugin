@@ -139,7 +139,9 @@ final class GenericCompletionCorrelator
 			}
 			CompletionDurationParser.Token selected = nearestCandidates.get(0);
 			ChallengeObservation observation;
-			if ("overall".equals(state.context.timingScope))
+			if ("overall".equals(state.context.timingScope) && state.context.bossKey == null)
+				observation = ChallengeObservation.createTracked(state.context, selected.durationMillis);
+			else if ("overall".equals(state.context.timingScope))
 				observation = ChallengeObservation.create(state.context.activityKey, state.context.modeKey,
 					null, selected.durationMillis, null, state.context.roster, state.context.reporterRsn,
 					state.context.occurredAt == null ? now : state.context.occurredAt,

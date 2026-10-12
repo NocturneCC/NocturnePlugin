@@ -220,6 +220,40 @@ class AutomaticObservationTests(unittest.TestCase):
         self.assertIsNone(submission[4])
         self.assertEqual(mode, ("tob_duo", 901230))
 
+    def test_public_plugin_tracking_catalog_and_non_challenge_observation_route(self):
+        config = self.client.get("/api/plugin/tracking/config")
+        self.assertEqual(200, config.status_code)
+        self.assertIn("ETag", config.headers)
+        document = config.get_json()["config"]
+        nightmare = next(row for row in document["activities"]
+                         if row["activity_key"] == "nightmare")
+        self.assertTrue(nightmare["modes"][0]["ttk_tracking_enabled"])
+        self.assertNotIn("test-token-never-returned", config.get_data(as_text=True))
+        self.assertNotIn("draft", config.get_data(as_text=True).lower())
+
+        payload = {
+            "schema_version": 1, "event_id": str(uuid.uuid4()),
+            "reporter_rsn": "Doctor Arden", "activity_key": "nightmare",
+            "mode_key": "nightmare", "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "overall_time_ms": 358200, "roster": ["Doctor Arden"], "group_size": 1,
+            "plugin_version": "0.3.2",
+        }
+        response = self.client.post("/api/plugin/tracking/observations", json=payload)
+        self.assertEqual(200, response.status_code, response.get_json())
+        self.assertEqual({"state": "accepted"}, response.get_json())
+        retry = self.client.post("/api/plugin/tracking/observations", json=payload)
+        self.assertEqual(200, retry.status_code)
+        self.assertEqual({"state": "duplicate"}, retry.get_json())
+        with self.db(self.challenge_path) as conn:
+            self.assertEqual(1, conn.execute(
+                "SELECT COUNT(*) FROM plugin_tracking_observations").fetchone()[0])
+            self.assertEqual(1, conn.execute(
+                "SELECT COUNT(*) FROM plugin_tracking_observation_participants").fetchone()[0])
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM challenge_submissions").fetchone()[0])
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM leaderboard_observations").fetchone()[0])
+
     def test_hmt_selects_overall_time(self):
         payload = self.payload("theatre_of_blood_hard_mode", "hmt_5man",
                                ["Primary One", "Party Two", "Third Clan", "Fourth Clan", "Fifth Clan"])

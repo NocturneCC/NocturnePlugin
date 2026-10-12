@@ -22,6 +22,7 @@ import okhttp3.Response;
 final class ChallengeObservationService implements AutoCloseable
 {
 	static final String ENDPOINT = "https://nocturne.events/api/challenges/intake/observations";
+	static final String PLUGIN_ENDPOINT = "https://nocturne.events/api/plugin/tracking/observations";
 	static final int MAX_PENDING = 4;
 	static final int MAX_RESPONSE_BYTES = 1024;
 	static final int MAX_ATTEMPTS = 3;
@@ -47,7 +48,7 @@ final class ChallengeObservationService implements AutoCloseable
 		Pending existing = pending.get(id);
 		if (existing != null) return id;
 		String body = gson.toJson(observation.payload(gson, id));
-		Pending item = new Pending(id, body, callback);
+		Pending item = new Pending(id, body, observation, callback);
 		pending.put(id, item);
 		send(item);
 		return id;
@@ -55,7 +56,7 @@ final class ChallengeObservationService implements AutoCloseable
 
 	private void send(Pending item)
 	{
-		Request request = new Request.Builder().url(ENDPOINT).post(RequestBody.create(
+		Request request = new Request.Builder().url(item.observation.challengeProjection ? ENDPOINT : PLUGIN_ENDPOINT).post(RequestBody.create(
 			MediaType.parse("application/json; charset=utf-8"), item.body)).build();
 		Call call = http.newCall(request);
 		synchronized (this)
@@ -141,9 +142,11 @@ final class ChallengeObservationService implements AutoCloseable
 
 	private static final class Pending
 	{
-		final String id, body; final Consumer<ChallengeObservationResponse> callback;
+		final String id, body; final ChallengeObservation observation;
+		final Consumer<ChallengeObservationResponse> callback;
 		int attempts; boolean cancelled; Call call; ScheduledFuture<?> retry;
-		Pending(String id, String body, Consumer<ChallengeObservationResponse> callback)
-		{ this.id = id; this.body = body; this.callback = callback; }
+		Pending(String id, String body, ChallengeObservation observation,
+			Consumer<ChallengeObservationResponse> callback)
+		{ this.id = id; this.body = body; this.observation = observation; this.callback = callback; }
 	}
 }

@@ -60,6 +60,22 @@ class AutomaticObservationScopeTests(unittest.TestCase):
         self.assertTrue(deployed_sources.issubset(scope.SCOPE_SET))
         self.assertTrue(set(scope.UNIT_REFERENCES).issubset(scope.SCOPE_SET))
 
+    def test_plugin_tracking_editor_is_separate_and_staff_protected(self):
+        routes = self.repo / "dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py"
+        source = routes.read_text()
+        marker = "def register_plugin_tracking_admin_routes():"
+        before, tracking = source.split(marker, 1)
+        routes.write_text(before + marker + tracking.replace("@require_noc_super_admin", "@login_required", 1))
+        manifest_path = self.repo / scope.MANIFEST
+        manifest = json.loads(manifest_path.read_text())
+        record = next(row for row in manifest["bundle_files"] if row["path"] == str(routes.relative_to(self.repo)))
+        data = routes.read_bytes()
+        record["size"] = len(data)
+        record["sha256"] = hashlib.sha256(data).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(scope.ScopeError, "staff editor surface"):
+            scope.verify_scope(self.repo)
+
     def test_unrelated_midgard_products_are_excluded(self):
         excluded = {
             "dev/challenges/consumers/nocturne-bot/utils/dropSubmissionUtils.js",
@@ -68,8 +84,14 @@ class AutomaticObservationScopeTests(unittest.TestCase):
             "/srv/projects/nocturne-bot/buttonHandler.js",
         }
         self.assertFalse(excluded & scope.SCOPE_SET)
-        self.assertFalse(any("admin_app" in path or "navbar" in path or
-                             "dropSubmission" in path for path in scope.SCOPE_SET))
+        self.assertFalse(any(path.startswith("/srv/projects/") and "admin_app" in path
+                             for path in scope.SCOPE_SET))
+        self.assertFalse(any("navbar" in path or "dropSubmission" in path
+                             for path in scope.SCOPE_SET))
+        # This repository-owned fragment is the narrowly scoped Plugin
+        # Tracking editor integration; the live admin app is not in scope.
+        self.assertIn("dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py",
+                      scope.SCOPE_SET)
 
     def test_unrelated_external_reference_drift_does_not_block_scope(self):
         manifest_path = self.repo / scope.MANIFEST

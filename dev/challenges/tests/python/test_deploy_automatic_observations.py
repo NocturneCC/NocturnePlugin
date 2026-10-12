@@ -48,6 +48,12 @@ class AutomaticSchemaTests(unittest.TestCase):
         self.conn.execute("CREATE TABLE challenge_automatic_observations(observation_id INTEGER)")
         self.assertEqual("unsupported", deploy._schema_state(self.conn, automatic))
 
+    def test_existing_challenge_schema_without_plugin_catalog_is_supported_predecessor(self):
+        automatic.migrate_schema(self.conn)
+        from plugin_tracking_catalog import rollback_schema as rollback_catalog
+        rollback_catalog(self.conn)
+        self.assertEqual("catalog_absent", deploy._schema_state(self.conn, automatic))
+
     def test_rollback_before_observation_data_removes_only_additive_tables(self):
         self.conn.execute("CREATE TABLE retained_manual_submission(id INTEGER PRIMARY KEY)")
         self.conn.execute("INSERT INTO retained_manual_submission VALUES(1)")
@@ -55,6 +61,8 @@ class AutomaticSchemaTests(unittest.TestCase):
         automatic.migrate_schema(self.conn)
         automatic.rollback_schema(self.conn)
         self.assertEqual("absent", deploy._schema_state(self.conn, automatic))
+        self.assertEqual(0, self.conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'plugin_tracking_%'").fetchone()[0])
         self.assertEqual(1, self.conn.execute("SELECT COUNT(*) FROM retained_manual_submission").fetchone()[0])
 
     def test_rollback_refuses_after_observation_exists(self):
@@ -514,7 +522,11 @@ class NginxAndSmokeTests(unittest.TestCase):
     def test_nginx_candidate_has_one_observation_route_and_preserves_approved(self):
         valid = (b"location = /api/challenges/intake/approved {\n}\n"
                  b"location = /api/challenges/intake/observations {\n"
-                 b"proxy_pass http://127.0.0.1:5011/api/challenges/intake/observations;\n}\n")
+                 b"proxy_pass http://127.0.0.1:5011/api/challenges/intake/observations;\n}\n"
+                 b"location = /api/plugin/tracking/config {\n"
+                 b"proxy_pass http://127.0.0.1:5011/api/plugin/tracking/config;\n}\n"
+                 b"location = /api/plugin/tracking/observations {\n"
+                 b"proxy_pass http://127.0.0.1:5011/api/plugin/tracking/observations;\n}\n")
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "routes.conf"
             path.write_bytes(valid)
@@ -556,8 +568,8 @@ class NginxAndSmokeTests(unittest.TestCase):
                                         SimpleNamespace(), request=request)
         self.assertFalse(result["valid_observation_sent"])
         obs = [entry for entry in observations if entry[0].endswith("/observations")]
-        self.assertEqual(3, len(obs))
-        self.assertEqual([b"{}", b"{}", b" " * 8193], [x[1]["body"] for x in obs])
+        self.assertEqual(4, len(obs))
+        self.assertEqual([b"{}", b"{}", b" " * 8193, b"{}"], [x[1]["body"] for x in obs])
         self.assertEqual("invalid/no rows", result["observation_smokes"])
 
     def test_nginx_reload_waits_for_committed_worker_generation_convergence(self):

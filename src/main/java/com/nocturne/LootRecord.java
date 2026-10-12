@@ -14,6 +14,9 @@ final class LootRecord
 	SubmissionStatus submission = SubmissionStatus.LOCAL;
 	final String rsn;
 	final String source;
+	final String activityKey;
+	final String activityDisplayName;
+	final String modeKey;
 	final List<LootItem> items;
 	final GroupSnapshot group;
 	final LocalTime time;
@@ -26,16 +29,42 @@ final class LootRecord
 	LootRecord(String rsn, String source, List<LootItem> items, GroupSnapshot group)
 	{
 		this(UUID.randomUUID().toString(), Instant.now().toString(), rsn, source, items, group,
-			SubmissionStatus.LOCAL);
+		SubmissionStatus.LOCAL, PluginActivityCatalog.matchSource(source));
+	}
+
+	LootRecord(String rsn, String source, List<LootItem> items, GroupSnapshot group,
+		PluginActivityCatalog.Entry activity)
+	{
+		this(UUID.randomUUID().toString(), Instant.now().toString(), rsn, source, items, group,
+			SubmissionStatus.LOCAL, activity);
 	}
 
 	LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
 		GroupSnapshot group, SubmissionStatus submission)
 	{
+		this(id, occurredAt, rsn, source, items, group, submission, PluginActivityCatalog.matchSource(source));
+	}
+
+	LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
+		GroupSnapshot group, SubmissionStatus submission, PluginActivityCatalog.Entry activity)
+	{
+		this(id, occurredAt, rsn, source, items, group, submission,
+			activity == null ? null : activity.activityKey,
+			activity == null ? null : activity.displayName,
+			activity == null ? null : activity.modeKey);
+	}
+
+	LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
+		GroupSnapshot group, SubmissionStatus submission, String activityKey,
+		String activityDisplayName, String modeKey)
+	{
 		this.id = id;
 		this.occurredAt = occurredAt;
 		this.rsn = rsn;
 		this.source = source;
+		this.activityKey = activityKey;
+		this.activityDisplayName = activityDisplayName;
+		this.modeKey = modeKey;
 		this.items = LootItem.consolidate(items);
 		this.group = group;
 		this.submission = submission;
@@ -44,6 +73,7 @@ final class LootRecord
 
 	LootRecord withSubmission(SubmissionStatus status)
 	{
-		return new LootRecord(id, occurredAt, rsn, source, items, group, status);
+		return new LootRecord(id, occurredAt, rsn, source, items, group, status,
+			activityKey, activityDisplayName, modeKey);
 	}
 }

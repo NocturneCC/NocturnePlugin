@@ -21,11 +21,14 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path("dev/challenges/source-manifest.json")
 DEPLOYER = Path("dev/challenges/deploy_automatic_observations.py")
 AUTO_TARGET = "/srv/projects/nocturne-services/challenge_automatic_intake.py"
+TRACKING_TARGET = "/srv/projects/nocturne-services/plugin_tracking_catalog.py"
 AUTHORITATIVE_MEMBERS_DB = "/srv/projects/database/Members.db"
 EXPECTED_TARGETS = (
     ("dev/challenges/service/challenge_automatic_intake.py", AUTO_TARGET, "absent_or_previous"),
     ("dev/challenges/service/challenge_intake_api.py",
      "/srv/projects/nocturne-services/challenge_intake_api.py", "manifest"),
+    ("dev/challenges/service/plugin_tracking_catalog.py",
+     "/srv/projects/nocturne-services/plugin_tracking_catalog.py", "absent"),
     ("dev/challenges/service/leaderboard_challenge_ingest.py",
      "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py", "manifest"),
     ("dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
@@ -41,6 +44,7 @@ SERVICE_RUNTIME = (
     "challenge_direct_intake.py", "challenge_intake_api.py",
     "challenge_legacy_baseline.py", "challenge_shadow_common.py",
     "challenge_shadow_sync.py", "leaderboard_challenge_ingest.py",
+    "plugin_tracking_catalog.py",
 )
 UNIT_REFERENCES = (
     "dev/challenges/integration/units/nocturne-challenge-intake.active.service",
@@ -59,6 +63,7 @@ EXPECTED_RESTARTS = ("nocturne-challenge-intake.service",)
 SCOPE_BUNDLE_PATHS = (
     "dev/challenges/AUTOMATIC_OBSERVATIONS.md",
     "dev/challenges/AUTOMATIC_OBSERVATIONS_DEPLOYMENT.md",
+    "dev/challenges/PLUGIN_TRACKING.md",
     "dev/challenges/deploy_automatic_observations.py",
     "dev/challenges/deploy_timing_metadata.py",
     "dev/challenges/verify_automatic_observation_scope.py",
@@ -66,8 +71,13 @@ SCOPE_BUNDLE_PATHS = (
     *(f"dev/challenges/service/{name}" for name in SERVICE_RUNTIME),
     *UNIT_REFERENCES,
     "dev/challenges/tests/python/test_challenge_automatic_intake.py",
+    "dev/challenges/tests/python/test_plugin_tracking_catalog.py",
     "dev/challenges/tests/python/test_deploy_automatic_observations.py",
     "dev/challenges/tests/python/test_automatic_observation_scope.py",
+    "dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py",
+    "dev/challenges/integration/routes/admin-navigation.fragment.html",
+    "dev/challenges/website/plugin-tracking.html",
+    "dev/challenges/website/plugin-tracking.js",
 )
 SCOPE_SET = frozenset(SCOPE_BUNDLE_PATHS)
 # These repository-level runtime gates are outside the adopted Challenges
@@ -152,7 +162,7 @@ def _verify_import_closure(repo: Path) -> None:
                         else [node.module] if isinstance(node, ast.ImportFrom) and node.module
                         else [])
             for name in imported:
-                if name.startswith(("challenge_", "leaderboard_")) and (service_root / f"{name}.py").is_file():
+                if name.startswith(("challenge_", "leaderboard_", "plugin_tracking_")) and (service_root / f"{name}.py").is_file():
                     pending.append(name)
     expected = set(SERVICE_RUNTIME)
     if discovered != {Path(item).stem for item in expected}:
@@ -216,6 +226,36 @@ def verify_scope(repo: Path = ROOT) -> dict[str, object]:
     if any(item.get("path") == AUTO_TARGET for item in manifest.get("live_sources", [])
            if isinstance(item, dict)):
         raise ScopeError("new automatic-observation target acquired an unreviewed live baseline")
+    if any(item.get("path") == TRACKING_TARGET for item in manifest.get("live_sources", [])
+           if isinstance(item, dict)):
+        raise ScopeError("new Plugin Tracking target acquired an unreviewed live baseline")
+    catalog_source = (repo / "dev/challenges/service/plugin_tracking_catalog.py").read_text(encoding="utf-8")
+    api_source = intake_api
+    route_fragment = (repo / "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf").read_text(encoding="utf-8")
+    if ("def active_document(" not in catalog_source or "def process_tracking_observation(" not in catalog_source
+            or '@app.get("/api/plugin/tracking/config")' not in api_source
+            or '@app.post("/api/plugin/tracking/observations")' not in api_source
+            or route_fragment.count("location = /api/plugin/tracking/config {") != 1
+            or route_fragment.count("location = /api/plugin/tracking/observations {") != 1
+            or "proxy_pass http://127.0.0.1:5011/api/plugin/tracking/config;" not in route_fragment
+            or "proxy_pass http://127.0.0.1:5011/api/plugin/tracking/observations;" not in route_fragment):
+        raise ScopeError("Plugin Tracking catalog/API/Nginx contract changed")
+    admin_routes = (repo / "dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py").read_text(encoding="utf-8")
+    tracking_admin_routes = admin_routes.split("def register_plugin_tracking_admin_routes():", 1)[-1].split(
+        "# Writes remain in the Simon-owned loopback challenge service", 1)[0]
+    admin_navigation = (repo / "dev/challenges/integration/routes/admin-navigation.fragment.html").read_text(encoding="utf-8")
+    admin_page = (repo / "dev/challenges/website/plugin-tracking.html").read_text(encoding="utf-8")
+    admin_script = (repo / "dev/challenges/website/plugin-tracking.js").read_text(encoding="utf-8")
+    if ("def register_plugin_tracking_admin_routes():" not in admin_routes
+            or tracking_admin_routes.count("@require_noc_super_admin") != 3
+            or "register_plugin_tracking_admin_routes()" not in admin_routes
+            or "/admin/api/plugin-tracking/catalog/draft" not in admin_routes
+            or 'href="/plugin-tracking.html"' not in admin_navigation
+            or "Plugin Tracking" not in admin_navigation
+            or "Plugin Tracking" not in admin_page
+            or "/admin/api/plugin-tracking/catalog/draft" not in admin_script
+            or "/admin/api/plugin-tracking/catalog/draft/publish" not in admin_script):
+        raise ScopeError("Plugin Tracking staff editor surface changed")
     if (getattr(deployer, "PREVIOUS_AUTOMATIC_INTAKE_SHA256", None) !=
             "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3" or
             getattr(deployer, "PREVIOUS_AUTOMATIC_INTAKE_SIZE", None) != 28178 or

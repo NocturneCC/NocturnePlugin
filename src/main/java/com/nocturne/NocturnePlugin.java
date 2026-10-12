@@ -89,6 +89,7 @@ public class NocturnePlugin extends Plugin
 	private volatile SubmissionService submissions;
 	private volatile ChallengeObservationService challengeObservations;
 	private volatile ChallengeCompletionCapture challengeCapture;
+	private volatile PluginTrackingConfigService trackingConfig;
 	private volatile RaidPresenceService raidPresence;
 	private volatile AnnouncementService announcementService;
 	private volatile AnnouncementToastOverlay announcementToastOverlay;
@@ -104,6 +105,7 @@ public class NocturnePlugin extends Plugin
 	private long gameTick;
 	private String clientSessionId;
 	private final AtomicBoolean emojiRegistrationDiagnosticLogged = new AtomicBoolean();
+	private final LootEventDeduplicator lootEventDeduplicator = new LootEventDeduplicator();
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -125,6 +127,7 @@ public class NocturnePlugin extends Plugin
 		historyStore = new LootHistoryStore(RuneLite.RUNELITE_DIR.toPath()
 			.resolve("nocturne").resolve("loot-history"), gson);
 		submissions = new SubmissionService(http, gson);
+		refreshTrackingCatalog(config.submitChallengeTimes());
 		ChallengeObservationService observations = new ChallengeObservationService(http, gson, executor);
 		challengeObservations = observations;
 		challengeCapture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), observations,
@@ -222,6 +225,10 @@ public class NocturnePlugin extends Plugin
 	{
 		lifecycle = null;
 		clientSessionId = null;
+		lootEventDeduplicator.clear();
+		PluginTrackingConfigService catalog = trackingConfig;
+		trackingConfig = null;
+		if (catalog != null) catalog.close();
 		SubmissionService sender = submissions;
 		submissions = null;
 		if (sender != null) sender.close();
@@ -333,6 +340,7 @@ public class NocturnePlugin extends Plugin
 				if (challengeCapture != null) challengeCapture.clearPartial();
 				if (challengeObservations != null) challengeObservations.cancelPending();
 			}
+			refreshTrackingCatalog(config.submitChallengeTimes());
 			GroupTracker diagnosticsTracker = groups;
 			if (diagnosticsTracker != null) diagnosticsTracker.setDiagnosticsEnabled(config.showDiagnostics());
 			withPanel(view ->
@@ -343,15 +351,26 @@ public class NocturnePlugin extends Plugin
 		}
 	}
 
+	private synchronized void refreshTrackingCatalog(boolean consent)
+	{
+		if (!consent)
+		{
+			PluginTrackingConfigService previous = trackingConfig;
+			trackingConfig = null;
+			if (previous != null) previous.close();
+			PluginActivityCatalog.resetToBundledDefaults();
+			return;
+		}
+		if (trackingConfig != null) return;
+		PluginTrackingConfigService catalog = new PluginTrackingConfigService(http, gson);
+		trackingConfig = catalog;
+		catalog.refresh();
+	}
+
 	@Subscribe
 	public void onNpcLootReceived(NpcLootReceived event)
 	{
 		String source = event.getNpc() == null ? null : event.getNpc().getName();
-		Player local = client.getLocalPlayer();
-		ChallengeCompletionCapture capture = challengeCapture;
-		if (capture != null && local != null && local.getName() != null && client.getGameState() == GameState.LOGGED_IN)
-			capture.onBossCompletion(source, local.getName(), clientSessionId, gameTick, config.submitChallengeTimes(),
-				config.showDiagnostics(), java.time.Instant.now());
 		recordLoot(source == null || source.isEmpty() ? "Unknown NPC" : source, event.getItems(), LootOrigin.NPC);
 	}
 
@@ -375,12 +394,13 @@ public class NocturnePlugin extends Plugin
 
 	static LootOrigin classifyLoot(LootRecordType type, String source)
 	{
-		// NPC records are handled exclusively by NpcLootReceived. PLAYER and PICKPOCKET
-		// retain their explicit rejection policy here.
-		if (type != LootRecordType.EVENT)
+		// RuneLite's loot tracker emits activity/reward-container records (including
+		// Gauntlet chests) as NPC. Keep those; player and pickpocket records remain out.
+		if (type == LootRecordType.PLAYER || type == LootRecordType.PICKPOCKET)
 		{
 			return LootOrigin.REJECTED;
 		}
+		if (type == LootRecordType.NPC) return LootOrigin.NPC;
 		return RaidType.fromSource(source) == null ? LootOrigin.GENERIC_EVENT : LootOrigin.RAID_EVENT;
 	}
 
@@ -492,6 +512,7 @@ public class NocturnePlugin extends Plugin
 			return;
 		}
 		items = LootItem.consolidate(items);
+		if (lootEventDeduplicator.isDuplicate(source, items, gameTick)) return;
 		GroupTracker tracker = groups;
 		GroupSnapshot group = GroupSnapshot.unavailable(origin == LootOrigin.GENERIC_EVENT
 			? "Generic reward; no raid group context." : "Group capture is off.");
@@ -513,7 +534,18 @@ public class NocturnePlugin extends Plugin
 				group = tracker.forLoot(source);
 			}
 		}
-		LootRecord record = new LootRecord(rsn, source, items, group);
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null && activity != null && activity.lootTrackingEnabled
+			&& config.submitChallengeTimes())
+		{
+			// Reuse the exact group snapshot used by the loot record. Group-mode
+			// timing fails closed unless that snapshot is complete and MATCHED;
+			// nearby-player observations are never promoted to a roster.
+			capture.onActivityCompletion(source, rsn, group, clientSessionId, gameTick,
+				true, config.showDiagnostics(), java.time.Instant.now());
+		}
+		LootRecord record = new LootRecord(rsn, source, items, group, activity);
 		boolean eligible = isSubmissionEligible(items, group);
 		if (!eligible)
 		{

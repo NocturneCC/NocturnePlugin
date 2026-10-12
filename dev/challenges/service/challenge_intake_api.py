@@ -189,6 +189,81 @@ def create_app(config: dict | None = None) -> Flask:
         finally:
             conn.close()
 
+    @app.get("/api/plugin/tracking/config")
+    def public_plugin_tracking_config():
+        """Public, secret-free activity catalog used by the Nocturne client."""
+        from plugin_tracking_catalog import client_document, canonical_json
+
+        conn = challenge_db()
+        try:
+            document = client_document(conn)
+            digest = hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
+            etag = '"' + digest + '"'
+            if request.headers.get("If-None-Match") == etag:
+                return "", 304, {"ETag": etag, "Cache-Control": "public, max-age=60"}
+            response = jsonify({"ok": True, "config": document})
+            response.headers["ETag"] = etag
+            response.headers["Cache-Control"] = "public, max-age=60"
+            return response
+        except (sqlite3.Error, RuntimeError, ValueError):
+            return jsonify({"ok": False, "error": "tracking_config_unavailable"}), 503
+        finally:
+            conn.close()
+
+    @app.post("/api/plugin/tracking/observations")
+    def intake_plugin_tracking_observation():
+        """Store an activity timing fact without creating Challenge credit."""
+        from plugin_tracking_catalog import TrackingObservationError, process_tracking_observation
+        from challenge_automatic_intake import ObservationError
+
+        if request.content_length is not None and request.content_length > 8192:
+            return jsonify({"state": "invalid", "reason": "request_too_large"}), 413
+        raw = request.get_data(cache=False)
+        if len(raw) > 8192:
+            return jsonify({"state": "invalid", "reason": "request_too_large"}), 413
+        if request.mimetype != "application/json":
+            return jsonify({"state": "invalid", "reason": "content_type_required"}), 415
+        address = request.remote_addr or "unknown"
+        if app.config["RATE_LIMIT_ENABLED"] and not automatic_limiter.allowed(address):
+            return jsonify({"state": "rate_limited"}), 429
+
+        def no_duplicate_keys(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError("duplicate_json_key")
+                result[key] = item
+            return result
+
+        try:
+            payload = json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys,
+                                 parse_constant=lambda _v: (_ for _ in ()).throw(ValueError("invalid_json_number")))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return jsonify({"state": "invalid", "reason": "invalid_json"}), 400
+        challenge = challenge_db()
+        members = None
+        try:
+            members = members_db()
+            challenge.execute("BEGIN IMMEDIATE")
+            result = process_tracking_observation(challenge, members, payload)
+            challenge.commit()
+            return jsonify(result), 200
+        except TrackingObservationError as exc:
+            challenge.rollback()
+            status = 409 if exc.state == "idempotency_conflict" else 422
+            return jsonify({"state": exc.state, "reason": exc.reason}), status
+        except ObservationError as exc:
+            challenge.rollback()
+            return jsonify({"state": "invalid", "reason": exc.reason}), 422
+        except Exception:
+            challenge.rollback()
+            app.logger.warning("Plugin Tracking observation rejected category=server_failure")
+            return jsonify({"state": "server_failure"}), 500
+        finally:
+            if members is not None:
+                members.close()
+            challenge.close()
+
     def config_actor() -> str:
         value = str(request.headers.get("X-Challenge-Admin") or "admin-proxy").strip()
         return value[:128] or "admin-proxy"
@@ -198,6 +273,72 @@ def create_app(config: dict | None = None) -> Flask:
         if not authorized(raw):
             return None, (jsonify({"ok": False, "error": "unauthorized"}), 401)
         return raw, None
+
+    @app.get("/internal/plugin/tracking/catalog/published")
+    def internal_plugin_tracking_published():
+        _raw, failure = internal_authorized()
+        if failure:
+            return failure
+        from plugin_tracking_catalog import active_document
+        conn = challenge_db()
+        try:
+            return jsonify({"ok": True, "catalog": active_document(conn)})
+        except (sqlite3.Error, RuntimeError, ValueError):
+            return jsonify({"ok": False, "error": "tracking_catalog_unavailable"}), 503
+        finally:
+            conn.close()
+
+    @app.route("/internal/plugin/tracking/catalog/draft", methods=["GET", "PUT"])
+    def internal_plugin_tracking_draft():
+        _raw, failure = internal_authorized()
+        if failure:
+            return failure
+        from plugin_tracking_catalog import draft_document, save_draft
+        conn = challenge_db()
+        try:
+            if request.method == "GET":
+                return jsonify({"ok": True, "draft": draft_document(conn)})
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict) or set(body) != {"catalog", "revision"}:
+                return jsonify({"ok": False, "error": "invalid_tracking_catalog_request"}), 400
+            result = save_draft(conn, body["catalog"], config_actor(), body["revision"])
+            conn.commit()
+            return jsonify({"ok": True, "draft": result})
+        except (ValueError, RuntimeError) as exc:
+            conn.rollback()
+            error = str(exc)
+            status = 409 if error == "plugin_tracking_revision_conflict" else 400
+            return jsonify({"ok": False, "error": error}), status
+        except sqlite3.Error:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "tracking_catalog_unavailable"}), 503
+        finally:
+            conn.close()
+
+    @app.post("/internal/plugin/tracking/catalog/draft/publish")
+    def internal_plugin_tracking_publish():
+        _raw, failure = internal_authorized()
+        if failure:
+            return failure
+        from plugin_tracking_catalog import publish_draft
+        conn = challenge_db()
+        try:
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict) or set(body) != {"revision", "confirm"}:
+                return jsonify({"ok": False, "error": "invalid_tracking_catalog_request"}), 400
+            result = publish_draft(conn, config_actor(), body["revision"], body["confirm"] is True)
+            conn.commit()
+            return jsonify({"ok": True, "catalog": result})
+        except (ValueError, RuntimeError) as exc:
+            conn.rollback()
+            error = str(exc)
+            status = 409 if error == "plugin_tracking_revision_conflict" else 400
+            return jsonify({"ok": False, "error": error}), status
+        except sqlite3.Error:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "tracking_catalog_unavailable"}), 503
+        finally:
+            conn.close()
 
     def config_failure(exc: Exception):
         message = str(exc)

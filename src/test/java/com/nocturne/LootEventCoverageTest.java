@@ -98,20 +98,20 @@ public class LootEventCoverageTest
 	}
 
 	@Test
-	public void playerPickpocketAndNpcLootReceivedTypesStayRejected()
+	public void playerAndPickpocketLootStayRejectedWhileNpcActivityRewardsAreAccepted()
 	{
 		assertEquals(NocturnePlugin.LootOrigin.REJECTED,
 			NocturnePlugin.classifyLoot(LootRecordType.PLAYER, "Player"));
 		assertEquals(NocturnePlugin.LootOrigin.REJECTED,
 			NocturnePlugin.classifyLoot(LootRecordType.PICKPOCKET, "Knight"));
-		assertEquals(NocturnePlugin.LootOrigin.REJECTED,
+		assertEquals(NocturnePlugin.LootOrigin.NPC,
 			NocturnePlugin.classifyLoot(LootRecordType.NPC, "Goblin"));
 	}
 
 	@Test
-	public void npcAndEventPathsAreMutuallyExclusiveToPreventDuplicates()
+	public void npcActivityAndEventRewardPathsAreBothSupported()
 	{
-		assertEquals(NocturnePlugin.LootOrigin.REJECTED,
+		assertEquals(NocturnePlugin.LootOrigin.NPC,
 			NocturnePlugin.classifyLoot(LootRecordType.NPC, "Barrows Chests"));
 		assertEquals(NocturnePlugin.LootOrigin.GENERIC_EVENT,
 			NocturnePlugin.classifyLoot(LootRecordType.EVENT, "Barrows Chests"));

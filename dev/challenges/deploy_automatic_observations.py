@@ -37,6 +37,7 @@ MANIFEST_REL = "dev/challenges/source-manifest.json"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OBSERVATION_BODY = 8192
 SCHEMA_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
+TRACKING_TABLES = ("plugin_tracking_observations", "plugin_tracking_observation_participants")
 LEGACY_AUTOMATIC_INTAKE_PREDECESSORS = (
     ("9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03", 27618),
 )
@@ -55,6 +56,8 @@ TARGETS = (
      SERVICE_ROOT / "challenge_automatic_intake.py", "absent_or_previous"),
     ("dev/challenges/service/challenge_intake_api.py",
      SERVICE_ROOT / "challenge_intake_api.py", "manifest"),
+    ("dev/challenges/service/plugin_tracking_catalog.py",
+     SERVICE_ROOT / "plugin_tracking_catalog.py", "absent"),
     ("dev/challenges/service/leaderboard_challenge_ingest.py",
      SERVICE_ROOT / "leaderboard_challenge_ingest.py", "manifest"),
     ("dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
@@ -84,6 +87,7 @@ REQUIRED_ACTIVE = ("osrs-drops-api.service", "nocturne-challenge-intake.service"
 RESTART_FOR_IMPORTS = ("nocturne-challenge-intake.service",)
 PUBLIC_PROBES = (
     ("https://nocturne.events/api/challenges/config/active", "config"),
+    ("https://nocturne.events/api/plugin/tracking/config", "plugin_tracking_config"),
     ("https://nocturne.events/api/challenges/leaderboard", "leaderboard"),
 )
 _NEW_FILE_META_KEYS = ("uid", "gid", "mode", "acl_text", "acl_sha256", "nlink")
@@ -156,6 +160,13 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
             if predecessor_kind != "absent_or_previous":
                 raise DeploymentError("automatic intake predecessor contract rejected")
             baseline = None
+        elif target == SERVICE_ROOT / "plugin_tracking_catalog.py":
+            if relative in live or any(item.get("path") == str(target)
+                                       for item in source_manifest.get("live_sources", [])):
+                raise DeploymentError("Plugin Tracking module acquired an unreviewed live baseline")
+            if predecessor_kind != "absent":
+                raise DeploymentError("Plugin Tracking module predecessor contract rejected")
+            baseline = None
         else:
             baseline = live.get(str(target))
             if (not isinstance(baseline, dict) or baseline.get("type") != "regular" or
@@ -169,7 +180,8 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
             _validate_nginx_fragment(source, support)
         result.append({"source_relative": relative, "source": source, "target": target,
                        "after_sha256": after_digest, "after_size": int(bundle["size"]),
-                       "baseline": baseline, "predecessor_kind": predecessor_kind})
+                       "baseline": baseline, "predecessor_kind": predecessor_kind,
+                       "allow_absent": target == SERVICE_ROOT / "plugin_tracking_catalog.py"})
     api_baseline = next((item["baseline"] for item in result
                          if item["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
     if not isinstance(api_baseline, dict):
@@ -197,9 +209,15 @@ def _validate_nginx_fragment(path: Path, support) -> None:
     except UnicodeError as exc:
         raise DeploymentError("nginx include encoding rejected") from exc
     observation_locations = re.findall(r"(?m)^\s*location\s*=\s*/api/challenges/intake/observations\s*\{", text)
+    tracking_locations = re.findall(r"(?m)^\s*location\s*=\s*/api/plugin/tracking/config\s*\{", text)
+    tracking_observation_locations = re.findall(r"(?m)^\s*location\s*=\s*/api/plugin/tracking/observations\s*\{", text)
     approved_locations = re.findall(r"(?m)^\s*location\s*=\s*/api/challenges/intake/approved\s*\{", text)
     proxy_targets = re.findall(r"(?m)^\s*proxy_pass\s+http://127\.0\.0\.1:5011/api/challenges/intake/observations;\s*$", text)
-    if len(observation_locations) != 1 or len(approved_locations) != 1 or len(proxy_targets) != 1:
+    tracking_proxy = re.findall(r"(?m)^\s*proxy_pass\s+http://127\.0\.0\.1:5011/api/plugin/tracking/config;\s*$", text)
+    tracking_observation_proxy = re.findall(r"(?m)^\s*proxy_pass\s+http://127\.0\.0\.1:5011/api/plugin/tracking/observations;\s*$", text)
+    if (len(observation_locations) != 1 or len(approved_locations) != 1 or len(proxy_targets) != 1
+            or len(tracking_locations) != 1 or len(tracking_proxy) != 1
+            or len(tracking_observation_locations) != 1 or len(tracking_observation_proxy) != 1):
         raise DeploymentError("nginx route fragment contract rejected")
 
 
@@ -340,7 +358,9 @@ def _expected_schema_signature(auto_module) -> tuple[tuple[str, str, str | None]
     try:
         auto_module.migrate_schema(conn)
         rows = conn.execute(
-            "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' ORDER BY type,name"
+            "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' "
+            "OR name LIKE 'plugin_tracking_%' "
+            "OR name='idx_plugin_tracking_observations_created' ORDER BY type,name"
         ).fetchall()
         return tuple((str(kind), str(name), re.sub(r"\s+", " ", str(sql or "")).strip())
                      for kind, name, sql in rows)
@@ -352,13 +372,32 @@ def _schema_state(conn: sqlite3.Connection, auto_module) -> str:
     found = {str(row[0]) for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)", SCHEMA_TABLES)}
     if not found:
-        return "absent"
+        tracking_found = {str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",
+            ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts"))}
+        tracking_found |= {str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",
+            TRACKING_TABLES)}
+        return "unsupported" if tracking_found else "absent"
     if found != set(SCHEMA_TABLES):
         return "unsupported"
-    actual = tuple((str(kind), str(name), re.sub(r"\s+", " ", str(sql or "")).strip())
-                   for kind, name, sql in conn.execute(
-                       "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' ORDER BY type,name"))
-    return "present" if actual == _expected_schema_signature(auto_module) else "unsupported"
+    rows = tuple((str(kind), str(name), re.sub(r"\s+", " ", str(sql or "")).strip())
+                 for kind, name, sql in conn.execute(
+                     "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' "
+                     "OR name LIKE 'plugin_tracking_%' "
+                     "OR name='idx_plugin_tracking_observations_created' ORDER BY type,name"))
+    expected = _expected_schema_signature(auto_module)
+    if rows == expected:
+        return "present"
+    catalog_names = {str(row[0]) for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?)",
+        ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts", *TRACKING_TABLES))}
+    previous_automatic = tuple(row for row in expected
+                               if not row[1].startswith("plugin_tracking_")
+                               and row[1] != "idx_plugin_tracking_observations_created")
+    if not catalog_names and rows == previous_automatic:
+        return "catalog_absent"
+    return "unsupported"
 
 
 def _database_snapshot(database: Path, config_module, auto_module, support, *, strict_metadata: bool = True) -> dict[str, Any]:
@@ -399,7 +438,7 @@ def _database_snapshot(database: Path, config_module, auto_module, support, *, s
         automatic_counts = {name: (int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
                                    if name in {str(row[0]) for row in conn.execute(
                                        "SELECT name FROM sqlite_master WHERE type='table'")} else 0)
-                            for name in SCHEMA_TABLES}
+                            for name in (*SCHEMA_TABLES, *TRACKING_TABLES)}
         return {**facts, "active_version_id": version_id,
                 "active_config_sha256": _sha_bytes(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()),
                 "table_counts": counts, "schema_state": schema_state,
@@ -416,6 +455,8 @@ def _load_release_modules(release: Path):
     try:
         import challenge_automatic_intake as automatic
         import challenge_config as config
+        import plugin_tracking_catalog as tracking
+        assert callable(tracking.migrate_schema)
     except Exception as exc:
         raise DeploymentError("immutable Challenge migration modules failed to load") from exc
     return config, automatic
@@ -474,7 +515,7 @@ def make_plan(*, commit: str, repo: Path = REPO, runtime_root: Path = RUNTIME,
         release / "RELEASE-MANIFEST.json")
     inconsistent = ((file_state == "predecessor" and database_state["schema_state"] != "absent") or
                     (file_state in {"installed", "upgrade_predecessor"} and
-                     database_state["schema_state"] not in {"present", "absent"}) or
+                     database_state["schema_state"] not in {"present", "catalog_absent", "absent"}) or
                     (file_state == "installed" and database_state["schema_state"] != "present") or
                     database_state["schema_state"] == "unsupported")
     complete_plan = root_authoritative and database_state["metadata_verified"]
@@ -672,9 +713,11 @@ def _assert_schema_and_zero(database: Path, auto_module, support) -> None:
         state = _schema_state(conn, auto_module)
         if state != "present":
             raise DeploymentError("automatic observation schema verification failed")
-        for name in SCHEMA_TABLES:
+        for name in (*SCHEMA_TABLES, *TRACKING_TABLES):
             if conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] != 0:
                 raise DeploymentError("observation data exists; destructive rollback is forbidden")
+        from plugin_tracking_catalog import active_document
+        active_document(conn)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -717,7 +760,7 @@ def _observation_counts(database: Path, support) -> dict[str, int]:
     with support._readonly_database_snapshot(database) as conn:
         names = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         return {name: int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]) if name in names else 0
-                for name in SCHEMA_TABLES}
+                for name in (*SCHEMA_TABLES, *TRACKING_TABLES)}
 
 
 def verify_live(database: Path, systemd, nginx_master_pid: str, prior_db: dict[str, Any],
@@ -750,6 +793,14 @@ def verify_live(database: Path, systemd, nginx_master_pid: str, prior_db: dict[s
         raise DeploymentError("oversized observation smoke response failed")
     if any(_observation_counts(database, support).values()):
         raise DeploymentError("oversized observation smoke created rows")
+    tracking_url = "https://nocturne.events/api/plugin/tracking/observations"
+    tracking_status, tracking_body = request(tracking_url, method="POST", body=b"{}",
+                                              content_type="application/json")
+    tracking_smoke = _json_response(tracking_status, tracking_body)
+    if tracking_status != 422 or tracking_smoke.get("state") != "invalid":
+        raise DeploymentError("malformed Plugin Tracking smoke response failed")
+    if any(_observation_counts(database, support).values()):
+        raise DeploymentError("malformed Plugin Tracking smoke created rows")
     public_results = {}
     for url, category in PUBLIC_PROBES:
         status, body = request(url)
@@ -773,11 +824,12 @@ def verify_live(database: Path, systemd, nginx_master_pid: str, prior_db: dict[s
     if (allowed_auth_audit not in before_counts or
             after["table_counts"].get(allowed_auth_audit) != before_counts[allowed_auth_audit] + 1):
         raise DeploymentError("authorization smoke audit was not recorded exactly once")
-    if after["observation_counts"] != {SCHEMA_TABLES[0]: 0, SCHEMA_TABLES[1]: 0}:
+    if any(after["observation_counts"].values()):
         raise DeploymentError("observation rows appeared during verification")
     return {"intake_health": "ok", "approved_intake_auth": "protected",
             "observation_smokes": "invalid/no rows", "public_reads": public_results,
             "database_integrity": "ok", "observations": 0, "participants": 0,
+            "plugin_tracking_observations": 0, "plugin_tracking_participants": 0,
             "valid_observation_sent": False}
 
 
@@ -1051,8 +1103,9 @@ def apply(*, commit: str, plan: dict[str, Any], support, systemd,
 
 def _verify_imports(service_root: Path, support) -> None:
     command = ["/srv/projects/api/venv-simon/bin/python", "-B", "-c",
-               "import challenge_automatic_intake, challenge_intake_api, leaderboard_challenge_ingest; "
+               "import challenge_automatic_intake, challenge_intake_api, leaderboard_challenge_ingest, plugin_tracking_catalog; "
                "assert callable(challenge_automatic_intake.migrate_schema); "
+               "assert callable(plugin_tracking_catalog.active_document); "
                "assert hasattr(challenge_intake_api, 'app') and challenge_intake_api.app is None; "
                "assert callable(leaderboard_challenge_ingest.ingest_connection)"]
     env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",

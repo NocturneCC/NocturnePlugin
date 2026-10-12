@@ -37,12 +37,16 @@ ACTIVITIES = {
     "tombs_of_amascut": ("tombs_of_amascut", "overall"),
     "chambers_of_xeric": ("chambers_of_xeric", "overall"),
     "chambers_of_xeric_challenge_mode": ("chambers_of_xeric_cm", "overall"),
+    "corrupted_gauntlet": ("corrupted_gauntlet", "overall"),
     # The canonical solo PNM identity mirrors the published content/mode pair.
     "phosanis_nightmare": ("phosanis_nightmare", "overall"),
 }
 # PNM has one supported solo mode. Pin its Challenge destination independently
 # of the mutable published mode row so an altered mode cannot redirect credit.
-ACTIVITY_BOSS_KEYS = {"phosanis_nightmare": "phosanis"}
+ACTIVITY_BOSS_KEYS = {
+    "phosanis_nightmare": "phosanis",
+    "corrupted_gauntlet": "gauntlet",
+}
 
 MIGRATION_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
 
@@ -146,6 +150,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             }
             if not required_triggers <= trigger_names:
                 raise RuntimeError("automatic observation immutability guard missing")
+        # Plugin Tracking is a distinct catalog overlay, not a Challenge boss
+        # table. Its additive version/draft schema is migrated independently.
+        from plugin_tracking_catalog import migrate_schema as migrate_plugin_tracking_catalog
+        migrate_plugin_tracking_catalog(conn)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -156,6 +164,11 @@ def rollback_schema(conn: sqlite3.Connection) -> None:
     """Reverse the migration only while it contains no observation data."""
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # Keep rollback of the independent Plugin Tracking schema atomic with
+        # the Challenge observation tables. The catalog refuses customized or
+        # populated data rather than discarding it.
+        from plugin_tracking_catalog import rollback_schema as rollback_plugin_tracking
+        rollback_plugin_tracking(conn)
         present = {str(row[0]) for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)", MIGRATION_TABLES
         )}

@@ -106,6 +106,42 @@ public class GenericCompletionCorrelatorTest
 		assertEquals(358_200L, observation.overallTimeMillis.longValue());
 	}
 
+	@Test public void trackedNightmareGroupUsesGenericOverallDurationWithoutChallengeProjection()
+	{
+		GroupSnapshot group = new GroupSnapshot("fixture group", List.of("Local Name", "Party Member"), 2,
+			GroupSnapshot.Status.MATCHED, "stable fixture roster");
+		BossCompletionContext completion = BossCompletionContext.fromTrackedActivity("The Nightmare",
+			"Local Name", group, "session", 40, 1_000_000_000L, NOW);
+		assertNotNull(completion);
+		assertNull(completion.bossKey);
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		assertNull(correlator.onCompletion(completion, completion.completionNanos, NOW));
+		correlator.onMessage("GAMEMESSAGE", "The Nightmare duration: 6:12.34. Personal best: 5:50.00",
+			41, 1_100_000_000L, NOW);
+		ChallengeObservation observation = correlator.poll(2_700_000_001L, NOW);
+		assertNotNull(observation);
+		assertEquals("nightmare", observation.activityKey);
+		assertEquals(372_340L, observation.overallTimeMillis.longValue());
+		assertEquals(2, observation.groupSize);
+		assertFalse(observation.challengeProjection);
+	}
+
+	@Test public void corruptedGauntletRewardLootUsesGenericCompletionTime()
+	{
+		BossCompletionContext completion = BossCompletionContext.fromNpcLoot("The Corrupted Gauntlet",
+			"Local Name", "session", 48, 1_000_000_000L, NOW);
+		assertNotNull(completion);
+		assertEquals("corrupted_gauntlet", completion.activityKey);
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		correlator.onCompletion(completion, completion.completionNanos, NOW);
+		correlator.onMessage("GAMEMESSAGE", "Completion time: 5:41.27. Personal best: 5:12.00",
+			49, 1_100_000_000L, NOW);
+		ChallengeObservation observation = correlator.poll(2_700_000_001L, NOW);
+		assertNotNull(observation);
+		assertEquals(341_270L, observation.overallTimeMillis.longValue());
+		assertEquals("corrupted_gauntlet", observation.activityKey);
+	}
+
 	@Test public void onlyCanonicalPhosaniNpcSourceCreatesBossIdentity()
 	{
 		assertNotNull(context(1, 1L));

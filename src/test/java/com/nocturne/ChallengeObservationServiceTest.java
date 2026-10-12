@@ -25,6 +25,17 @@ import static org.junit.Assert.*;
 
 public class ChallengeObservationServiceTest
 {
+	@Test public void pluginTrackingResponseStatesMatchThePublishedRouteStatusContract()
+	{
+		assertEquals(ChallengeObservationResponse.State.ACCEPTED,
+			ChallengeObservationResponse.parse(200, new Gson().fromJson("{\"state\":\"accepted\"}", JsonObject.class)).state);
+		assertEquals(ChallengeObservationResponse.State.IGNORED,
+			ChallengeObservationResponse.parse(200, new Gson().fromJson(
+				"{\"state\":\"ignored\",\"reason\":\"unconfigured\"}", JsonObject.class)).state);
+		assertEquals(ChallengeObservationResponse.State.SERVER_FAILURE,
+			ChallengeObservationResponse.parse(500, new Gson().fromJson("{\"state\":\"server_failure\"}", JsonObject.class)).state);
+	}
+
 	private static ChallengeObservation observation()
 	{
 		GroupSnapshot roster = new GroupSnapshot("fixture", List.of("Local Name", "Party Name"), 2,
@@ -156,6 +167,41 @@ public class ChallengeObservationServiceTest
 			assertTrue(complete.await(3, TimeUnit.SECONDS));
 			assertEquals("application/json; charset=utf-8", contentType.get());
 			assertEquals(expected, capturedBody.get());
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void nonChallengeTrackedActivityUsesPublicPluginTrackingRoute()
+	{
+		GroupSnapshot group = new GroupSnapshot("fixture group", List.of("Local Name", "Party Name"), 2,
+			GroupSnapshot.Status.MATCHED, "fixture stable group");
+		BossCompletionContext context = BossCompletionContext.fromTrackedActivity("The Nightmare",
+			"Local Name", group, "session", 1, 1L, Instant.parse("2026-10-12T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 372_340L);
+		assertNotNull(observation);
+		assertFalse(observation.challengeProjection);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		CountDownLatch complete = new CountDownLatch(1);
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			assertEquals(ChallengeObservationService.PLUGIN_ENDPOINT, chain.request().url().toString());
+			assertNull(chain.request().header("Authorization"));
+			okio.Buffer body = new okio.Buffer(); chain.request().body().writeTo(body);
+			JsonObject payload = new Gson().fromJson(body.readUtf8(), JsonObject.class);
+			assertEquals("nightmare", payload.get("activity_key").getAsString());
+			assertEquals(372_340L, payload.get("overall_time_ms").getAsLong());
+			assertEquals(2, payload.get("group_size").getAsInt());
+			return response(chain.request(), 200, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			assertNotNull(service.submit(observation, result -> complete.countDown()));
+			assertTrue(complete.await(3, TimeUnit.SECONDS));
+		}
+		catch (InterruptedException exception)
+		{
+			Thread.currentThread().interrupt();
+			fail("mock observation request interrupted");
 		}
 		finally { service.close(); scheduler.shutdownNow(); }
 	}

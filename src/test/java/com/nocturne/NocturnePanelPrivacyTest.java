@@ -29,7 +29,7 @@ public class NocturnePanelPrivacyTest
 		assertTrue(visible.contains("Tester"));
 		assertTrue(visible.contains("CLAN ANNOUNCEMENTS"));
 		assertTrue(visible.contains("Clan news"));
-		assertTrue(visible.contains("RECENT DROPS"));
+		assertTrue(visible.contains("RECENT ACTIVITY"));
 		assertFalse(visible.contains("Loot tracking"));
 		assertFalse(visible.contains("Test submissions"));
 		assertFalse(visible.contains("Group unavailable"));
@@ -47,10 +47,23 @@ public class NocturnePanelPrivacyTest
 	{
 		NocturnePanel panel = emptyPanel();
 		String visible = visibleText(panel);
-		assertTrue(visible.contains("No recent drops yet."));
+		assertTrue(visible.contains("No recent activity yet."));
 		assertTrue(visible.contains("Load 50 older events"));
 		assertTrue(visible.contains("Clear local history"));
 		assertFalse(visible.contains("Defeat an NPC"));
+	}
+
+	@Test
+	public void nonChallengeCatalogLootAppearsInRecentActivity() throws Exception
+	{
+		NocturnePanel panel = emptyPanel();
+		PluginActivityCatalog.Entry nightmare = PluginActivityCatalog.matchSource("The Nightmare");
+		LootRecord record = new LootRecord("nightmare", "2026-10-12T12:00:00Z", "Tester",
+			"The Nightmare", List.of(),
+			GroupSnapshot.unavailable("fixture"), SubmissionStatus.LOCAL, nightmare);
+		onEdt(() -> panel.showHistory("Tester", new LootHistoryStore.Page(List.of(record), 1, 0, true, 0), false));
+		String visible = visibleText(panel);
+		assertTrue(visible.contains("The Nightmare"));
 	}
 
 	@Test

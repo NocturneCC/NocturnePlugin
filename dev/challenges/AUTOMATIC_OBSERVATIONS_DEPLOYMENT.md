@@ -13,6 +13,7 @@ commit separately before applying it.
 | --- | --- | --- |
 | `dev/challenges/service/challenge_automatic_intake.py` | `/srv/projects/nocturne-services/challenge_automatic_intake.py` | Absent, exact original predecessor SHA-256 `9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03` (27,618 bytes), or exact installed `3e0e0f611c774503709768078a2142feeb883ee9` version SHA-256 `52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3` (28,178 bytes), each with the API's captured ownership/mode/ACL profile |
 | `dev/challenges/service/challenge_intake_api.py` | `/srv/projects/nocturne-services/challenge_intake_api.py` | Exact source-manifest baseline only |
+| `dev/challenges/service/plugin_tracking_catalog.py` | `/srv/projects/nocturne-services/plugin_tracking_catalog.py` | Absent only |
 | `dev/challenges/service/leaderboard_challenge_ingest.py` | `/srv/projects/nocturne-services/leaderboard_challenge_ingest.py` | Exact source-manifest baseline only |
 | `dev/challenges/integration/routes/nocturne-challenge-intake.location.conf` | `/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf` | Exact source-manifest baseline only |
 
@@ -48,8 +49,9 @@ were stopped for the database maintenance window.
 
 ## Database effects and rollback
 
-The only migration is `challenge_automatic_intake.migrate_schema()` from the
-immutable release. It creates the two exact observation tables, indexes, and
+The migration is `challenge_automatic_intake.migrate_schema()` from the
+immutable release. It creates the Challenge observation tables and the
+independent Plugin Tracking catalog/version/draft/observation tables, indexes, and
 immutability triggers described in `AUTOMATIC_OBSERVATIONS.md`; it does not
 alter existing Challenge config, manual submissions, leaderboard tables, or
 award data. The migration is idempotent and the helper rejects partial or
@@ -66,6 +68,8 @@ database image, files, route fragment, and captured service/timer state. If an
 observation row appears, rollback refuses to drop/replace the new schema or
 erase data and leaves the transaction record for operator recovery.
 
+The public Plugin Tracking policy endpoint is also checked as a read. Its
+malformed observation route receives only `{}` and must reject without rows.
 The only active HTTP mutation probe is a deliberately unauthenticated request
 to the existing approved-intake route; it must return 401 and produces one
 normal bounded auth-failure audit entry. Observation probes are only `{}`
