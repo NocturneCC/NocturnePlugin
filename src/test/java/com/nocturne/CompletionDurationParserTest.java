@@ -14,8 +14,13 @@ public class CompletionDurationParserTest
 
 	private List<String> fixture() throws Exception
 	{
+		return fixture("/pnm-generic-duration-fixture.txt");
+	}
+
+	private List<String> fixture(String name) throws Exception
+	{
 		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-			getClass().getResourceAsStream("/pnm-generic-duration-fixture.txt"), StandardCharsets.UTF_8)))
+			getClass().getResourceAsStream(name), StandardCharsets.UTF_8)))
 		{
 			return reader.lines().collect(Collectors.toList());
 		}
@@ -38,6 +43,25 @@ public class CompletionDurationParserTest
 		assertCurrent("Personal best: 4:48.60. Fight duration: 5:58.20", 358_200L);
 		assertCurrent("Fight duration: 5:58.20. Personal best: 4:48.60", 358_200L);
 		assertCurrent("Fight duration: 5:58.20", 358_200L);
+	}
+
+	@Test public void classifiesGauntletOverallTimeSeparatelyFromPbPreparationAndFightTimes()
+		throws Exception
+	{
+		List<String> gauntlet = fixture("/corrupted-gauntlet-completion-fixture.txt");
+		List<CompletionDurationParser.Token> completion = parser.parse(gauntlet.get(0));
+		assertEquals(2, completion.size());
+		assertEquals(552_000L, completion.get(0).durationMillis);
+		assertEquals(CompletionDurationParser.Metric.OVERALL, completion.get(0).metric);
+		assertTrue(completion.get(1).referenceOnly);
+		assertEquals(435_000L, completion.get(1).durationMillis);
+
+		List<CompletionDurationParser.Token> other = parser.parse(gauntlet.get(1));
+		assertEquals(2, other.size());
+		assertEquals(346_000L, other.get(0).durationMillis);
+		assertEquals(206_000L, other.get(1).durationMillis);
+		assertEquals(CompletionDurationParser.Metric.UNSPECIFIED, other.get(0).metric);
+		assertEquals(CompletionDurationParser.Metric.UNSPECIFIED, other.get(1).metric);
 	}
 
 	@Test public void normalizesTagsWhitespaceCurlyPunctuationAndFractions()

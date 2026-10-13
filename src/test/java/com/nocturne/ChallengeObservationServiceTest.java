@@ -206,6 +206,56 @@ public class ChallengeObservationServiceTest
 		finally { service.close(); scheduler.shutdownNow(); }
 	}
 
+	@Test public void gauntletCompletionSubmitsBeforeChestAndDuplicateOrDelayedLootCannotResubmit() throws Exception
+	{
+		AtomicInteger requests = new AtomicInteger();
+		AtomicReference<String> eventId = new AtomicReference<>();
+		CountDownLatch finished = new CountDownLatch(1);
+		AtomicLong nanos = new AtomicLong(1_000_000_000L);
+		Instant now = Instant.parse("2026-10-12T12:00:00Z");
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			requests.incrementAndGet();
+			assertEquals(ChallengeObservationService.ENDPOINT, chain.request().url().toString());
+			assertNull(chain.request().header("Authorization"));
+			okio.Buffer requestBody = new okio.Buffer();
+			chain.request().body().writeTo(requestBody);
+			JsonObject payload = new Gson().fromJson(requestBody.readUtf8(), JsonObject.class);
+			assertEquals("corrupted_gauntlet", payload.get("activity_key").getAsString());
+			assertEquals("corrupted_gauntlet", payload.get("mode_key").getAsString());
+			assertEquals(552_000L, payload.get("overall_time_ms").getAsLong());
+			assertFalse(payload.has("room_time_ms"));
+			assertEquals(1, payload.get("group_size").getAsInt());
+			assertEquals("Local Name", payload.getAsJsonArray("roster").get(0).getAsString());
+			eventId.set(payload.get("event_id").getAsString());
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(
+			new ChallengeCompletionCorrelator(), service, ignored -> finished.countDown(), ignored -> { },
+			nanos::get, ignored -> { });
+		try
+		{
+			String completion = "Corrupted challenge duration: 9:12. Personal best: 7:15.";
+			capture.onSystemMessage("GAMEMESSAGE", completion, 100, true, false, now);
+			capture.onGauntletCompletion("GAMEMESSAGE", completion, true, "Local Name",
+				"session", 100, true, false, now);
+			// A replay in the same encounter resolves to the existing context/event identity.
+			capture.onGauntletCompletion("GAMEMESSAGE", completion, true, "Local Name",
+				"session", 100, true, false, now);
+			capture.onSystemMessage("GAMEMESSAGE",
+				"Preparation time: 5:46. Hunllef kill time: 3:26.", 101, true, false, now);
+			nanos.set(2_700_000_001L);
+			capture.onTick(true, false, now);
+			assertTrue(finished.await(3, TimeUnit.SECONDS));
+			assertNotNull(eventId.get());
+			assertEquals(1, requests.get());
+			assertFalse("The later reward chest is not a completion trigger",
+				PluginActivityCatalog.completionComesFromLoot(PluginActivityCatalog.GAUNTLET));
+		}
+		finally { capture.close(); scheduler.shutdownNow(); }
+	}
+
 	@Test public void linkedAlternateDoesNotDependOnChallengeMemberView()
 	{
 		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of("De Lena"), 1,

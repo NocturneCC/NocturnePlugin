@@ -18,6 +18,7 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.ChatMessageType;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -288,8 +289,6 @@ public class NocturnePlugin extends Plugin
 		{
 			tracker.onTick();
 			observeCompletion(null, tracker);
-			if (challengeCapture != null)
-				challengeCapture.onTick(config.submitChallengeTimes(), config.showDiagnostics(), java.time.Instant.now());
 			RaidPresenceService presence = raidPresence;
 			if (presence != null && tracker.isActiveChambers())
 			{
@@ -306,6 +305,9 @@ public class NocturnePlugin extends Plugin
 				view.setRaidEvidence(snapshot, observed, verification);
 			});
 		}
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null)
+			capture.onTick(config.submitChallengeTimes(), config.showDiagnostics(), java.time.Instant.now());
 	}
 
 	@Subscribe
@@ -452,11 +454,24 @@ public class NocturnePlugin extends Plugin
 			}
 			observeCompletion(category, event.getMessage(), tracker);
 		}
-		else if (tracker != null && CompletionMessageBuffer.eligibleCategory(category))
+		else if (CompletionMessageBuffer.eligibleCategory(category))
 		{
 			ChallengeCompletionCapture capture = challengeCapture;
 			if (capture != null) capture.onSystemMessage(category, event.getMessage(), gameTick,
 				config.submitChallengeTimes(), config.showDiagnostics(), java.time.Instant.now());
+		}
+		if (CompletionMessageBuffer.eligibleCategory(category))
+		{
+			Player local = client.getLocalPlayer();
+			ChallengeCompletionCapture capture = challengeCapture;
+			if (capture != null && local != null && local.getName() != null)
+			{
+				capture.onGauntletCompletion(category, event.getMessage(),
+					client.getVarbitValue(VarbitID.PLAYER_IN_GAUNTLET) != 0
+						&& client.getVarbitValue(VarbitID.GAUNTLET_CORRUPTED) != 0,
+					local.getName(), clientSessionId, gameTick, config.submitChallengeTimes(),
+					config.showDiagnostics(), java.time.Instant.now());
+			}
 		}
 		EmojiRenderer renderer = emojiRenderer;
 		if (renderer != null) renderer.onChatMessage(event);
@@ -549,7 +564,8 @@ public class NocturnePlugin extends Plugin
 		}
 		persist(record, false);
 		ChallengeCompletionCapture capture = challengeCapture;
-		if (capture != null && activity != null && activity.lootTrackingEnabled
+		if (capture != null && activity != null && PluginActivityCatalog.completionComesFromLoot(activity)
+			&& activity.lootTrackingEnabled
 			&& config.submitChallengeTimes())
 		{
 			// Local history is queued before the asynchronous policy result can arrive.

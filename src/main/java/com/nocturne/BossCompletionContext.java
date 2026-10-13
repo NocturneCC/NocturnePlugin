@@ -39,7 +39,21 @@ final class BossCompletionContext
 	{
 		if (source == null || reporter == null || clientSessionId == null || now == null) return null;
 		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
-		if (activity == null || !activity.ttkTrackingEnabled || activity.challengeBossKey == null
+		return fromActiveSoloActivity(activity, reporter, clientSessionId, cycle, nowNanos, now);
+	}
+
+	static BossCompletionContext fromActiveSoloActivity(String activityKey, String modeKey,
+		String reporter, String clientSessionId, long cycle, long nowNanos, Instant now)
+	{
+		return fromActiveSoloActivity(PluginActivityCatalog.find(activityKey, modeKey), reporter,
+			clientSessionId, cycle, nowNanos, now);
+	}
+
+	private static BossCompletionContext fromActiveSoloActivity(PluginActivityCatalog.Entry activity,
+		String reporter, String clientSessionId, long cycle, long nowNanos, Instant now)
+	{
+		if (activity == null || reporter == null || clientSessionId == null || now == null
+			|| !activity.ttkTrackingEnabled || activity.challengeBossKey == null
 			|| !"overall".equals(activity.timingScope) || !activity.supportsSolo) return null;
 		String encounter = clientSessionId + "|" + activity.challengeBossKey + "|"
 			+ reporter.trim().toLowerCase(java.util.Locale.ROOT) + "|" + cycle;

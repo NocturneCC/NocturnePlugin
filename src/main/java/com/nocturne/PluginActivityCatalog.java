@@ -48,6 +48,19 @@ final class PluginActivityCatalog
 		return found;
 	}
 
+	static Entry find(String activityKey, String modeKey)
+	{
+		if (activityKey == null || modeKey == null) return null;
+		for (Entry entry : entries)
+			if (activityKey.equals(entry.activityKey) && modeKey.equals(entry.modeKey)) return entry;
+		return null;
+	}
+
+	static boolean completionComesFromLoot(Entry activity)
+	{
+		return activity != null && !"corrupted_gauntlet".equals(activity.activityKey);
+	}
+
 	static synchronized boolean applyPublicConfig(JsonObject document)
 	{
 		try

@@ -67,7 +67,7 @@ public class GenericCompletionCorrelatorTest
 	{
 		GenericCompletionCorrelator ambiguous = new GenericCompletionCorrelator();
 		ambiguous.onCompletion(context(5, 1_000_000_000L), 1_000_000_000L, NOW);
-		ambiguous.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20. Phase duration: 2:11.00", 6, 1_100_000_000L, NOW);
+		ambiguous.onMessage("GAMEMESSAGE", "Fight duration: 5:58.20. Overall duration: 2:11.00", 6, 1_100_000_000L, NOW);
 		assertNull(ambiguous.poll(2_700_000_001L, NOW));
 		assertEquals("duration_ambiguous", ambiguous.lastDiagnosticReason());
 
@@ -140,6 +140,47 @@ public class GenericCompletionCorrelatorTest
 		assertNotNull(observation);
 		assertEquals(341_270L, observation.overallTimeMillis.longValue());
 		assertEquals("corrupted_gauntlet", observation.activityKey);
+	}
+
+	@Test public void corruptedGauntletCompletionContextSelectsConfiguredOverallMetricWithoutLoot()
+	{
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		long completionNanos = 1_000_000_000L;
+		// The overall completion message itself arrives before any reward chest event.
+		correlator.onMessage("GAMEMESSAGE",
+			"Corrupted challenge duration: 9:12. Personal best: 7:15.", 100,
+			completionNanos, NOW);
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Local Name", "session", 100,
+			completionNanos + 1, NOW);
+		assertNotNull(context);
+		assertEquals("gauntlet", context.bossKey);
+		assertEquals("corrupted_gauntlet", context.activityKey);
+		assertEquals("overall", context.timingScope);
+		assertNull(correlator.onCompletion(context, context.completionNanos, NOW));
+
+		// Other activity times may follow, but their arrival order cannot replace overall time.
+		correlator.onMessage("GAMEMESSAGE",
+			"Preparation time: 5:46. Hunllef kill time: 3:26.", 101,
+			completionNanos + 200_000_000L, NOW);
+		ChallengeObservation result = correlator.poll(completionNanos + 1_800_000_001L, NOW);
+		assertNotNull(result);
+		assertEquals(552_000L, result.overallTimeMillis.longValue());
+		assertEquals("corrupted_gauntlet", result.activityKey);
+		assertEquals(List.of("Local Name"), result.roster);
+	}
+
+	@Test public void gauntletWithoutConfiguredOverallLabelFailsClosedRatherThanChoosingLatestTime()
+	{
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Local Name", "session", 110,
+			1_000_000_000L, NOW);
+		correlator.onCompletion(context, context.completionNanos, NOW);
+		correlator.onMessage("GAMEMESSAGE", "Preparation time: 5:46", 111, 1_100_000_000L, NOW);
+		correlator.onMessage("GAMEMESSAGE", "Hunllef kill time: 3:26", 112, 1_200_000_000L, NOW);
+		assertNull(correlator.poll(10_000_000_001L, NOW));
+		assertEquals("configured_metric_missing", correlator.lastDiagnosticReason());
 	}
 
 	@Test public void onlyCanonicalPhosaniNpcSourceCreatesBossIdentity()

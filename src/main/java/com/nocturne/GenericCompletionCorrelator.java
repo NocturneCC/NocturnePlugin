@@ -97,9 +97,12 @@ final class GenericCompletionCorrelator
 		for (Pending state : new ArrayList<>(pending.values()))
 		{
 			List<CompletionDurationParser.Token> nearestCandidates = new ArrayList<>();
+			List<CompletionDurationParser.Token> scopedCandidates = new ArrayList<>();
 			Set<String> uniqueTokens = new LinkedHashSet<>();
+			Set<String> uniqueScopedTokens = new LinkedHashSet<>();
 			long nearestDistance = Long.MAX_VALUE;
 			long latestCandidate = state.context.completionNanos;
+			boolean hasUnscopedCandidates = false;
 			for (CompletionMessageBuffer.Entry entry : state.entries)
 			{
 				long delta = entry.arrivalNanos - state.context.completionNanos;
@@ -109,6 +112,14 @@ final class GenericCompletionCorrelator
 					{
 						String tokenKey = entry.normalizedText + '|' + token.start + '|' + token.end;
 						long distance = Math.abs(delta);
+						if (matchesConfiguredScope(state.context, token.metric))
+						{
+							if (uniqueScopedTokens.add(tokenKey)) scopedCandidates.add(token);
+						}
+						else
+						{
+							hasUnscopedCandidates = true;
+						}
 						if (distance < nearestDistance)
 						{
 							nearestDistance = distance;
@@ -121,23 +132,27 @@ final class GenericCompletionCorrelator
 			}
 			boolean quiet = nowNanos - latestCandidate >= QUIET_WINDOW_NANOS;
 			boolean expired = nowNanos - state.context.completionNanos > AFTER_WINDOW_NANOS;
-			if (nearestCandidates.isEmpty())
+			boolean requiresExplicitScope = "corrupted_gauntlet".equals(state.context.activityKey);
+			List<CompletionDurationParser.Token> candidates = scopedCandidates.isEmpty()
+				? requiresExplicitScope ? List.of() : nearestCandidates : scopedCandidates;
+			if (candidates.isEmpty())
 			{
 				if (expired)
 				{
-					lastDiagnosticReason = "duration_missing";
+					lastDiagnosticReason = requiresExplicitScope && hasUnscopedCandidates
+						? "configured_metric_missing" : "duration_missing";
 					remove(state.context.encounterIdentity);
 				}
 				continue;
 			}
 			if (!quiet && !expired) continue;
-			if (nearestCandidates.size() != 1)
+			if (candidates.size() != 1)
 			{
 				lastDiagnosticReason = "duration_ambiguous";
 				if (expired || quiet) remove(state.context.encounterIdentity);
 				continue;
 			}
-			CompletionDurationParser.Token selected = nearestCandidates.get(0);
+			CompletionDurationParser.Token selected = candidates.get(0);
 			ChallengeObservation observation;
 			if ("overall".equals(state.context.timingScope) && state.context.bossKey == null)
 				observation = ChallengeObservation.createTracked(state.context, selected.durationMillis);
@@ -165,6 +180,13 @@ final class GenericCompletionCorrelator
 		}
 		prune(nowNanos);
 		return null;
+	}
+
+	private static boolean matchesConfiguredScope(BossCompletionContext context,
+		CompletionDurationParser.Metric metric)
+	{
+		return "overall".equals(context.timingScope) && metric == CompletionDurationParser.Metric.OVERALL
+			|| "segment".equals(context.timingScope) && metric == CompletionDurationParser.Metric.SEGMENT;
 	}
 
 	private void remove(String identity)

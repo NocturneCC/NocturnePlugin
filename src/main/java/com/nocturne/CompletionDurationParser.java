@@ -16,6 +16,12 @@ final class CompletionDurationParser
 		"(?<![0-9:])((?:[0-9]{1,4}\\s*:\\s*[0-5][0-9]|[0-9]{1,2}\\s*:\\s*[0-5][0-9]\\s*:\\s*[0-5][0-9])(?:\\s*\\.[0-9]{1,3})?)(?![0-9:])");
 	private static final Pattern REFERENCE = Pattern.compile(
 		"(?i)(?:\\bpersonal\\s+best\\b|\\bprevious\\s+best\\b|\\bprior\\s+best\\b|\\bold\\s+best\\b|\\brecord\\b|\\bpb\\b|\\breference\\b)");
+	private static final Pattern OVERALL_LABEL = Pattern.compile(
+		"(?i)(?:\\bchallenge\\s+duration\\b|\\b(?:overall|total)(?:\\s+completion)?\\s+(?:time|duration)\\b|\\bcompletion\\s+(?:time|duration)\\b|\\bfight\\s+duration\\b|\\braid\\s+duration\\b)");
+	private static final Pattern SEGMENT_LABEL = Pattern.compile(
+		"(?i)\\b(?:room|segment)\\s+(?:time|duration)\\b");
+
+	enum Metric { OVERALL, SEGMENT, UNSPECIFIED }
 
 	static final class Token
 	{
@@ -23,13 +29,15 @@ final class CompletionDurationParser
 		final int start;
 		final int end;
 		final boolean referenceOnly;
+		final Metric metric;
 
-		Token(long durationMillis, int start, int end, boolean referenceOnly)
+		Token(long durationMillis, int start, int end, boolean referenceOnly, Metric metric)
 		{
 			this.durationMillis = durationMillis;
 			this.start = start;
 			this.end = end;
 			this.referenceOnly = referenceOnly;
+			this.metric = metric;
 		}
 	}
 
@@ -63,7 +71,9 @@ final class CompletionDurationParser
 				}
 				String prefix = text.substring(prefixStart, matcher.start()).toLowerCase(Locale.ROOT);
 				boolean reference = REFERENCE.matcher(prefix).find();
-				result.add(new Token(duration, matcher.start(), matcher.end(), reference));
+				Metric metric = OVERALL_LABEL.matcher(prefix).find() ? Metric.OVERALL
+					: SEGMENT_LABEL.matcher(prefix).find() ? Metric.SEGMENT : Metric.UNSPECIFIED;
+				result.add(new Token(duration, matcher.start(), matcher.end(), reference, metric));
 			}
 			previousEnd = matcher.end();
 		}

@@ -85,6 +85,19 @@ final class ChallengeCompletionCapture
 		if (observation != null) submit(observation, diagnostics);
 	}
 
+	void onGauntletCompletion(String category, String text, boolean activeGauntlet, String reporter,
+		String clientSessionId, long gameCycle, boolean consent, boolean diagnostics, Instant now)
+	{
+		if (!consent) { clearPartial(); return; }
+		if (!GauntletCompletionSignal.isCompletion(category, text, activeGauntlet)) return;
+		long completionNanos = nanoTime.getAsLong();
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", reporter, clientSessionId,
+			gameCycle, completionNanos, now);
+		ChallengeObservation observation = genericCorrelator.onCompletion(context, completionNanos, now);
+		if (observation != null) submit(observation, diagnostics);
+	}
+
 	void onSystemMessage(String category, String text, long gameCycle, boolean consent,
 		boolean diagnostics, Instant now)
 	{
