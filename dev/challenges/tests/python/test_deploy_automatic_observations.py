@@ -422,6 +422,102 @@ class TargetClassificationTests(unittest.TestCase):
         self.assertEqual(5, len(observed))
         self.assertIsNone(observed[2]["current_sha256"])
 
+    def test_exact_384_failed_forward_installed_state_is_supported(self):
+        """Reproduce the five installed target bytes left by the 384 forward attempt."""
+        source_manifest = json.loads((TREE / "source-manifest.json").read_text())
+        live_records = {record["path"]: record
+                        for record in source_manifest["live_sources"]}
+        api_profile = live_records["/srv/projects/nocturne-services/challenge_intake_api.py"]
+        leaderboard_profile = live_records[
+            "/srv/projects/nocturne-services/leaderboard_challenge_ingest.py"]
+        nginx_profile = live_records[
+            "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf"]
+        profiles = {
+            "dev/challenges/service/challenge_automatic_intake.py": api_profile,
+            "dev/challenges/service/challenge_intake_api.py": api_profile,
+            "dev/challenges/service/plugin_tracking_catalog.py": api_profile,
+            "dev/challenges/service/leaderboard_challenge_ingest.py": leaderboard_profile,
+            "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf": nginx_profile,
+        }
+        target_paths = {
+            relative: (self.root / Path(target).name)
+            for relative, target, _kind in deploy.TARGETS
+        }
+        nginx_patch = mock.patch.object(
+            deploy, "NGINX_INCLUDE",
+            target_paths["dev/challenges/integration/routes/nocturne-challenge-intake.location.conf"])
+        nginx_patch.start()
+        self.addCleanup(nginx_patch.stop)
+
+        items = []
+        live = {}
+        for relative, target, kind in deploy.TARGETS:
+            source = TREE.parents[1] / relative
+            desired = source.read_bytes()
+            expected_after = hashlib.sha256(desired).hexdigest()
+            prior_hash, prior_size = deploy.PREVIOUS_DEPLOYMENT_TARGETS[relative]
+            if relative in {
+                    "dev/challenges/service/challenge_automatic_intake.py",
+                    "dev/challenges/service/leaderboard_challenge_ingest.py",
+                    "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf"}:
+                self.assertEqual(expected_after, prior_hash)
+            profile = profiles[relative]
+            metadata = {key: profile[key] for key in
+                        ("uid", "gid", "mode", "nlink", "acl_sha256")}
+            previous = {**metadata, "sha256": prior_hash, "size": prior_size,
+                        "type": "regular"}
+            original = (None if kind in {"absent", "absent_or_previous"}
+                        else live_records[str(target)])
+            supported = [previous]
+            if isinstance(original, dict) and any(
+                    original.get(key) != previous.get(key) for key in
+                    ("sha256", "size", "uid", "gid", "mode", "nlink", "acl_sha256", "type")):
+                supported.append(original)
+            if relative.endswith("challenge_automatic_intake.py"):
+                supported.extend({**metadata, "sha256": digest, "size": size, "type": "regular"}
+                                 for digest, size in (*deploy.LEGACY_AUTOMATIC_INTAKE_PREDECESSORS,
+                                                      (deploy.PREVIOUS_AUTOMATIC_INTAKE_SHA256,
+                                                       deploy.PREVIOUS_AUTOMATIC_INTAKE_SIZE)))
+            baseline = previous
+            item = {
+                "source_relative": relative, "source": source,
+                "target": target_paths[relative], "after_sha256": expected_after,
+                "after_size": len(desired), "baseline": baseline,
+                "predecessor_kind": kind,
+                "allow_absent": kind in {"absent", "absent_or_previous"},
+                "supported_predecessors": supported,
+            }
+            items.append(item)
+            live[item["target"]] = {**previous, "type": "regular",
+                                     "acl_text": "fixture ACL\\n"}
+
+        def capture(path):
+            if path not in live:
+                raise FileNotFoundError(path)
+            return live[path]
+
+        support = SimpleNamespace(_safe_parent=lambda _path: None, capture_file=capture)
+        state, observed = deploy._classify_files(items, support)
+        self.assertEqual("upgrade_predecessor", state)
+        self.assertEqual(5, len(observed))
+        self.assertEqual(
+            deploy.PREVIOUS_DEPLOYMENT_TARGETS[
+                "dev/challenges/service/challenge_intake_api.py"][0],
+            observed[1]["current_sha256"])
+        self.assertEqual(
+            deploy.PREVIOUS_DEPLOYMENT_TARGETS[
+                "dev/challenges/service/plugin_tracking_catalog.py"][0],
+            observed[2]["current_sha256"])
+
+        # Unknown metadata remains a hard failure even with authentic predecessor bytes.
+        api_target = target_paths["dev/challenges/service/challenge_intake_api.py"]
+        original_capture = support.capture_file
+        support.capture_file = lambda path: (
+            {**live[path], "gid": 999} if path == api_target else original_capture(path))
+        with self.assertRaisesRegex(
+                deploy.DeploymentError, "unsupported live file content or metadata drift"):
+            deploy._classify_files(items, support)
+
     def test_installed_prior_release_file_set_can_be_captured_for_backup(self):
         """Exercise a later exact-pinned predecessor through backup capture."""
         self.write_after()

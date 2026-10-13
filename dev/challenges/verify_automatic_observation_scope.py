@@ -34,6 +34,18 @@ EXPECTED_TARGETS = (
     ("dev/challenges/integration/routes/nocturne-challenge-intake.location.conf",
      "/srv/projects/nocturne-services/nginx/nocturne-challenge-intake.location.conf", "manifest"),
 )
+EXPECTED_PREVIOUS_DEPLOYMENT_TARGETS = {
+    "dev/challenges/service/challenge_automatic_intake.py":
+        ("e88a8bce7e9e120cb6ebfbe6a0ca8f520b1dad58d46b5041462534d318e80db4", 29969),
+    "dev/challenges/service/challenge_intake_api.py":
+        ("62af22ce71c37b9479a5962dcc1b6293d01563fbdab0de8aa33732a25d1156fd", 31864),
+    "dev/challenges/service/plugin_tracking_catalog.py":
+        ("cc617af85ad0537cb368464b81716b68c19cb7087b134fad011abc0fc549d13b", 26459),
+    "dev/challenges/service/leaderboard_challenge_ingest.py":
+        ("a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c", 24209),
+    "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf":
+        ("0c90be8dcbee08964f1eaf2cbcfcb90a4fea08e55c68974f7b64f4de8b669154", 2583),
+}
 
 # This is the exact repository-local closure imported by the runtime checks and
 # observation path, plus installer support, its canonical read-only readiness
@@ -199,6 +211,8 @@ def verify_scope(repo: Path = ROOT) -> dict[str, object]:
                            for source, target, kind in deployer.TARGETS)
     if actual_targets != EXPECTED_TARGETS:
         raise ScopeError("automatic-observation install target contract changed")
+    if deployer.PREVIOUS_DEPLOYMENT_TARGETS != EXPECTED_PREVIOUS_DEPLOYMENT_TARGETS:
+        raise ScopeError("automatic-observation prior installed target state changed")
     actual_controlled = frozenset(str(value) for value in deployer.CONTROLLED)
     if actual_controlled != EXPECTED_CONTROLLED or tuple(deployer.RESTART_FOR_IMPORTS) != EXPECTED_RESTARTS:
         raise ScopeError("automatic-observation service control contract changed")

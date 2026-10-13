@@ -50,6 +50,22 @@ LEGACY_AUTOMATIC_INTAKE_PREDECESSORS = (
 # supported for hosts that have not yet installed that release.
 PREVIOUS_AUTOMATIC_INTAKE_SHA256 = "52c6d06f732f64759e148119e3e93c53f4139a97a2d27242dcd8352cd643ede3"
 PREVIOUS_AUTOMATIC_INTAKE_SIZE = 28178
+# Exact target bytes installed by the failed-forward 384f7a2 transaction. For
+# targets unchanged by this release, this is the stable baseline; changed
+# targets use it as an explicitly authenticated predecessor. Metadata remains
+# sourced from the existing target profile (or the API profile for new files).
+PREVIOUS_DEPLOYMENT_TARGETS = {
+    "dev/challenges/service/challenge_automatic_intake.py":
+        ("e88a8bce7e9e120cb6ebfbe6a0ca8f520b1dad58d46b5041462534d318e80db4", 29969),
+    "dev/challenges/service/challenge_intake_api.py":
+        ("62af22ce71c37b9479a5962dcc1b6293d01563fbdab0de8aa33732a25d1156fd", 31864),
+    "dev/challenges/service/plugin_tracking_catalog.py":
+        ("cc617af85ad0537cb368464b81716b68c19cb7087b134fad011abc0fc549d13b", 26459),
+    "dev/challenges/service/leaderboard_challenge_ingest.py":
+        ("a827b62a7d4df316246a5a4ccbd4ba3d2cdada63002c480c8834d02ed78ac53c", 24209),
+    "dev/challenges/integration/routes/nocturne-challenge-intake.location.conf":
+        ("0c90be8dcbee08964f1eaf2cbcfcb90a4fea08e55c68974f7b64f4de8b669154", 2583),
+}
 
 # This is the complete install set for the feature.  The first file is a
 # repository-owned source may be absent on the original predecessor or match
@@ -186,22 +202,35 @@ def _manifest_target_items(release: Path, commit: str, release_manifest: dict[st
                        "after_sha256": after_digest, "after_size": int(bundle["size"]),
                        "baseline": baseline, "predecessor_kind": predecessor_kind,
                        "allow_absent": target == SERVICE_ROOT / "plugin_tracking_catalog.py"})
-    api_baseline = next((item["baseline"] for item in result
-                         if item["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
+    api_item = next((item for item in result
+                     if item["target"] == SERVICE_ROOT / "challenge_intake_api.py"), None)
+    api_baseline = api_item.get("baseline") if api_item else None
     if not isinstance(api_baseline, dict):
         raise DeploymentError("API metadata profile is unavailable for automatic intake")
-    automatic = next(item for item in result
-                     if item["target"] == SERVICE_ROOT / "challenge_automatic_intake.py")
-    metadata_profile = {key: api_baseline[key]
-                        for key in ("uid", "gid", "mode", "nlink", "acl_sha256")}
-    automatic["supported_predecessors"] = [
-        {**metadata_profile, "sha256": digest, "size": size, "type": "regular"}
-        for digest, size in (*LEGACY_AUTOMATIC_INTAKE_PREDECESSORS,
-                             (PREVIOUS_AUTOMATIC_INTAKE_SHA256,
-                              PREVIOUS_AUTOMATIC_INTAKE_SIZE))
-    ]
-    automatic["baseline"] = dict(automatic["supported_predecessors"][-1])
-    automatic["allow_absent"] = True
+    for item in result:
+        previous = PREVIOUS_DEPLOYMENT_TARGETS.get(item["source_relative"])
+        if previous is None:
+            raise DeploymentError("previous deployment target record is incomplete")
+        original = item["baseline"]
+        profile = original if isinstance(original, dict) else api_baseline
+        metadata_profile = {key: profile[key]
+                            for key in ("uid", "gid", "mode", "nlink", "acl_sha256")}
+        previous_record = {**metadata_profile, "sha256": previous[0], "size": previous[1],
+                           "type": "regular"}
+        supported = [previous_record]
+        if isinstance(original, dict) and any(
+                original.get(key) != previous_record.get(key)
+                for key in ("sha256", "size", "uid", "gid", "mode", "nlink", "acl_sha256", "type")):
+            supported.append(dict(original))
+        if item["source_relative"] == "dev/challenges/service/challenge_automatic_intake.py":
+            supported.extend(
+                {**metadata_profile, "sha256": digest, "size": size, "type": "regular"}
+                for digest, size in (*LEGACY_AUTOMATIC_INTAKE_PREDECESSORS,
+                                     (PREVIOUS_AUTOMATIC_INTAKE_SHA256,
+                                      PREVIOUS_AUTOMATIC_INTAKE_SIZE)))
+            item["allow_absent"] = True
+        item["baseline"] = previous_record
+        item["supported_predecessors"] = supported
     return result
 
 
@@ -248,6 +277,22 @@ def _supported_automatic_predecessor(actual: dict[str, Any], item: dict[str, Any
                  if isinstance(record, dict) and _expected_live_matches(actual, record)), None)
 
 
+def _supported_target_predecessor(actual: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    records = item.get("supported_predecessors")
+    if not isinstance(records, list):
+        return None
+    return next((record for record in records
+                 if isinstance(record, dict) and _expected_live_matches(actual, record)), None)
+
+
+def _target_predecessor_records(item: dict[str, Any]) -> list[dict[str, Any]]:
+    records = item.get("supported_predecessors")
+    if isinstance(records, list):
+        return [record for record in records if isinstance(record, dict)]
+    baseline = item.get("baseline")
+    return [baseline] if isinstance(baseline, dict) else []
+
+
 def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool = True) -> tuple[str, list[dict[str, Any]]]:
     states: list[str] = []
     observed: list[dict[str, Any]] = []
@@ -282,13 +327,7 @@ def _classify_files(items: list[dict[str, Any]], support, *, strict_owner: bool 
 
         after = {"sha256": item["after_sha256"], "size": item["after_size"]}
         matches_after = all(actual.get(key) == value for key, value in after.items())
-        is_pinned_automatic_target = (
-            item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py" and
-            item.get("predecessor_kind") == "absent_or_previous")
-        predecessor_records = (item.get("supported_predecessors")
-                               if is_pinned_automatic_target else None)
-        if not isinstance(predecessor_records, list):
-            predecessor_records = [baseline]
+        predecessor_records = _target_predecessor_records(item)
         matches_predecessor = any(
             isinstance(record, dict) and
             all(actual.get(key) == record.get(key)
@@ -578,16 +617,15 @@ def _create_file_backups(tx: Transaction, support) -> None:
         if item.get("allow_absent") and before is None:
             record = {**item, "before_sha256": None, "before_metadata": None,
                       "backup_path": None, "backup_sha256": None, "was_absent": True}
-        elif baseline is None:
-            if before is not None:
-                raise DeploymentError("new source target appeared before backup")
+        elif before is None:
+            if baseline is not None or not item.get("allow_absent"):
+                raise DeploymentError("required source target is absent before backup")
             record = {**item, "before_sha256": None, "before_metadata": None,
                       "backup_path": None, "backup_sha256": None, "was_absent": True}
         else:
-            is_automatic_target = item.get("source_relative") == "dev/challenges/service/challenge_automatic_intake.py"
-            predecessor_match = bool(before and is_automatic_target and
-                                     _supported_automatic_predecessor(before, item))
-            baseline_match = bool(before and _expected_live_matches(before, baseline))
+            predecessor_match = bool(_supported_target_predecessor(before, item))
+            baseline_match = bool(before and isinstance(baseline, dict) and
+                                  _expected_live_matches(before, baseline))
             if before is None or not (baseline_match or predecessor_match):
                 raise DeploymentError("target changed immediately before backup")
             data = support._read_regular(item["target"], max(int(before["size"]) + 1, 1))
@@ -620,12 +658,17 @@ def _expected_new_file_meta(file_backups: list[dict[str, Any]], support) -> dict
     entry = matches[0]
     baseline = entry.get("baseline")
     before = entry.get("before_metadata")
+    captured_predecessor = (_supported_target_predecessor(before, entry)
+                            if isinstance(before, dict) else None)
+    if (captured_predecessor is None and isinstance(before, dict) and
+            isinstance(baseline, dict) and _expected_live_matches(before, baseline)):
+        captured_predecessor = baseline
     if (entry.get("was_absent") is not False or entry.get("predecessor_kind") != "manifest" or
             entry.get("source_relative") != "dev/challenges/service/challenge_intake_api.py" or
             not isinstance(baseline, dict) or baseline.get("type") != "regular" or
             not isinstance(before, dict) or not set(_COMPLETE_CAPTURE_META_KEYS).issubset(before) or
-            entry.get("before_sha256") != baseline.get("sha256") or
-            not _expected_live_matches(before, baseline)):
+            entry.get("before_sha256") != before.get("sha256") or
+            captured_predecessor is None):
         raise DeploymentError("captured API predecessor metadata is incomplete or inconsistent")
     uid, gid, mode, acl_text, acl_sha256, nlink = (before.get(key) for key in _NEW_FILE_META_KEYS)
     if (type(uid) is not int or uid < 0 or type(gid) is not int or gid < 0 or
