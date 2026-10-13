@@ -885,8 +885,9 @@ class TransactionStateMachineTests(unittest.TestCase):
     def install(self, *_):
         self.calls.append("install")
 
-    def run_apply(self, failure=None):
+    def run_apply(self, failure=None, rollback=None):
         config = object(); automatic_module = object()
+        verification = failure if callable(failure) else lambda *_a,**_kw: {"ok":True}
         with mock.patch.object(deploy.os, "geteuid", return_value=0), \
              mock.patch.object(deploy, "make_plan", return_value=self.plan), \
              mock.patch.object(deploy, "_read_manifest", return_value=({},{})), \
@@ -902,10 +903,51 @@ class TransactionStateMachineTests(unittest.TestCase):
              mock.patch.object(deploy, "_verify_restored_units", side_effect=lambda *_: self.calls.append("restored_verified")), \
              mock.patch.object(deploy, "_validate_nginx", side_effect=(failure if failure == "nginx" else lambda *_: self.calls.append("nginx_test"))), \
              mock.patch.object(deploy, "_reload_nginx", side_effect=lambda *_: self.calls.append("nginx_reload")), \
-             mock.patch.object(deploy, "verify_live", side_effect=(failure if failure == "health" else lambda *_a,**_kw: {"ok":True})), \
-             mock.patch.object(deploy, "_rollback", side_effect=lambda *_a,**_kw: self.calls.append("rollback")):
+             mock.patch.object(deploy, "verify_live", side_effect=verification), \
+             mock.patch.object(deploy, "_rollback", side_effect=(
+                 rollback if rollback is not None else
+                 (lambda *_a,**_kw: self.calls.append("rollback")))):
             return deploy.apply(commit="a"*40, plan=self.plan, support=self.support, systemd=self.systemd,
                                 runtime_root=self.runtime_root, release=self.release, backup_root=self.root / "backup")
+
+    def test_observation_data_rollback_refusal_preserves_original_apply_failure(self):
+        def fail_live_verification(*_args, **_kwargs):
+            raise deploy.DeploymentError("private endpoint detail must not be recorded")
+
+        def refuse_rollback(tx, *_args, **_kwargs):
+            self.assertEqual("live_verification", tx.failure_phase)
+            self.assertEqual("live_verification_failure", tx.failure_category)
+            tx.write_record("rollback_refused_observation_data", self.support)
+            raise deploy.DeploymentError("rollback refused: automatic observation data exists")
+
+        with self.assertRaisesRegex(
+                deploy.DeploymentError,
+                "deployment failed phase=live_verification rollback=refused"):
+            self.run_apply(failure=fail_live_verification, rollback=refuse_rollback)
+
+        record = json.loads((self.backup_dir / "transaction.json").read_text())
+        self.assertEqual(2, record["schema"])
+        self.assertEqual("rollback_refused_observation_data", record["state"])
+        self.assertEqual("live_verification", record["failure_phase"])
+        self.assertEqual("live_verification_failure", record["failure_category"])
+        self.assertNotIn("private endpoint detail", json.dumps(record))
+
+    def test_legacy_transaction_schema_remains_supported(self):
+        # The rollback reader continues to accept exact v1 records; v2 adds
+        # only the two bounded failure-context fields.
+        legacy = {"schema":1, "target_commit":"a"*40, "state":"files_installed",
+                  "database_backup":"b", "database_backup_sha256":"c",
+                  "database_before":{}, "prior_units":{}, "prior_nginx":{}, "files":[],
+                  "schema_migrated":False, "nginx_reloaded":False, "restoration":{}}
+        self.assertFalse(deploy._validate_transaction_record_schema(legacy))
+        current = {**legacy, "schema":2, "failure_phase":"schema_migration",
+                   "failure_category":"schema_migration_failure"}
+        self.assertTrue(deploy._validate_transaction_record_schema(current))
+        with self.assertRaisesRegex(deploy.DeploymentError, "failure context rejected"):
+            deploy._validate_transaction_record_schema(
+                {**current, "failure_category":"raw exception text"})
+        with self.assertRaisesRegex(deploy.DeploymentError, "record schema rejected"):
+            deploy._validate_transaction_record_schema({**current, "unrecognized":"field"})
 
     def test_success_orders_quiescence_backup_migration_restore_nginx_verify(self):
         self.calls.clear()

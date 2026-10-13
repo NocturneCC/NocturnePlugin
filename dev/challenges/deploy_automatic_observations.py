@@ -580,11 +580,16 @@ class Transaction:
         self.schema_migrated = False
         self.nginx_reloaded = False
         self.restoration: dict[str, Any] = {"services": "pending", "timers": "pending", "nginx": "pending"}
+        self.state: str | None = None
+        self.failure_phase: str | None = None
+        self.failure_category: str | None = None
         self.record = directory / "transaction.json"
 
     def write_record(self, state: str, support) -> None:
         data = {
-            "schema": 1, "target_commit": self.commit, "state": state,
+            "schema": 2, "target_commit": self.commit, "state": state,
+            "failure_phase": self.failure_phase,
+            "failure_category": self.failure_category,
             "database_backup": str(self.database_backup),
             "database_backup_sha256": support._sha_file(self.database_backup) if self.database_backup.exists() else None,
             "database_before": {key: value for key, value in self.database_before.items()
@@ -607,6 +612,32 @@ class Transaction:
         support._verify_private_file(temp, 0)
         os.replace(temp, self.record)
         support._fsync_dir(self.directory)
+        self.state = state
+
+
+def _validate_transaction_record_schema(data: Any) -> bool:
+    """Validate an exact v1/v2 record shape; return whether it is v2."""
+    required = {"schema", "target_commit", "state", "database_backup", "database_backup_sha256",
+                "database_before", "prior_units", "prior_nginx", "files", "schema_migrated",
+                "nginx_reloaded", "restoration"}
+    failure_keys = {"failure_phase", "failure_category"}
+    is_v1 = isinstance(data, dict) and data.get("schema") == 1 and set(data) == required
+    is_v2 = (isinstance(data, dict) and data.get("schema") == 2 and
+             set(data) == required | failure_keys)
+    if not (is_v1 or is_v2):
+        raise DeploymentError("rollback record schema rejected")
+    if is_v2:
+        failure_phase = data.get("failure_phase")
+        failure_category = data.get("failure_category")
+        if ((failure_phase is None) != (failure_category is None) or
+                (failure_phase is not None and
+                 (not isinstance(failure_phase, str) or
+                  not isinstance(failure_category, str) or
+                  not ((failure_phase in _PHASE_DIAGNOSTIC_CATEGORIES and
+                        failure_category == _PHASE_DIAGNOSTIC_CATEGORIES[failure_phase]) or
+                       (failure_phase == "unknown" and failure_category == "deployment_failure"))))):
+            raise DeploymentError("rollback failure context rejected")
+    return bool(is_v2)
 
 
 def _create_file_backups(tx: Transaction, support) -> None:
@@ -1122,6 +1153,14 @@ def apply(*, commit: str, plan: dict[str, Any], support, systemd,
                 "services_restarted_for_imports": list(RESTART_FOR_IMPORTS),
                 "post_install": live, "active_configuration_changed": False}
     except BaseException as exc:
+        tx.failure_phase, tx.failure_category = _bounded_failure_context(phase)
+        # Persist the original apply failure before rollback can replace the
+        # transaction state with a rollback refusal/failure. Never persist the
+        # exception text or chained causes.
+        try:
+            tx.write_record(tx.state or "prestate_captured", support)
+        except Exception:
+            pass
         try:
             if tx.database_backup.exists() and tx.file_backups:
                 _rollback(tx, systemd, support, release, automatic_module, database=database)
@@ -1134,7 +1173,9 @@ def apply(*, commit: str, plan: dict[str, Any], support, systemd,
         except DeploymentError as rollback_exc:
             if ("rollback refused" in str(rollback_exc) and
                     "restoration failed" not in str(rollback_exc)):
-                raise rollback_exc from exc
+                raise DeploymentError(
+                    f"deployment failed phase={phase} rollback=refused "
+                    f"diagnostic_category={tx.failure_category}") from exc
             raise DeploymentError(f"deployment failed phase={phase} rollback=failed") from exc
         except Exception as rollback_exc:
             raise DeploymentError(f"deployment failed phase={phase} rollback=failed") from rollback_exc
@@ -1168,11 +1209,7 @@ def rollback_record(*, record_path: Path, support, systemd, commit: str | None =
         data = json.loads(support._read_regular(record_path, 1024 * 1024))
     except Exception as exc:
         raise DeploymentError("rollback record metadata/schema rejected") from exc
-    required = {"schema", "target_commit", "state", "database_backup", "database_backup_sha256",
-                "database_before", "prior_units", "prior_nginx", "files", "schema_migrated",
-                "nginx_reloaded", "restoration"}
-    if not isinstance(data, dict) or set(data) != required or data.get("schema") != 1:
-        raise DeploymentError("rollback record schema rejected")
+    is_v2 = _validate_transaction_record_schema(data)
     target_commit = data.get("target_commit")
     if not isinstance(target_commit, str) or not FULL_SHA.fullmatch(target_commit) or (commit and commit != target_commit):
         raise DeploymentError("rollback target identity rejected")
@@ -1230,6 +1267,9 @@ def rollback_record(*, record_path: Path, support, systemd, commit: str | None =
     tx.file_backups = tx_files
     tx.schema_migrated = bool(data["schema_migrated"])
     tx.nginx_reloaded = bool(data["nginx_reloaded"]) or data["state"] == "nginx_reload_pending"
+    if is_v2:
+        tx.failure_phase = data["failure_phase"]
+        tx.failure_category = data["failure_category"]
     _rollback(tx, systemd, support, release, auto_module)
     return {"status": "rolled_back", "target_commit": target_commit,
             "transaction_record": str(record_path), "observation_rows": 0,
@@ -1300,6 +1340,13 @@ def _diagnostic_category(exc: BaseException) -> str:
     if phase:
         return _PHASE_DIAGNOSTIC_CATEGORIES.get(phase.group(1), "preflight_blocked")
     return "preflight_blocked"
+
+
+def _bounded_failure_context(phase: str) -> tuple[str, str]:
+    """Return fixed transaction fields for an apply failure, never exception text."""
+    if phase in _PHASE_DIAGNOSTIC_CATEGORIES:
+        return phase, _PHASE_DIAGNOSTIC_CATEGORIES[phase]
+    return "unknown", "deployment_failure"
 
 
 if __name__ == "__main__":
