@@ -327,6 +327,16 @@ final class NocturnePanel extends PluginPanel
 			restoreAfterLayout(anchor, beginIndependentRestore());
 			return;
 		}
+		if (record.ordinaryNpcLoot)
+		{
+			// Ordinary NPC loot is retained in local history but intentionally not
+			// rendered in the default feed. Rebuilding the feed for a hidden record
+			// can make Swing move the viewport as if the user had scrolled to the end.
+			history.add(record);
+			history.updateStats(totalCount, bytes);
+			count.setText(historySummary());
+			return;
+		}
 		prepend(record, () -> history.updateStats(totalCount, bytes));
 	}
 

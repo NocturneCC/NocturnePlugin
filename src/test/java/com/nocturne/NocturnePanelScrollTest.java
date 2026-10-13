@@ -89,6 +89,22 @@ public class NocturnePanelScrollTest
 	}
 
 	@Test
+	public void hiddenOrdinaryNpcKillsDoNotRebuildFeedOrMoveViewport() throws Exception
+	{
+		Harness h = harness(18);
+		Anchor before = positionAt(h, "old-8", 7);
+		onEdt(() ->
+		{
+			for (int i = 0; i < 5; i++) h.ordinaryKill("Nechryael-" + i);
+			h.layout();
+		});
+		flushEdt();
+		assertAnchor(h, before);
+		assertEquals(18, cardIds(h).size());
+		assertTrue(h.panel.historySummary().startsWith("23 loot events"));
+	}
+
+	@Test
 	public void rapidPrependsUseOneStableAnchor() throws Exception
 	{
 		Harness h = harness(18);
@@ -398,6 +414,13 @@ public class NocturnePanelScrollTest
 		private void record(String id)
 		{
 			panel.recordPersistedLoot(NocturnePanelScrollTest.record(id), ++total, 100 + total, 1);
+		}
+		private void ordinaryKill(String id)
+		{
+			LootRecord ordinary = new LootRecord(id, "2026-09-02T12:01:00Z", "Tester", "Nechryael",
+				List.of(), GroupSnapshot.unavailable("test"), SubmissionStatus.LOCAL,
+				null, null, null, true);
+			panel.recordPersistedLoot(ordinary, ++total, 100 + total, 1);
 		}
 		private JScrollPane scroll() { return panel.scrollPane(); }
 		private javax.swing.JScrollBar bar() { return scroll().getVerticalScrollBar(); }
