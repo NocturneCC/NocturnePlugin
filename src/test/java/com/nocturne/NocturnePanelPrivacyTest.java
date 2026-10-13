@@ -67,6 +67,70 @@ public class NocturnePanelPrivacyTest
 	}
 
 	@Test
+	public void ordinaryNpcLootStaysInHistoryButIsHiddenFromDefaultActivityFeed() throws Exception
+	{
+		NocturnePanel panel = emptyPanel();
+		LootRecord ordinaryNpc = new LootRecord("npc", "2026-10-12T12:00:00Z", "Tester",
+			"Hill Giant", List.of(), GroupSnapshot.unavailable("fixture"), SubmissionStatus.LOCAL,
+		null, null, null, true);
+		PluginActivityCatalog.Entry nightmare = PluginActivityCatalog.matchSource("The Nightmare");
+		LootRecord activity = new LootRecord("activity", "2026-10-12T12:01:00Z", "Tester",
+			"The Nightmare", List.of(), GroupSnapshot.unavailable("fixture"), SubmissionStatus.LOCAL, nightmare);
+		onEdt(() -> panel.showHistory("Tester",
+			new LootHistoryStore.Page(List.of(ordinaryNpc, activity), 2, 0, true, 0), false));
+		String visible = visibleText(panel);
+		assertFalse(visible.contains("Hill Giant"));
+		assertTrue(visible.contains("The Nightmare"));
+		assertTrue(panel.historySummary().startsWith("2 loot events"));
+	}
+
+	@Test
+	public void activityTimeConsentTooltipIsShortAndWrapped() throws Exception
+	{
+		String description = NocturneConfig.class.getMethod("submitChallengeTimes")
+			.getAnnotation(net.runelite.client.config.ConfigItem.class).description();
+		assertTrue(description.startsWith("<html>"));
+		assertTrue(description.contains("<br>"));
+		assertTrue(description.contains("public party RSNs"));
+		assertTrue(description.length() < 190);
+	}
+
+	@Test
+	public void unlinkedTimingNoticeDoesNotEraseAcceptedDropStatus() throws Exception
+	{
+		java.util.concurrent.atomic.AtomicReference<LootRecord> localOnlyUpdate = new java.util.concurrent.atomic.AtomicReference<>();
+		NocturnePanel panel = new NocturnePanel(null, new NocturnePanel.HistoryActions()
+		{
+			@Override public void loadOlder(String rsn, int offset) { }
+			@Override public void clear(String rsn) { }
+			@Override public void localOnly(LootRecord record) { localOnlyUpdate.set(record); }
+		});
+		Instant occurred = Instant.parse("2026-10-12T12:00:00Z");
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("The Nightmare");
+		LootRecord record = new LootRecord("nightmare-local", occurred.toString(), "De Lena",
+			"The Nightmare", List.of(),
+			GroupSnapshot.unavailable("fixture"), SubmissionStatus.ACCEPTED, activity);
+		onEdt(() ->
+		{
+			panel.setPlayer("De Lena", 10);
+			panel.showHistory("De Lena", new LootHistoryStore.Page(List.of(), 0, 0, true, 0), false, 10);
+			// Exercise the race where the async intake result arrives before local history append.
+			panel.markActivityAccountUnlinked("nightmare", "De Lena", occurred);
+			panel.recordPersistedLoot(record, 1, 128, 10);
+			assertEquals(SubmissionStatus.ACCEPTED, record.withSubmission(SubmissionStatus.ACCEPTED).submission);
+			panel.setSubmission(record.id, SubmissionStatus.ACCEPTED);
+		});
+		String visible = visibleText(panel);
+		assertTrue(visible.contains("The Nightmare"));
+		assertTrue(visible.contains("Local only — account not linked"));
+		assertTrue(visible.contains(SubmissionStatus.ACCEPTED.label));
+		assertEquals(SubmissionStatus.ACCEPTED, record.submission);
+		assertNotNull(localOnlyUpdate.get());
+		assertEquals("Local only — account not linked", localOnlyUpdate.get().activityTrackingNotice);
+		assertEquals(SubmissionStatus.ACCEPTED, localOnlyUpdate.get().submission);
+	}
+
+	@Test
 	public void diagnosticsSettingRestoresHiddenTelemetryAndRaidDetails() throws Exception
 	{
 		NocturnePanel panel = panel();

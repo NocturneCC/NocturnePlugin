@@ -15,22 +15,37 @@ final class ChallengeCompletionCapture
 	private final ChallengeObservationService service;
 	private final Consumer<String> feedback;
 	private final Consumer<String> diagnostic;
+	private final Consumer<ChallengeObservation> accountUnlinked;
 	private final LongSupplier nanoTime;
 
 	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
 		Consumer<String> feedback, Consumer<String> diagnostic)
 	{
-		this(correlator, service, feedback, diagnostic, System::nanoTime);
+		this(correlator, service, feedback, diagnostic, System::nanoTime, observation -> { });
 	}
 
 	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
 		Consumer<String> feedback, Consumer<String> diagnostic, LongSupplier nanoTime)
+	{
+		this(correlator, service, feedback, diagnostic, nanoTime, observation -> { });
+	}
+
+	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
+		Consumer<String> feedback, Consumer<String> diagnostic, Consumer<ChallengeObservation> accountUnlinked)
+	{
+		this(correlator, service, feedback, diagnostic, System::nanoTime, accountUnlinked);
+	}
+
+	ChallengeCompletionCapture(ChallengeCompletionCorrelator correlator, ChallengeObservationService service,
+		Consumer<String> feedback, Consumer<String> diagnostic, LongSupplier nanoTime,
+		Consumer<ChallengeObservation> accountUnlinked)
 	{
 		this.correlator = correlator;
 		this.service = service;
 		this.feedback = feedback;
 		this.diagnostic = diagnostic;
 		this.nanoTime = nanoTime;
+		this.accountUnlinked = accountUnlinked;
 	}
 
 	void onMessage(String text, RaidCompletionEvidence evidence, String reporter, boolean consent,
@@ -113,7 +128,16 @@ final class ChallengeCompletionCapture
 				case DUPLICATE: feedback.accept("Nocturne already recorded this completion."); break;
 				case SERVER_FAILURE: feedback.accept("Nocturne could not confirm this completion. Please try again later."); break;
 				case RATE_LIMITED: feedback.accept("Nocturne is receiving reports too quickly. This completion was not confirmed."); break;
-				case INVALID: case CONFLICT: case PROTOCOL_ERROR:
+				case INVALID:
+					if ("reporter_not_eligible".equals(result.reason))
+					{
+						accountUnlinked.accept(observation);
+						feedback.accept("Local only — account not linked");
+					}
+					else if (diagnostics)
+						diagnostic.accept("automatic Challenge observation rejected category=invalid");
+					break;
+				case CONFLICT: case PROTOCOL_ERROR:
 					if (diagnostics && result.httpStatus < 400)
 						diagnostic.accept("automatic Challenge observation rejected category="
 							+ result.state.name().toLowerCase(java.util.Locale.ROOT));

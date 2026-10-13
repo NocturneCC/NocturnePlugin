@@ -206,21 +206,65 @@ public class ChallengeObservationServiceTest
 		finally { service.close(); scheduler.shutdownNow(); }
 	}
 
-	@Test public void validationResponseStatusAndAllowlistedReasonAreLoggedWithoutEnablingDiagnostics() throws Exception
+	@Test public void linkedAlternateDoesNotDependOnChallengeMemberView()
+	{
+		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of("De Lena"), 1,
+			GroupSnapshot.Status.MATCHED, "solo encounter");
+		BossCompletionContext context = BossCompletionContext.fromTrackedActivity("The Nightmare",
+			"De Lena", solo, "linked-alt-session", 7, 70L, Instant.parse("2026-10-12T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 358_200L);
+		assertNotNull(observation);
+		assertFalse(observation.challengeProjection);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		CountDownLatch complete = new CountDownLatch(1);
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			// A Challenge member-view 404 must not gate this independent Plugin Tracking POST.
+			// The client should not request that Challenge-only view at all.
+			assertEquals("/api/plugin/tracking/observations", chain.request().url().encodedPath());
+			assertNull(chain.request().header("Authorization"));
+			okio.Buffer body = new okio.Buffer(); chain.request().body().writeTo(body);
+			JsonObject payload = new Gson().fromJson(body.readUtf8(), JsonObject.class);
+			assertEquals("De Lena", payload.get("reporter_rsn").getAsString());
+			assertEquals("nightmare", payload.get("activity_key").getAsString());
+			assertEquals(358_200L, payload.get("overall_time_ms").getAsLong());
+			assertEquals(1, payload.get("group_size").getAsInt());
+			assertEquals("De Lena", payload.getAsJsonArray("roster").get(0).getAsString());
+			return response(chain.request(), 200, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			assertNotNull(service.submit(observation, result ->
+			{
+				assertEquals(ChallengeObservationResponse.State.ACCEPTED, result.state);
+				complete.countDown();
+			}));
+			assertTrue(complete.await(3, TimeUnit.SECONDS));
+		}
+		catch (InterruptedException exception)
+		{
+			Thread.currentThread().interrupt();
+			fail("linked alternate request interrupted");
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void unlinkedReporterKeepsLocalCaptureAndGetsNonSuccessStatus() throws Exception
 	{
 		AtomicLong clock = new AtomicLong(1_000_000_000L);
 		CountDownLatch logged = new CountDownLatch(1);
 		AtomicReference<String> diagnostic = new AtomicReference<>();
+		AtomicReference<String> feedback = new AtomicReference<>();
+		AtomicReference<ChallengeObservation> unlinked = new AtomicReference<>();
 		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
 			response(chain.request(), 422, "{\"state\":\"invalid\",\"reason\":\"reporter_not_eligible\"}")).build(),
 			new Gson(), scheduler);
 		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), service,
-			message -> fail("validation response does not add user-facing clutter"), message ->
+			message -> { feedback.set(message); logged.countDown(); }, message ->
 			{
 				diagnostic.set(message);
-				logged.countDown();
-			}, clock::get);
+			}, clock::get, unlinked::set);
 		try
 		{
 			Instant now = Instant.parse("2026-10-12T19:45:17Z");
@@ -233,6 +277,11 @@ public class ChallengeObservationServiceTest
 			assertTrue(logged.await(3, TimeUnit.SECONDS));
 			assertEquals("automatic Challenge observation response http_status=422 state=invalid reason=reporter_not_eligible",
 				diagnostic.get());
+			assertEquals("Local only — account not linked", feedback.get());
+			assertNotNull(unlinked.get());
+			assertEquals("phosanis_nightmare", unlinked.get().activityKey);
+			assertEquals("Doctor Arden", unlinked.get().reporterRsn);
+			assertFalse(feedback.get().startsWith("Nocturne recorded"));
 		}
 		finally { capture.close(); service.close(); scheduler.shutdownNow(); }
 	}

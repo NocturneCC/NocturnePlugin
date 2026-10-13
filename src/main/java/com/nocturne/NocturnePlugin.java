@@ -132,7 +132,11 @@ public class NocturnePlugin extends Plugin
 		challengeObservations = observations;
 		challengeCapture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), observations,
 			message -> clientThread.invoke(() -> { if (lifecycle == token) client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Nocturne", message, null); }),
-			message -> log.debug("{}", message));
+			message -> log.debug("{}", message), observation -> clientThread.invoke(() ->
+			{
+				if (lifecycle == token) withPanel(view -> view.markActivityAccountUnlinked(
+					observation.activityKey, observation.reporterRsn, observation.occurredAt));
+			}));
 		raidPresence = new RaidPresenceService(http, gson);
 		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager, result ->
 			log.debug("Nocturne emoji render diagnostic supported_message_type={} token_matched={} icon_registered={} node_rewritten={} refresh_requested={}",
@@ -197,6 +201,7 @@ public class NocturnePlugin extends Plugin
 			{
 				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true, historyGeneration); }
 				@Override public void clear(String rsn) { clearHistory(rsn); }
+				@Override public void localOnly(LootRecord record) { persist(record, true); }
 			});
 			panel.setTracking(true);
 			panel.setDiagnostics(config.showDiagnostics());
@@ -535,23 +540,24 @@ public class NocturnePlugin extends Plugin
 			}
 		}
 		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
-		ChallengeCompletionCapture capture = challengeCapture;
-		if (capture != null && activity != null && activity.lootTrackingEnabled
-			&& config.submitChallengeTimes())
-		{
-			// Reuse the exact group snapshot used by the loot record. Group-mode
-			// timing fails closed unless that snapshot is complete and MATCHED;
-			// nearby-player observations are never promoted to a roster.
-			capture.onActivityCompletion(source, rsn, group, clientSessionId, gameTick,
-				true, config.showDiagnostics(), java.time.Instant.now());
-		}
-		LootRecord record = new LootRecord(rsn, source, items, group, activity);
+		LootRecord record = new LootRecord(rsn, source, items, group, activity,
+			origin == LootOrigin.NPC && activity == null);
 		boolean eligible = isSubmissionEligible(items, group);
 		if (!eligible)
 		{
 			record.submission = ineligibleStatus(items);
 		}
 		persist(record, false);
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null && activity != null && activity.lootTrackingEnabled
+			&& config.submitChallengeTimes())
+		{
+			// Local history is queued before the asynchronous policy result can arrive.
+			// Reuse the exact group snapshot used by the loot record; nearby-player data
+			// is never promoted to a submission roster.
+			capture.onActivityCompletion(source, rsn, group, clientSessionId, gameTick,
+				true, config.showDiagnostics(), java.time.Instant.now());
+		}
 		SubmissionService sender = submissions;
 		Object token = lifecycle;
 		if (sender != null && config.submitTestDrops() && eligible)

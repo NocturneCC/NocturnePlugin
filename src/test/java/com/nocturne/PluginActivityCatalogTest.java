@@ -29,15 +29,42 @@ public class PluginActivityCatalogTest
 
 	@Test public void corruptedGauntletRewardContainerIsRecognizedAndTimedFromCompletionContext()
 	{
-		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("The Corrupted Gauntlet");
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("The Corrupted Hunllef");
 		assertNotNull(activity);
 		assertEquals("corrupted_gauntlet", activity.activityKey);
 		assertEquals("gauntlet", activity.challengeBossKey);
-		assertEquals("NPC", NocturnePlugin.classifyLoot(LootRecordType.NPC, "Corrupted Gauntlet").name());
-		BossCompletionContext context = BossCompletionContext.fromNpcLoot("Corrupted Gauntlet",
-			"Local Reporter", "session", 10, 200L, Instant.parse("2026-10-12T00:00:01Z"));
+		assertEquals("NPC", NocturnePlugin.classifyLoot(LootRecordType.NPC, "Corrupted Hunllef").name());
+		BossCompletionContext context = BossCompletionContext.fromNpcLoot("The Corrupted Hunllef",
+			"Tester", "session", 10, 200L, Instant.parse("2026-10-12T00:00:01Z"));
 		assertNotNull(context);
 		assertEquals("overall", context.timingScope);
+		GenericCompletionCorrelator correlator = new GenericCompletionCorrelator();
+		long completionNanos = 2_000_000_000L;
+		context = BossCompletionContext.fromNpcLoot("The Corrupted Hunllef", "Tester",
+			"session", 10, completionNanos, Instant.parse("2026-10-12T00:00:01Z"));
+		assertNull(correlator.onCompletion(context, completionNanos, Instant.parse("2026-10-12T00:00:01Z")));
+		assertNull(correlator.onMessage("GAMEMESSAGE", "Fight duration: 7:12.34. Personal best: 6:10.00",
+			11, 2_100_000_000L, Instant.parse("2026-10-12T00:00:02Z")));
+		ChallengeObservation observation = correlator.poll(3_700_000_000L,
+			Instant.parse("2026-10-12T00:00:04Z"));
+		assertNotNull("reason=" + correlator.lastDiagnosticReason()
+			+ " buffered=" + correlator.bufferedMessages() + " contexts=" + correlator.pendingContexts(), observation);
+		assertEquals("corrupted_gauntlet", observation.activityKey);
+		assertEquals(432_340L, observation.overallTimeMillis.longValue());
+	}
+
+	@Test public void publishedGauntletCatalogRetainsHunllefLootAlias()
+	{
+		String document = "{\"schema_version\":1,\"activities\":[{\"activity_key\":\"corrupted_gauntlet\","
+			+ "\"display_name\":\"Corrupted Gauntlet\",\"aliases\":[\"CG\",\"Gauntlet\"],\"modes\":[{"
+			+ "\"mode_key\":\"corrupted_gauntlet\",\"display_name\":\"Corrupted\","
+			+ "\"source_names\":[\"Corrupted Gauntlet\",\"The Corrupted Gauntlet\"],"
+			+ "\"supports_solo\":true,\"supports_group\":false,\"loot_tracking_enabled\":true,"
+			+ "\"ttk_tracking_enabled\":true,\"timing_scope\":\"overall\","
+			+ "\"challenge_boss_key\":\"gauntlet\",\"challenge_mode_key\":null,"
+			+ "\"challenge_content_key\":null}]}]}";
+		assertTrue(PluginActivityCatalog.applyPublicConfig(new JsonParser().parse(document).getAsJsonObject()));
+		assertEquals("corrupted_gauntlet", PluginActivityCatalog.matchSource("The Corrupted Hunllef").activityKey);
 	}
 
 	@Test public void regularNightmareIsLocallyTrackedWithoutChallengeProjection()

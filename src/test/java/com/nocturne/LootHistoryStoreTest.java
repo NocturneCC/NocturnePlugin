@@ -46,6 +46,27 @@ public class LootHistoryStoreTest
 		assertFalse(Files.readString(second.pathFor("First")).toLowerCase().contains("screenshot"));
 	}
 
+	@Test public void persistsLocalOnlyUnlinkedActivityWithoutSuccessState() throws Exception
+	{
+		LootRecord record = record("local-only", "De Lena", 12);
+		record.activityTrackingNotice = "Local only — account not linked";
+		record.submission = SubmissionStatus.ACCEPTED;
+		store().append(record);
+		LootRecord loaded = store().load("De Lena", 0, 1).records.get(0);
+		assertEquals("Local only — account not linked", loaded.activityTrackingNotice);
+		assertEquals(SubmissionStatus.ACCEPTED, loaded.submission);
+	}
+
+	@Test public void persistsOrdinaryNpcFeedClassification() throws Exception
+	{
+		LootRecord source = record("npc", "Tester", 12);
+		LootRecord ordinaryNpc = new LootRecord(source.id, source.occurredAt, source.rsn, source.source,
+			source.items, source.group, source.submission, source.activityKey,
+			source.activityDisplayName, source.modeKey, true);
+		store().append(ordinaryNpc);
+		assertTrue(store().load("Tester", 0, 1).records.get(0).ordinaryNpcLoot);
+	}
+
 	@Test public void reportsExactPostWriteFileSize() throws Exception
 	{
 		LootHistoryStore store = store();

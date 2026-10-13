@@ -18,7 +18,8 @@ final class PluginActivityCatalog
 		Arrays.asList("Phosani's Nightmare", "Phosani’s Nightmare", "Phosani", "Phosanis"));
 	static final Entry GAUNTLET = new Entry("corrupted_gauntlet", "Corrupted Gauntlet",
 		"corrupted_gauntlet", "overall", true, false, true, true, "gauntlet",
-		Arrays.asList("Corrupted Gauntlet", "The Corrupted Gauntlet", "CG", "Gauntlet"));
+		Arrays.asList("Corrupted Gauntlet", "The Corrupted Gauntlet", "Corrupted Hunllef",
+			"The Corrupted Hunllef", "CG", "Gauntlet"));
 	static final Entry NIGHTMARE = new Entry("nightmare", "The Nightmare", "nightmare",
 		"overall", true, true, true, true, null,
 		Arrays.asList("The Nightmare", "Nightmare"));
@@ -69,6 +70,14 @@ final class PluginActivityCatalog
 					List<String> names = new ArrayList<>(activityNames);
 					names.add(displayName);
 					names.addAll(strings(mode.getAsJsonArray("source_names")));
+					// LootTracker/NPC completion sources can name the final corrupted boss
+					// rather than the reward container. Keep this source alias local to the
+					// canonical activity mapping; policy still comes from the public catalog.
+					if ("corrupted_gauntlet".equals(activityKey))
+					{
+						names.add("Corrupted Hunllef");
+						names.add("The Corrupted Hunllef");
+					}
 					String scope = mode.get("timing_scope").getAsString();
 					boolean enabled = mode.get("ttk_tracking_enabled").getAsBoolean();
 					if (enabled && !"overall".equals(scope) && !"segment".equals(scope)) return false;

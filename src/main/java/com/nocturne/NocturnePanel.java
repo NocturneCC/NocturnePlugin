@@ -56,6 +56,7 @@ final class NocturnePanel extends PluginPanel
 	private final JTextArea raidDiagnostics = note("Raid diagnostics inactive.", BACKGROUND);
 	private final JTextArea raidVerification = note("Raid verification: waiting for Chambers.", BACKGROUND);
 	private RestoreContext pendingPrependRestore;
+	private final java.util.ArrayDeque<PendingActivityNotice> pendingActivityNotices = new java.util.ArrayDeque<>();
 	private long viewportGeneration;
 	private long selectedHistoryGeneration;
 
@@ -296,6 +297,7 @@ final class NocturnePanel extends PluginPanel
 	{
 		requireEdt();
 		if (!matchesHistorySelection(record.rsn, generation)) return;
+		applyPendingActivityNotice(record);
 		prepend(record, () -> history.updateStats(totalCount, bytes));
 	}
 
@@ -303,8 +305,54 @@ final class NocturnePanel extends PluginPanel
 	{
 		requireEdt();
 		if (!matchesHistorySelection(record.rsn, generation)) return;
+		applyPendingActivityNotice(record);
 		history.markStorageFailure();
 		prepend(record, null);
+	}
+
+	private void applyPendingActivityNotice(LootRecord record)
+	{
+		java.time.Instant recordTime;
+		try { recordTime = java.time.Instant.parse(record.occurredAt); }
+		catch (RuntimeException ignored) { return; }
+		java.util.Iterator<PendingActivityNotice> iterator = pendingActivityNotices.iterator();
+		while (iterator.hasNext())
+		{
+			PendingActivityNotice notice = iterator.next();
+			long distance = Math.abs(java.time.Duration.between(recordTime, notice.occurredAt).toMillis());
+			if (distance > 30_000L)
+			{
+				if (notice.occurredAt.isBefore(recordTime.minusSeconds(30))) iterator.remove();
+				continue;
+			}
+			if (notice.activityKey.equals(record.activityKey)
+				&& notice.reporter.equals(LootHistoryStore.normalizeRsn(record.rsn)))
+			{
+				iterator.remove();
+				markLocalOnly(record);
+				return;
+			}
+		}
+	}
+
+	private void markLocalOnly(LootRecord record)
+	{
+		record.activityTrackingNotice = "Local only — account not linked";
+		historyActions.localOnly(record.withSubmission(record.submission));
+	}
+
+	private static final class PendingActivityNotice
+	{
+		final String activityKey;
+		final String reporter;
+		final java.time.Instant occurredAt;
+
+		PendingActivityNotice(String activityKey, String reporter, java.time.Instant occurredAt)
+		{
+			this.activityKey = activityKey;
+			this.reporter = reporter;
+			this.occurredAt = occurredAt;
+		}
 	}
 
 	private void prepend(LootRecord record, Runnable afterAdd)
@@ -485,16 +533,53 @@ final class NocturnePanel extends PluginPanel
 		}
 	}
 
+	void markActivityAccountUnlinked(String activityKey, String reporterRsn, java.time.Instant occurredAt)
+	{
+		requireEdt();
+		if (activityKey == null || reporterRsn == null || occurredAt == null) return;
+		String reporter = LootHistoryStore.normalizeRsn(reporterRsn);
+		if (!reporter.equals(LootHistoryStore.normalizeRsn(history.getPlayer()))) return;
+		LootRecord best = null;
+		long bestDistance = Long.MAX_VALUE;
+		for (LootRecord record : history.getRecords())
+		{
+			if (!activityKey.equals(record.activityKey)
+				|| !reporter.equals(LootHistoryStore.normalizeRsn(record.rsn))) continue;
+			long distance;
+			try { distance = Math.abs(java.time.Duration.between(java.time.Instant.parse(record.occurredAt), occurredAt).toMillis()); }
+			catch (RuntimeException ignored) { continue; }
+			if (distance < bestDistance)
+			{
+				best = record;
+				bestDistance = distance;
+			}
+		}
+		if (best == null || bestDistance > 30_000L)
+		{
+			while (pendingActivityNotices.size() >= 16) pendingActivityNotices.removeFirst();
+			pendingActivityNotices.addLast(new PendingActivityNotice(activityKey, reporter, occurredAt));
+			return;
+		}
+		ViewportAnchor anchor = captureViewportAnchor();
+		markLocalOnly(best);
+		renderHistory();
+		restoreAfterLayout(anchor, beginIndependentRestore());
+	}
+
 	private void renderHistory()
 	{
 		feed.removeAll();
 		count.setText(historySummary());
 		loadOlder.setVisible(history.hasOlder());
-		if (history.getRecords().isEmpty())
+		List<LootRecord> visibleRecords = history.getRecords().stream()
+			.filter(record -> !record.ordinaryNpcLoot)
+			.collect(java.util.stream.Collectors.toList());
+		if (visibleRecords.isEmpty())
 		{
-			feed.add(note("No recent activity yet.", CARD));
+			feed.add(note(history.getRecords().isEmpty()
+				? "No recent activity yet." : "No recent boss or activity drops yet.", CARD));
 		}
-		for (LootRecord record : history.getRecords())
+		for (LootRecord record : visibleRecords)
 		{
 			feed.add(renderRecord(record));
 		}
@@ -521,6 +606,7 @@ final class NocturnePanel extends PluginPanel
 			public void clear(String rsn) { } };
 		void loadOlder(String rsn, int offset);
 		void clear(String rsn);
+		default void localOnly(LootRecord record) { }
 	}
 
 	JPanel renderRecord(LootRecord record)
@@ -531,6 +617,10 @@ final class NocturnePanel extends PluginPanel
 				BorderFactory.createMatteBorder(0, 0, 6, 0, BACKGROUND),
 				BorderFactory.createEmptyBorder(8, 8, 8, 8)));
 			card.add(label(record.activityDisplayName == null ? record.source : record.activityDisplayName, PURPLE));
+			if (record.activityTrackingNotice != null)
+			{
+				card.add(note(record.activityTrackingNotice, CARD));
+			}
 			card.add(label(TIME.format(record.time) + "  |  " + record.rsn, MUTED));
 			for (LootItem item : record.items)
 			{

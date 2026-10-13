@@ -268,6 +268,9 @@ final class LootHistoryStore
 		object.add("items", gson.toJsonTree(record.items));
 		object.add("group", gson.toJsonTree(record.group));
 		object.addProperty("submission", record.submission.name());
+		if (record.ordinaryNpcLoot) object.addProperty("ordinaryNpcLoot", true);
+		if ("Local only — account not linked".equals(record.activityTrackingNotice))
+			object.addProperty("activityTrackingNotice", record.activityTrackingNotice);
 		return object;
 	}
 
@@ -303,8 +306,18 @@ final class LootHistoryStore
 				? object.get("activityDisplayName").getAsString() : null;
 			String modeKey = object.has("modeKey") && !object.get("modeKey").isJsonNull()
 				? object.get("modeKey").getAsString() : null;
-			return new LootRecord(id, occurred, rsn, source, List.of(items), group, status,
-				activityKey, activityDisplayName, modeKey);
+			LootRecord record = new LootRecord(id, occurred, rsn, source, List.of(items), group, status,
+				activityKey, activityDisplayName, modeKey,
+				object.has("ordinaryNpcLoot") && object.get("ordinaryNpcLoot").isJsonPrimitive()
+					&& object.getAsJsonPrimitive("ordinaryNpcLoot").isBoolean()
+					&& object.get("ordinaryNpcLoot").getAsBoolean());
+			if (object.has("activityTrackingNotice") && object.get("activityTrackingNotice").isJsonPrimitive()
+				&& object.getAsJsonPrimitive("activityTrackingNotice").isString()
+				&& "Local only — account not linked".equals(object.get("activityTrackingNotice").getAsString()))
+			{
+				record.activityTrackingNotice = "Local only — account not linked";
+			}
+			return record;
 		}
 		catch (RuntimeException e) { return null; }
 	}

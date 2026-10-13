@@ -29,6 +29,8 @@ class PluginTrackingCatalogTests(unittest.TestCase):
             CREATE TABLE member_accounts(account_id INTEGER PRIMARY KEY, member_id INTEGER,
                 rsn TEXT, normalized_rsn TEXT, is_active INTEGER);
             INSERT INTO members VALUES(1,'Reporter One','reporterone','active');
+            INSERT INTO members VALUES(2,'De Lena Main','de_lena_main','active');
+            INSERT INTO member_accounts VALUES(2,2,'De Lena','de_lena',1);
         """)
 
     def tearDown(self):
@@ -119,6 +121,37 @@ class PluginTrackingCatalogTests(unittest.TestCase):
         self.assertEqual("idempotency_conflict", raised.exception.state)
         self.conn.rollback()
         self.assertEqual(1, self.conn.execute("SELECT COUNT(*) FROM plugin_tracking_observations").fetchone()[0])
+
+    def test_active_linked_alt_uses_canonical_members_resolver_without_challenge_member_view(self):
+        # The Challenge member-view endpoint is a separate projection and may 404
+        # for an activity with no Challenge overlay. Eligibility is resolved from
+        # the authoritative Members schema through the shared canonical resolver.
+        from challenge_automatic_intake import _resolve_member
+        from challenge_shadow_common import normalize_rsn
+        self.assertEqual(2, _resolve_member(self.members, "delena")[0])
+        self.assertEqual(2, _resolve_member(self.members, normalize_rsn("De Lena"))[0])
+        self.assertEqual(2, _resolve_member(self.members, normalize_rsn("De_Lena"))[0])
+        payload = self.tracking_payload(
+            reporter_rsn="De Lena", roster=["De Lena"], group_size=1)
+        self.conn.execute("BEGIN IMMEDIATE")
+        result = process_tracking_observation(
+            self.conn, self.members, payload,
+            now=datetime(2026, 10, 12, 12, 1, tzinfo=timezone.utc))
+        self.conn.commit()
+        self.assertEqual({"state": "accepted"}, result)
+        row = self.conn.execute(
+            "SELECT reporter_normalized_rsn,selected_duration_ms,observed_group_size "
+            "FROM plugin_tracking_observations").fetchone()
+        self.assertEqual(("delena", 358200, 1), tuple(row))
+        participant = self.conn.execute(
+            "SELECT normalized_rsn FROM plugin_tracking_observation_participants").fetchone()
+        self.assertEqual("delena", participant[0])
+        self.conn.execute("BEGIN IMMEDIATE")
+        duplicate = process_tracking_observation(
+            self.conn, self.members, payload,
+            now=datetime(2026, 10, 12, 12, 1, tzinfo=timezone.utc))
+        self.conn.commit()
+        self.assertEqual({"state": "duplicate"}, duplicate)
 
     def test_tracking_observations_and_participants_are_append_only(self):
         payload = self.tracking_payload()
