@@ -62,6 +62,17 @@ final class BossCompletionContext
 			clientSessionId, cycle, nowNanos, now);
 	}
 
+	static BossCompletionContext fromNumericRun(PluginActivityCatalog.Entry activity, String reporter,
+		String encounterIdentity, long cycle, long nowNanos, Instant occurredAt)
+	{
+		if (activity == null || !activity.completionTrackingEnabled || !activity.supportsSolo
+			|| reporter == null || encounterIdentity == null || occurredAt == null) return null;
+		GroupSnapshot solo = new GroupSnapshot("local reporter", List.of(reporter), 1,
+			GroupSnapshot.Status.MATCHED, "solo completion");
+		return new BossCompletionContext(activity.challengeBossKey, activity.activityKey, activity.modeKey,
+			activity.timingScope, reporter, solo, encounterIdentity, nowNanos, cycle, occurredAt, activity, null);
+	}
+
 	private static BossCompletionContext fromActiveSoloActivity(PluginActivityCatalog.Entry activity,
 		String reporter, String clientSessionId, long cycle, long nowNanos, Instant now)
 	{

@@ -13,8 +13,16 @@
     </header>
     <section aria-label="Plugin Tracking catalog">
       <p id="status" role="status">Loading catalog draft…</p>
-      <label for="catalog">Catalog JSON</label>
-      <textarea id="catalog" spellcheck="false" rows="30" aria-label="Plugin Tracking catalog JSON"></textarea>
+      <h2>Numeric completion tracking</h2>
+      <p>Configure catalog activities that report a numeric completion result, such as Doom’s highest completed level. These values are separate from completion times.</p>
+      <button id="enable-doom" type="button">Add or enable Doom of Mokhaiotl</button>
+      <div id="completion-controls" aria-live="polite"></div>
+      <details>
+        <summary>Advanced catalog JSON</summary>
+        <label for="catalog">Catalog JSON</label>
+        <textarea id="catalog" spellcheck="false" rows="30" aria-label="Plugin Tracking catalog JSON"></textarea>
+        <button id="refresh-controls" type="button">Apply JSON to controls</button>
+      </details>
       <div class="actions">
         <button id="save" type="button">Save draft</button>
         <button id="publish" type="button">Publish catalog</button>

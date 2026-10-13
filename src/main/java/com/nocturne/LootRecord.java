@@ -16,6 +16,9 @@ final class LootRecord
 	String activityTrackingNotice;
 	// Completion capture is independent of the drop submission state above.
 	Long activityDurationMillis;
+	Integer activityNumericValue;
+	String activityNumericLabel;
+	String activityNumericUnit;
 	ActivityTimingStatus activityTimingStatus;
 	// In-memory bridge used only while merging the completion and reward rows.
 	String completionLinkId;
@@ -122,6 +125,9 @@ final class LootRecord
 			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
 		updated.activityTrackingNotice = activityTrackingNotice;
 		updated.activityDurationMillis = activityDurationMillis;
+		updated.activityNumericValue = activityNumericValue;
+		updated.activityNumericLabel = activityNumericLabel;
+		updated.activityNumericUnit = activityNumericUnit;
 		updated.activityTimingStatus = activityTimingStatus;
 		updated.completionLinkId = completionLinkId;
 		updated.activityEventId = activityEventId;
@@ -134,7 +140,25 @@ final class LootRecord
 			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
 		updated.activityTrackingNotice = activityTrackingNotice;
 		updated.activityDurationMillis = durationMillis;
+		updated.activityNumericValue = activityNumericValue;
+		updated.activityNumericLabel = activityNumericLabel;
+		updated.activityNumericUnit = activityNumericUnit;
 		updated.activityTimingStatus = status;
+		updated.completionLinkId = completionLinkId;
+		updated.activityEventId = activityEventId;
+		return updated;
+	}
+
+	LootRecord withActivityCompletion(int value, String label, String unit, ActivityTimingStatus status)
+	{
+		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, submission,
+			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
+		updated.activityTrackingNotice = activityTrackingNotice;
+		updated.activityDurationMillis = activityDurationMillis;
+		updated.activityTimingStatus = status;
+		updated.activityNumericValue = value;
+		updated.activityNumericLabel = label;
+		updated.activityNumericUnit = unit;
 		updated.completionLinkId = completionLinkId;
 		updated.activityEventId = activityEventId;
 		return updated;
@@ -146,7 +170,11 @@ final class LootRecord
 			observation.reporterRsn, observation.displayName, List.of(),
 			GroupSnapshot.unavailable("Completion-only activity."), SubmissionStatus.LOCAL,
 			observation.activityKey, observation.displayName, observation.modeKey, false, true)
-			.withActivityTiming(observation.displayDurationMillis, status);
+			;
+		if (observation.completionMetricValue != null)
+			record = record.withActivityCompletion(observation.completionMetricValue,
+				observation.completionMetricLabel, observation.completionMetricUnit, status);
+		else record = record.withActivityTiming(observation.displayDurationMillis, status);
 		record.activityEventId = observation.eventId;
 		return record;
 	}
@@ -158,6 +186,9 @@ final class LootRecord
 			loot.ordinaryNpcLoot, false);
 		merged.activityTrackingNotice = loot.activityTrackingNotice;
 		merged.activityDurationMillis = activityDurationMillis;
+		merged.activityNumericValue = activityNumericValue;
+		merged.activityNumericLabel = activityNumericLabel;
+		merged.activityNumericUnit = activityNumericUnit;
 		merged.activityTimingStatus = activityTimingStatus;
 		merged.completionLinkId = id;
 		merged.activityEventId = activityEventId == null ? id : activityEventId;

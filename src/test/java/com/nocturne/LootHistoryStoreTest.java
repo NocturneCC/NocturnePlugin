@@ -120,6 +120,37 @@ public class LootHistoryStoreTest
 		assertEquals(Long.valueOf(513_000L), loaded.activityDurationMillis);
 	}
 
+	@Test public void persistsNumericDoomCompletionAndMergesRewardWithoutTimeCoercion() throws Exception
+	{
+		Instant completedAt = Instant.parse("2026-10-13T12:00:00Z");
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(
+			PluginActivityCatalog.DOOM_OF_MOKHAIOTL, "Tester", "doom-store-run", 88,
+			1L, completedAt);
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, 7);
+		LootRecord completion = LootRecord.completion(observation, ActivityTimingStatus.ACCEPTED);
+		LootHistoryStore store = store();
+		store.append(completion);
+		LootRecord loaded = store.load("Tester", 0, 1).records.get(0);
+		assertTrue(loaded.completionOnly);
+		assertEquals(Integer.valueOf(7), loaded.activityNumericValue);
+		assertEquals("Deepest level", loaded.activityNumericLabel);
+		assertNull(loaded.activityDurationMillis);
+
+		LootRecord loot = new LootRecord("doom-loot", "2026-10-13T12:01:00Z", "Tester",
+			"Doom of Mokhaiotl", List.of(new LootItem(100, 1, "Fixture reward")),
+			context.roster, SubmissionStatus.ACCEPTED, PluginActivityCatalog.DOOM_OF_MOKHAIOTL);
+		loot.completionLinkId = observation.eventId;
+		LootRecord merged = loaded.withCompletionLoot(loot);
+		store.append(loot);
+		assertTrue(store.mergeCompletionLoot(completion.id, loot.id, merged));
+		LootRecord after = store.load("Tester", 0, 1).records.get(0);
+		assertFalse(after.completionOnly);
+		assertEquals(Integer.valueOf(7), after.activityNumericValue);
+		assertNull(after.activityDurationMillis);
+		assertEquals(observation.eventId, after.activityEventId);
+		assertEquals("Fixture reward", after.items.get(0).name);
+	}
+
 	@Test public void persistsOrdinaryNpcFeedClassification() throws Exception
 	{
 		LootRecord source = record("npc", "Tester", 12);

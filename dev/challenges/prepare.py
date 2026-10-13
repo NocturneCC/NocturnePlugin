@@ -40,6 +40,7 @@ REPOSITORY_EXTENSIONS = {
     "dev/challenges/tests/python/test_deploy_automatic_observations.py": "Adds repository-owned disposable state-machine and migration regression fixtures for the automatic-observation deployment helper.",
     "dev/challenges/service/plugin_tracking_catalog.py": "Adds a versioned Plugin Tracking activity catalog and independent non-Challenge timing observation store.",
     "dev/challenges/tests/python/test_plugin_tracking_catalog.py": "Adds catalog policy, independent timing persistence, and idempotency fixtures.",
+    "dev/challenges/tests/test_plugin_tracking_editor.js": "Tests staff-facing numeric completion controls and Doom catalog insertion without manual JSON edits.",
     "dev/challenges/PLUGIN_TRACKING.md": "Documents the independent Plugin Tracking catalog, trust boundary, and Challenge overlay.",
     "dev/challenges/website/plugin-tracking.html": "Adds a distinct Plugin Tracking catalog editing surface; no production page is changed here.",
     "dev/challenges/website/plugin-tracking.js": "Adds the staff-proxied Plugin Tracking catalog draft/publish UI.",

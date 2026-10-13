@@ -84,6 +84,10 @@ final class LootHistoryStore
 			if (replacement.activityDurationMillis == null && existing.activityDurationMillis != null)
 				replacement = replacement.withActivityTiming(existing.activityDurationMillis,
 					existing.activityTimingStatus);
+			if (replacement.activityNumericValue == null && existing.activityNumericValue != null)
+				replacement = replacement.withActivityCompletion(existing.activityNumericValue,
+					existing.activityNumericLabel, existing.activityNumericUnit,
+					existing.activityTimingStatus);
 			if (replacement.activityEventId == null) replacement.activityEventId = existing.activityEventId;
 			return gson.toJson(toJson(replacement));
 		}, null);
@@ -309,6 +313,12 @@ final class LootHistoryStore
 			object.addProperty("activityTrackingNotice", record.activityTrackingNotice);
 		if (record.activityDurationMillis != null)
 			object.addProperty("activityDurationMillis", record.activityDurationMillis);
+		if (record.activityNumericValue != null)
+		{
+			object.addProperty("activityNumericValue", record.activityNumericValue);
+			object.addProperty("activityNumericLabel", record.activityNumericLabel);
+			object.addProperty("activityNumericUnit", record.activityNumericUnit);
+		}
 		if (record.activityTimingStatus != null)
 			object.addProperty("activityTimingStatus", record.activityTimingStatus.name());
 		return object;
@@ -378,6 +388,21 @@ final class LootHistoryStore
 					object.get("activityTimingStatus").getAsString());
 				if (duration <= 0 || duration > ChallengeObservation.MAX_DURATION_MILLIS) return null;
 				record.activityDurationMillis = duration;
+				record.activityTimingStatus = timingStatus;
+			}
+			if (object.has("activityNumericValue") && object.has("activityNumericLabel")
+				&& object.has("activityNumericUnit") && object.has("activityTimingStatus"))
+			{
+				int value = object.get("activityNumericValue").getAsInt();
+				String label = object.get("activityNumericLabel").getAsString();
+				String unit = object.get("activityNumericUnit").getAsString();
+				ActivityTimingStatus timingStatus = ActivityTimingStatus.valueOf(
+					object.get("activityTimingStatus").getAsString());
+				if (value < 1 || value > 10_000 || label.isEmpty() || label.length() > 64
+					|| unit.isEmpty() || unit.length() > 32) return null;
+				record.activityNumericValue = value;
+				record.activityNumericLabel = label;
+				record.activityNumericUnit = unit;
 				record.activityTimingStatus = timingStatus;
 			}
 			return record;

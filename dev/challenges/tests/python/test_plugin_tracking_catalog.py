@@ -13,6 +13,7 @@ from plugin_tracking_catalog import (
     publish_draft,
     save_draft,
     process_tracking_observation,
+    process_tracking_completion,
     TrackingObservationError,
 )
 
@@ -90,6 +91,98 @@ class PluginTrackingCatalogTests(unittest.TestCase):
         }
         payload.update(updates)
         return payload
+
+    def completion_payload(self, **updates):
+        payload = {
+            "schema_version": 1, "event_id": str(uuid.uuid4()),
+            "reporter_rsn": "Reporter One", "activity_key": "doom_of_mokhaiotl",
+            "mode_key": "doom_of_mokhaiotl", "occurred_at": "2026-10-13T12:00:00Z",
+            "completion_metric_key": "deepest_level", "completion_value": 7,
+            "roster": ["Reporter One"], "group_size": 1, "plugin_version": "0.3.2",
+        }
+        payload.update(updates)
+        return payload
+
+    def test_doom_numeric_completion_is_separate_from_ttk_and_challenge_projection(self):
+        active = active_document(self.conn)
+        doom = next(activity for activity in active["activities"]
+                    if activity["activity_key"] == "doom_of_mokhaiotl")
+        mode = doom["modes"][0]
+        self.assertEqual("doom_of_mokhaiotl", mode["mode_key"])
+        self.assertTrue(mode["completion_tracking_enabled"])
+        self.assertEqual("deepest_level", mode["completion_metric_key"])
+        self.assertFalse(mode["ttk_tracking_enabled"])
+        self.assertIsNone(mode["challenge_boss_key"])
+        payload = self.completion_payload()
+        self.conn.execute("BEGIN IMMEDIATE")
+        accepted = process_tracking_completion(self.conn, self.members, payload,
+            now=datetime(2026, 10, 13, 12, 1, tzinfo=timezone.utc))
+        self.conn.commit()
+        self.assertEqual({"state": "accepted"}, accepted)
+        row = self.conn.execute(
+            "SELECT activity_key,mode_key,completion_metric_key,completion_value,observed_group_size "
+            "FROM plugin_tracking_completion_observations").fetchone()
+        self.assertEqual(("doom_of_mokhaiotl", "doom_of_mokhaiotl", "deepest_level", 7, 1), tuple(row))
+        self.assertEqual(1, self.conn.execute(
+            "SELECT COUNT(*) FROM plugin_tracking_completion_participants").fetchone()[0])
+        self.assertEqual(0, self.conn.execute(
+            "SELECT COUNT(*) FROM plugin_tracking_observations").fetchone()[0])
+
+    def test_doom_numeric_completion_is_exactly_idempotent_and_conflicts_on_change(self):
+        payload = self.completion_payload()
+        self.conn.execute("BEGIN IMMEDIATE")
+        self.assertEqual("accepted", process_tracking_completion(self.conn, self.members, payload,
+            now=datetime(2026, 10, 13, 12, 1, tzinfo=timezone.utc))["state"])
+        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        self.assertEqual("duplicate", process_tracking_completion(self.conn, self.members, payload,
+            now=datetime(2026, 10, 13, 12, 1, tzinfo=timezone.utc))["state"])
+        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        with self.assertRaises(TrackingObservationError) as raised:
+            process_tracking_completion(self.conn, self.members,
+                {**payload, "completion_value": 8},
+                now=datetime(2026, 10, 13, 12, 1, tzinfo=timezone.utc))
+        self.assertEqual("idempotency_conflict", raised.exception.state)
+        self.conn.rollback()
+        self.assertEqual(1, self.conn.execute(
+            "SELECT COUNT(*) FROM plugin_tracking_completion_observations").fetchone()[0])
+
+    def test_doom_numeric_completion_policy_and_payload_bounds_fail_closed(self):
+        for invalid in (0, -1, 10_001, True, "7"):
+            self.conn.execute("BEGIN IMMEDIATE")
+            with self.assertRaises(TrackingObservationError) as raised:
+                process_tracking_completion(self.conn, self.members,
+                                            self.completion_payload(completion_value=invalid))
+            self.assertEqual("invalid_completion_value", raised.exception.reason)
+            self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        with self.assertRaises(TrackingObservationError) as raised:
+            process_tracking_completion(self.conn, self.members,
+                self.completion_payload(completion_metric_key="other_metric"))
+        self.assertEqual("unsupported_completion_metric", raised.exception.reason)
+        self.conn.rollback()
+        self.conn.execute("BEGIN IMMEDIATE")
+        with self.assertRaises(TrackingObservationError) as raised:
+            process_tracking_completion(self.conn, self.members,
+                self.completion_payload(roster=["Reporter One", "PublicMate"], group_size=2))
+        self.assertEqual("invalid_group_size", raised.exception.reason)
+        self.conn.rollback()
+
+        document = default_document()
+        doom = next(item for item in document["activities"] if item["activity_key"] == "doom_of_mokhaiotl")
+        doom["modes"][0]["completion_tracking_enabled"] = False
+        for key in ("completion_metric_key", "completion_metric_label", "completion_metric_unit"):
+            doom["modes"][0][key] = None
+        draft = save_draft(self.conn, document, "staff", 1)
+        publish_draft(self.conn, "staff", draft["revision"], True)
+        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        ignored = process_tracking_completion(self.conn, self.members, self.completion_payload())
+        self.conn.commit()
+        self.assertEqual({"state": "ignored", "reason": "disabled"}, ignored)
+        self.assertEqual(0, self.conn.execute(
+            "SELECT COUNT(*) FROM plugin_tracking_completion_observations").fetchone()[0])
 
     def test_non_challenge_group_timing_is_stored_without_challenge_projection(self):
         payload = self.tracking_payload()

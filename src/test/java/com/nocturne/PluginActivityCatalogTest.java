@@ -83,6 +83,35 @@ public class PluginActivityCatalogTest
 			"session", 1, 1L, Instant.now()));
 	}
 
+	@Test public void doomCompletionIsNumericAndSeparateFromTtkAndChallengeScoring()
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("Doom of Mokhaiotl");
+		assertNotNull(activity);
+		assertEquals("doom_of_mokhaiotl", activity.activityKey);
+		assertEquals("doom_of_mokhaiotl", activity.modeKey);
+		assertFalse(activity.ttkTrackingEnabled);
+		assertEquals("unconfigured", activity.timingScope);
+		assertTrue(activity.completionTrackingEnabled);
+		assertEquals("deepest_level", activity.completionMetricKey);
+		assertNull("no Challenge projection is configured by default", activity.challengeBossKey);
+
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(activity, "Local Name",
+			"session|doom-run|1", 70, 1L, Instant.parse("2026-10-13T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, 7);
+		assertNotNull(observation);
+		assertTrue(observation.pluginTrackingCandidate);
+		assertFalse(observation.challengeCandidate);
+		com.google.gson.JsonObject payload = observation.payload(new com.google.gson.Gson(), observation.eventId);
+		assertEquals("deepest_level", payload.get("completion_metric_key").getAsString());
+		assertEquals(7, payload.get("completion_value").getAsInt());
+		assertFalse(payload.has("overall_time_ms"));
+		assertFalse(payload.has("room_time_ms"));
+		assertEquals(1, payload.get("group_size").getAsInt());
+		assertEquals(1, payload.getAsJsonArray("roster").size());
+		assertEquals(observation.eventId,
+			ChallengeObservation.createTrackedNumeric(context, 9).eventId);
+	}
+
 	@Test public void unknownAndDisabledActivitiesDoNotCreateTimingContextButRemainLocal()
 	{
 		assertNull(PluginActivityCatalog.matchSource("Unknown Encounter"));

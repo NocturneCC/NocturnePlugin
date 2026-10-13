@@ -213,7 +213,9 @@ def create_app(config: dict | None = None) -> Flask:
     @app.post("/api/plugin/tracking/observations")
     def intake_plugin_tracking_observation():
         """Store an activity timing fact without creating Challenge credit."""
-        from plugin_tracking_catalog import TrackingObservationError, process_tracking_observation
+        from plugin_tracking_catalog import (TrackingObservationError,
+                                             process_tracking_completion,
+                                             process_tracking_observation)
         from challenge_automatic_intake import ObservationError
 
         if request.content_length is not None and request.content_length > 8192:
@@ -245,7 +247,10 @@ def create_app(config: dict | None = None) -> Flask:
         try:
             members = members_db()
             challenge.execute("BEGIN IMMEDIATE")
-            result = process_tracking_observation(challenge, members, payload)
+            result = process_tracking_completion(challenge, members, payload) \
+                if isinstance(payload, dict) and ("completion_metric_key" in payload
+                    or "completion_value" in payload) else \
+                process_tracking_observation(challenge, members, payload)
             challenge.commit()
             return jsonify(result), 200
         except TrackingObservationError as exc:

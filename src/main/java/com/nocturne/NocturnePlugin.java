@@ -22,6 +22,10 @@ import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.WidgetLoaded;
+import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
@@ -107,6 +111,7 @@ public class NocturnePlugin extends Plugin
 	private String clientSessionId;
 	private final AtomicBoolean emojiRegistrationDiagnosticLogged = new AtomicBoolean();
 	private final LootEventDeduplicator lootEventDeduplicator = new LootEventDeduplicator();
+	private final DoomRunTracker doomRunTracker = new DoomRunTracker();
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -242,6 +247,7 @@ public class NocturnePlugin extends Plugin
 		lifecycle = null;
 		clientSessionId = null;
 		lootEventDeduplicator.clear();
+		doomRunTracker.reset();
 		PluginTrackingConfigService catalog = trackingConfig;
 		trackingConfig = null;
 		if (catalog != null) catalog.close();
@@ -325,6 +331,8 @@ public class NocturnePlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
+			finishDoomRun();
+			doomRunTracker.reset();
 			activeRsn = null;
 			if (groups != null) groups.reset();
 			if (challengeCapture != null) challengeCapture.reset();
@@ -336,6 +344,8 @@ public class NocturnePlugin extends Plugin
 		}
 		else if (event.getGameState() == GameState.HOPPING)
 		{
+			finishDoomRun();
+			doomRunTracker.reset();
 			withPanel(NocturnePanel::clearPendingActivityLinks);
 			if (groups != null) groups.reset();
 			if (challengeCapture != null) challengeCapture.reset();
@@ -346,6 +356,34 @@ public class NocturnePlugin extends Plugin
 		{
 			updatePlayer();
 		}
+	}
+
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		if (event.getGroupId() != (InterfaceID.DomEndLevelUi.UNIVERSE >>> 16)
+			|| client.getGameState() != GameState.LOGGED_IN) return;
+		Widget header = client.getWidget(InterfaceID.DomEndLevelUi.DELVE_HEADER);
+		Player local = client.getLocalPlayer();
+		if (header == null || local == null || local.getName() == null) return;
+		Integer completed = DoomRunTracker.completedLevel(header.getText());
+		if (completed == null) return;
+		DoomRunTracker.Progress progress = doomRunTracker.completeLevel(completed, local.getName(),
+			clientSessionId, gameTick, java.time.Instant.now());
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null) capture.onDoomLevelProgress(progress, config.submitChallengeTimes(), config.showDiagnostics());
+	}
+
+	@Subscribe
+	public void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		Widget widget = event.getWidget();
+		if (widget == null) return;
+		int id = widget.getId();
+		if (id == InterfaceID.DomEndLevelUi.BTN_CLAIM)
+			finishDoomRun(DoomRunTracker.EndAction.CLAIM_REWARDS);
+		else if (id == InterfaceID.DomEndLevelUi.BTN_LEAVE)
+			finishDoomRun(DoomRunTracker.EndAction.LEAVE_DELVING);
 	}
 
 	@Subscribe
@@ -454,6 +492,8 @@ public class NocturnePlugin extends Plugin
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
+		DoomRunTracker.Result death = doomRunTracker.finishOnDeathMessage(event.getMessage());
+		publishDoomRun(death);
 		GroupTracker tracker = groups;
 		String category = event.getType().name();
 		if (tracker != null && (event.getType() == ChatMessageType.GAMEMESSAGE
@@ -569,6 +609,8 @@ public class NocturnePlugin extends Plugin
 		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource(source);
 		LootRecord record = new LootRecord(rsn, source, items, group, activity,
 			origin == LootOrigin.NPC && activity == null);
+		if (activity != null && "doom_of_mokhaiotl".equals(activity.activityKey))
+			record.completionLinkId = doomRunTracker.consumeClaimedLootLink();
 		boolean eligible = isSubmissionEligible(items, group);
 		if (!eligible)
 		{
@@ -620,6 +662,23 @@ public class NocturnePlugin extends Plugin
 			}
 		}
 		log.debug("Nocturne detected loot: {} from {}, {} item stacks", rsn, source, items.size());
+	}
+
+	private void finishDoomRun()
+	{
+		publishDoomRun(doomRunTracker.finishRun());
+	}
+
+	private void finishDoomRun(DoomRunTracker.EndAction action)
+	{
+		publishDoomRun(doomRunTracker.finishByAction(action));
+	}
+
+	private void publishDoomRun(DoomRunTracker.Result result)
+	{
+		if (result == null) return;
+		ChallengeCompletionCapture capture = challengeCapture;
+		if (capture != null) capture.finishDoomRun(result, config.submitChallengeTimes(), config.showDiagnostics());
 	}
 
 	private void updateRaidVerification(RaidVerificationStatus status)

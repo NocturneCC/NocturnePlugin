@@ -260,6 +260,52 @@ public class NocturnePanelPrivacyTest
 	}
 
 	@Test
+	public void claimedDoomLootMergesWhenRewardHistoryArrivesBeforeCompletionCard() throws Exception
+	{
+		java.util.concurrent.atomic.AtomicReference<LootRecord> mergedSaved = new java.util.concurrent.atomic.AtomicReference<>();
+		NocturnePanel panel = new NocturnePanel(null, new NocturnePanel.HistoryActions()
+		{
+			@Override public void loadOlder(String rsn, int offset) { }
+			@Override public void clear(String rsn) { }
+			@Override public void mergeCompletionLoot(LootRecord merged, String replacedLootId)
+			{
+				mergedSaved.set(merged);
+			}
+		});
+		Instant occurred = Instant.parse("2026-10-13T12:00:00Z");
+		DoomRunTracker tracker = new DoomRunTracker();
+		DoomRunTracker.Progress progress = tracker.completeLevel(7, "Tester", "panel-session", 100, occurred);
+		DoomRunTracker.Result result = tracker.finishByAction(DoomRunTracker.EndAction.CLAIM_REWARDS);
+		assertNotNull(progress);
+		assertNotNull(result);
+		PluginActivityCatalog.Entry doom = PluginActivityCatalog.DOOM_OF_MOKHAIOTL;
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(doom,
+			result.reporterRsn, result.runIdentity, result.gameCycle, 1L, result.occurredAt);
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, result.highestLevel);
+		LootRecord reward = new LootRecord("doom-reward", occurred.plusSeconds(40).toString(), "Tester",
+			"Doom of Mokhaiotl", List.of(), GroupSnapshot.unavailable("fixture"),
+			SubmissionStatus.ACCEPTED, doom);
+		reward.completionLinkId = tracker.consumeClaimedLootLink();
+		assertEquals(observation.eventId, reward.completionLinkId);
+
+		onEdt(() ->
+		{
+			panel.setPlayer("Tester", 11);
+			panel.showHistory("Tester", new LootHistoryStore.Page(List.of(reward), 1, 128, false, 0), false, 11);
+			panel.setActivityTiming(observation, ActivityTimingStatus.ACCEPTED);
+		});
+		LootRecord merged = mergedSaved.get();
+		assertNotNull("completion arriving after reward still merges by stable run ID", merged);
+		assertEquals(reward.id, merged.id);
+		assertEquals(observation.eventId, merged.activityEventId);
+		assertEquals(Integer.valueOf(7), merged.activityNumericValue);
+		assertEquals(SubmissionStatus.ACCEPTED, merged.submission);
+		String visible = visibleText(panel);
+		assertTrue(visible.contains("Deepest level · 7 level"));
+		assertTrue(visible.contains("Doom of Mokhaiotl"));
+	}
+
+	@Test
 	public void diagnosticsSettingRestoresHiddenTelemetryAndRaidDetails() throws Exception
 	{
 		NocturnePanel panel = panel();

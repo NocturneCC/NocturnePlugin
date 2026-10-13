@@ -37,7 +37,9 @@ MANIFEST_REL = "dev/challenges/source-manifest.json"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_OBSERVATION_BODY = 8192
 SCHEMA_TABLES = ("challenge_automatic_observations", "challenge_automatic_observation_participants")
-TRACKING_TABLES = ("plugin_tracking_observations", "plugin_tracking_observation_participants")
+TRACKING_TABLES = ("plugin_tracking_observations", "plugin_tracking_observation_participants",
+                   "plugin_tracking_completion_observations",
+                   "plugin_tracking_completion_participants")
 LEGACY_AUTOMATIC_INTAKE_PREDECESSORS = (
     ("9008d57932b8addea6d17421aa93c7265b9d41603b1d7154cc5e8efd1c53db03", 27618),
     # Installed by the committed 3cf99e7 automatic-observation deployment.
@@ -328,7 +330,8 @@ def _expected_schema_signature(auto_module) -> tuple[tuple[str, str, str | None]
         rows = conn.execute(
             "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' "
             "OR name LIKE 'plugin_tracking_%' "
-            "OR name='idx_plugin_tracking_observations_created' ORDER BY type,name"
+            "OR name IN ('idx_plugin_tracking_observations_created',"
+            "'idx_plugin_tracking_completion_created') ORDER BY type,name"
         ).fetchall()
         return tuple((str(kind), str(name), re.sub(r"\s+", " ", str(sql or "")).strip())
                      for kind, name, sql in rows)
@@ -340,12 +343,11 @@ def _schema_state(conn: sqlite3.Connection, auto_module) -> str:
     found = {str(row[0]) for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)", SCHEMA_TABLES)}
     if not found:
+        tracking_names = ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts", *TRACKING_TABLES)
+        placeholders = ",".join("?" for _ in tracking_names)
         tracking_found = {str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",
-            ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts"))}
-        tracking_found |= {str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",
-            TRACKING_TABLES)}
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+            tracking_names)}
         return "unsupported" if tracking_found else "absent"
     if found != set(SCHEMA_TABLES):
         return "unsupported"
@@ -353,16 +355,25 @@ def _schema_state(conn: sqlite3.Connection, auto_module) -> str:
                  for kind, name, sql in conn.execute(
                      "SELECT type,name,sql FROM sqlite_master WHERE name LIKE 'challenge_automatic_%' "
                      "OR name LIKE 'plugin_tracking_%' "
-                     "OR name='idx_plugin_tracking_observations_created' ORDER BY type,name"))
+                     "OR name IN ('idx_plugin_tracking_observations_created',"
+                     "'idx_plugin_tracking_completion_created') ORDER BY type,name"))
     expected = _expected_schema_signature(auto_module)
     if rows == expected:
         return "present"
+    legacy_tracking = tuple(row for row in expected
+                            if not row[1].startswith("plugin_tracking_completion_")
+                            and row[1] != "idx_plugin_tracking_completion_created")
+    if rows == legacy_tracking:
+        return "legacy_tracking"
+    tracking_names = ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts", *TRACKING_TABLES)
+    placeholders = ",".join("?" for _ in tracking_names)
     catalog_names = {str(row[0]) for row in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?)",
-        ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts", *TRACKING_TABLES))}
+        f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+        tracking_names)}
     previous_automatic = tuple(row for row in expected
                                if not row[1].startswith("plugin_tracking_")
-                               and row[1] != "idx_plugin_tracking_observations_created")
+                               and row[1] not in {"idx_plugin_tracking_observations_created",
+                                                  "idx_plugin_tracking_completion_created"})
     if not catalog_names and rows == previous_automatic:
         return "catalog_absent"
     return "unsupported"
@@ -795,6 +806,8 @@ def verify_live(database: Path, systemd, nginx_master_pid: str, prior_db: dict[s
             "observation_smokes": "invalid/no rows", "public_reads": public_results,
             "database_integrity": "ok", "observations": 0, "participants": 0,
             "plugin_tracking_observations": 0, "plugin_tracking_participants": 0,
+            "plugin_tracking_completion_observations": 0,
+            "plugin_tracking_completion_participants": 0,
             "valid_observation_sent": False}
 
 
@@ -827,6 +840,33 @@ def _restore_target_files(tx: Transaction, support) -> None:
         support._atomic_replace(item["target"], data, before)
 
 
+def _refuse_rollback_with_observations(tx: Transaction, systemd, support, release: Path) -> None:
+    """Retain accepted data but always attempt captured service/timer restoration."""
+    errors: list[str] = []
+    if tx.nginx_reloaded:
+        try:
+            _validate_nginx(support)
+            _reload_nginx(systemd, tx.prior_nginx, support, release)
+        except Exception:
+            errors.append("nginx_restore_failed")
+    try:
+        support._restore_units(systemd, tx.prior_units)
+        _verify_restored_units(systemd, tx.prior_units, support)
+    except Exception:
+        errors.append("unit_restore_failed")
+    restored = "restored-to-prestate" if "unit_restore_failed" not in errors else "restore_failed"
+    tx.restoration = {
+        "services": restored,
+        "timers": restored,
+        "nginx": "prestate-retained" if not tx.nginx_reloaded else
+                 ("reloaded-to-prestate" if "nginx_restore_failed" not in errors else "restore_failed"),
+    }
+    tx.write_record("rollback_failed" if errors else "rollback_refused_observation_data", support)
+    if errors:
+        raise DeploymentError("rollback refused: observation data retained; restoration failed")
+    raise DeploymentError("rollback refused: automatic observation data exists")
+
+
 def _rollback(tx: Transaction, systemd, support, release: Path, auto_module,
               *, database: Path = DATABASE) -> None:
     # Never destroy automatically accepted data. If a concurrent valid client
@@ -834,8 +874,7 @@ def _rollback(tx: Transaction, systemd, support, release: Path, auto_module,
     # place and report that operator recovery is required.
     counts = _observation_counts(database, support)
     if any(counts.values()):
-        tx.write_record("rollback_refused_observation_data", support)
-        raise DeploymentError("rollback refused: automatic observation data exists")
+        _refuse_rollback_with_observations(tx, systemd, support, release)
     fresh_units = {}
     for unit in CONTROLLED:
         fresh = support._systemd_show(unit)
@@ -852,15 +891,7 @@ def _rollback(tx: Transaction, systemd, support, release: Path, auto_module,
     # the intake service stopping. Once the DB is quiescent, retain the new
     # schema and code rather than restoring a backup that could erase it.
     if any(_observation_counts(database, support).values()):
-        if tx.nginx_reloaded:
-            _validate_nginx(support)
-            _reload_nginx(systemd, tx.prior_nginx, support, release)
-        support._restore_units(systemd, tx.prior_units)
-        _verify_restored_units(systemd, tx.prior_units, support)
-        tx.restoration = {"services": "restored-with-observation-schema-retained",
-                          "timers": "restored-to-prestate", "nginx": "target-configuration-retained"}
-        tx.write_record("rollback_refused_observation_data", support)
-        raise DeploymentError("rollback refused: automatic observation data exists")
+        _refuse_rollback_with_observations(tx, systemd, support, release)
     # Restore only if the database is still the guarded transaction image.
     if tx.schema_migrated:
         backup_hash = support._sha_file(tx.database_backup)
@@ -1058,7 +1089,8 @@ def apply(*, commit: str, plan: dict[str, Any], support, systemd,
                 if tx.directory.exists():
                     tx.write_record("failed_before_mutation", support)
         except DeploymentError as rollback_exc:
-            if "rollback refused" in str(rollback_exc):
+            if ("rollback refused" in str(rollback_exc) and
+                    "restoration failed" not in str(rollback_exc)):
                 raise rollback_exc from exc
             raise DeploymentError(f"deployment failed phase={phase} rollback=failed") from exc
         except Exception as rollback_exc:

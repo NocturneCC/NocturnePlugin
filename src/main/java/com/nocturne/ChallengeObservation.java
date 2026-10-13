@@ -41,12 +41,29 @@ final class ChallengeObservation
 	final boolean challengeCandidate;
 	final boolean pluginTrackingCandidate;
 	final String triggerLootRecordId;
+	final String completionMetricKey;
+	final Integer completionMetricValue;
+	final String completionMetricLabel;
+	final String completionMetricUnit;
 
 	private ChallengeObservation(String activityKey, String modeKey, String reporterRsn,
 		List<String> roster, Long roomTimeMillis, Long overallTimeMillis,
 		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName,
 		String encounterIdentity, boolean challengeProjection, boolean challengeCandidate,
 		boolean pluginTrackingCandidate, String triggerLootRecordId)
+	{
+		this(activityKey, modeKey, reporterRsn, roster, roomTimeMillis, overallTimeMillis,
+			completionCount, occurredAt, displayDurationMillis, displayName, encounterIdentity,
+			challengeProjection, challengeCandidate, pluginTrackingCandidate, triggerLootRecordId,
+			null, null, null, null);
+	}
+
+	private ChallengeObservation(String activityKey, String modeKey, String reporterRsn,
+		List<String> roster, Long roomTimeMillis, Long overallTimeMillis,
+		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName,
+		String encounterIdentity, boolean challengeProjection, boolean challengeCandidate,
+		boolean pluginTrackingCandidate, String triggerLootRecordId, String completionMetricKey,
+		Integer completionMetricValue, String completionMetricLabel, String completionMetricUnit)
 	{
 		this.activityKey = activityKey;
 		this.modeKey = modeKey;
@@ -64,10 +81,15 @@ final class ChallengeObservation
 		this.challengeCandidate = challengeCandidate;
 		this.pluginTrackingCandidate = pluginTrackingCandidate;
 		this.triggerLootRecordId = triggerLootRecordId;
+		this.completionMetricKey = completionMetricKey;
+		this.completionMetricValue = completionMetricValue;
+		this.completionMetricLabel = completionMetricLabel;
+		this.completionMetricUnit = completionMetricUnit;
 		String identity = encounterIdentity + '|' + activityKey + '|' + modeKey + '|'
 			+ roomTimeMillis + '|' + overallTimeMillis + '|'
 			+ String.join("|", roster.stream().map(ChallengeObservation::identityKey).toArray(String[]::new));
-		this.eventId = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
+		this.eventId = UUID.nameUUIDFromBytes((completionMetricKey == null ? identity
+			: "numeric-run|" + encounterIdentity).getBytes(StandardCharsets.UTF_8)).toString();
 	}
 
 	static ChallengeObservation create(String activityKey, String modeKey,
@@ -167,6 +189,25 @@ final class ChallengeObservation
 			context.bossKey != null, true, context.triggerLootRecordId);
 	}
 
+	static ChallengeObservation createTrackedNumeric(BossCompletionContext context, int value)
+	{
+		if (context == null || context.activity == null || !context.activity.completionTrackingEnabled
+			|| context.activity.completionMetricKey == null || context.activity.completionMetricLabel == null
+			|| context.activity.completionMetricUnit == null || value < 1 || value > 10_000
+			|| context.roster == null || context.roster.status != GroupSnapshot.Status.MATCHED
+			|| context.roster.expectedSize != 1 || context.roster.names.size() != 1) return null;
+		String reporter = safeRsn(context.reporterRsn);
+		String rosterMember = safeRsn(context.roster.names.get(0));
+		if (reporter == null || rosterMember == null
+			|| !identityKey(reporter).equals(identityKey(rosterMember)))
+			return null;
+		return new ChallengeObservation(context.activityKey, context.modeKey, reporter,
+			List.of(reporter), null, null, null, context.occurredAt, 0,
+			context.activity.displayName, context.encounterIdentity, false, false, true,
+			null, context.activity.completionMetricKey, value, context.activity.completionMetricLabel,
+			context.activity.completionMetricUnit);
+	}
+
 	static ChallengeObservation createPhosani(long durationMillis, GroupSnapshot snapshot,
 		String reporter, Instant occurredAt, String encounterIdentity)
 	{
@@ -185,6 +226,11 @@ final class ChallengeObservation
 		body.addProperty("occurred_at", DateTimeFormatter.ISO_INSTANT.format(occurredAt));
 		if (roomTimeMillis != null) body.addProperty("room_time_ms", roomTimeMillis);
 		if (overallTimeMillis != null) body.addProperty("overall_time_ms", overallTimeMillis);
+		if (completionMetricKey != null)
+		{
+			body.addProperty("completion_metric_key", completionMetricKey);
+			body.addProperty("completion_value", completionMetricValue);
+		}
 		JsonArray names = new JsonArray();
 		for (String rsn : roster) names.add(rsn);
 		body.add("roster", names);
@@ -199,6 +245,7 @@ final class ChallengeObservation
 		// completion_count is optional metadata (notably for ToA), so it must not
 		// make a replay of the same timed run look like a new semantic event.
 		return activityKey + '|' + modeKey + '|' + roomTimeMillis + '|' + overallTimeMillis + '|'
+			+ completionMetricKey + '|' + completionMetricValue + '|'
 			+ String.join("|", roster.stream().map(ChallengeObservation::identityKey).toArray(String[]::new));
 	}
 
@@ -212,6 +259,12 @@ final class ChallengeObservation
 		return hours > 0
 			? String.format(Locale.ROOT, "%d:%02d:%02d.%02d", hours, minutes, seconds, fraction)
 			: String.format(Locale.ROOT, "%d:%02d.%02d", centiseconds / 6_000, seconds, fraction);
+	}
+
+	String displayMetric()
+	{
+		return completionMetricValue == null ? formatTime(displayDurationMillis)
+			: completionMetricLabel + ": " + completionMetricValue + " " + completionMetricUnit;
 	}
 
 	private static boolean validDuration(Long value)

@@ -129,6 +129,20 @@ public class LootEventCoverageTest
 		assertFalse(labels.stream().anyMatch(text -> text.startsWith("Raid roster")));
 	}
 
+	@Test public void doomCompletionCardRendersNumericLevelWithoutTtkTime()
+	{
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(
+			PluginActivityCatalog.DOOM_OF_MOKHAIOTL, "Tester", "doom-ui-run", 90, 1L,
+			java.time.Instant.parse("2026-10-13T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, 7);
+		List<String> card = labels(diagnosticPanel().renderRecord(
+			LootRecord.completion(observation, ActivityTimingStatus.ACCEPTED)));
+		assertTrue(card.contains("Doom of Mokhaiotl"));
+		assertTrue(card.contains("Deepest level · 7 level"));
+		assertFalse(card.stream().anyMatch(text -> text.startsWith("Completion time ·")));
+		assertTrue(card.contains(ActivityTimingStatus.ACCEPTED.label));
+	}
+
 	private static List<String> labels(Container root)
 	{
 		List<String> result = new ArrayList<>();

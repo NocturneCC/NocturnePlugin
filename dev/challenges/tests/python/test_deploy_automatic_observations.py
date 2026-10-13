@@ -54,6 +54,42 @@ class AutomaticSchemaTests(unittest.TestCase):
         rollback_catalog(self.conn)
         self.assertEqual("catalog_absent", deploy._schema_state(self.conn, automatic))
 
+    def test_pre_numeric_plugin_tracking_schema_is_supported_and_migrates_additively(self):
+        automatic.migrate_schema(self.conn)
+        catalog_version = self.conn.execute(
+            "SELECT catalog_version_id FROM plugin_tracking_catalog_versions WHERE status='active'"
+        ).fetchone()[0]
+        self.conn.execute("""INSERT INTO plugin_tracking_observations(
+            schema_version,provenance,client_event_id,canonical_payload_sha256,
+            reporter_normalized_rsn,activity_key,mode_key,occurred_at,room_time_ms,
+            overall_time_ms,selected_timing_scope,selected_duration_ms,observed_group_size,
+            catalog_version_id,plugin_version,created_at)
+            VALUES(1,'nocturne_runelite_tracking','retained-event','%s','reporter',
+            'phosanis_nightmare','phosani_nightmare','2026-10-13T12:00:00Z',NULL,
+            358200,'overall',358200,1,?,'0.3.2','2026-10-13T12:00:00Z')""" % ("a" * 64),
+            (catalog_version,))
+        observation_id = self.conn.execute(
+            "SELECT observation_id FROM plugin_tracking_observations WHERE client_event_id='retained-event'"
+        ).fetchone()[0]
+        self.conn.execute(
+            "INSERT INTO plugin_tracking_observation_participants VALUES(?,?,?)",
+            (observation_id, 1, "reporter"))
+        self.conn.commit()
+        self.conn.execute("DROP TABLE plugin_tracking_completion_participants")
+        self.conn.execute("DROP TABLE plugin_tracking_completion_observations")
+        self.assertEqual("legacy_tracking", deploy._schema_state(self.conn, automatic))
+        automatic.migrate_schema(self.conn)
+        self.assertEqual("present", deploy._schema_state(self.conn, automatic))
+        self.assertEqual(0, self.conn.execute(
+            "SELECT COUNT(*) FROM plugin_tracking_completion_observations").fetchone()[0])
+        self.assertEqual(("retained-event", 358200), self.conn.execute(
+            "SELECT client_event_id,selected_duration_ms FROM plugin_tracking_observations"
+        ).fetchone())
+        self.assertEqual([(observation_id, 1, "reporter")], self.conn.execute(
+            "SELECT observation_id,participant_order,normalized_rsn "
+            "FROM plugin_tracking_observation_participants"
+        ).fetchall())
+
     def test_rollback_before_observation_data_removes_only_additive_tables(self):
         self.conn.execute("CREATE TABLE retained_manual_submission(id INTEGER PRIMARY KEY)")
         self.conn.execute("INSERT INTO retained_manual_submission VALUES(1)")
@@ -816,6 +852,58 @@ class TransactionStateMachineTests(unittest.TestCase):
                 deploy._rollback(tx, self.systemd, self.support, self.release, object(), database=self.root / "db")
         self.assertEqual(["stop", "stopped_verified", "quiescent", "restore", "verified"], self.calls)
         self.assertEqual(["rollback_refused_observation_data"], records)
+
+    def test_existing_observation_refuses_database_rollback_but_restores_units_and_timers(self):
+        counts = {name: 0 for name in (*deploy.SCHEMA_TABLES, *deploy.TRACKING_TABLES)}
+        counts["plugin_tracking_completion_observations"] = 1
+        self.support._systemd_show = lambda unit: self.units[unit]
+        active_timer = deploy.TIMERS[0]
+        self.units[active_timer] = {"Id": active_timer, "LoadState": "loaded",
+                                    "ActiveState": "active", "SubState": "waiting", "MainPID": "0"}
+        prior_units = {name: dict(state) for name, state in self.units.items()}
+        tx = deploy.Transaction(directory=self.backup_dir, commit="a" * 40, items=self.items,
+                                prior_units=prior_units, prior_nginx=self.nginx,
+                                database_before={"database_file_meta": {}}, database_backup=self.backup)
+        records = []
+        tx.write_record = lambda state, _support: records.append((state, dict(tx.restoration)))
+        restored = []
+        self.support._restore_units = lambda *_: restored.append("services_and_timers")
+        with mock.patch.object(deploy, "_observation_counts", return_value=counts), \
+             mock.patch.object(deploy, "_verify_restored_units", side_effect=lambda *_: restored.append("verified")), \
+             mock.patch.object(deploy, "_restore_target_files", side_effect=AssertionError("accepted data must be retained")), \
+             mock.patch.object(deploy, "_atomic_database_migration", side_effect=AssertionError("database must be retained")):
+            with self.assertRaisesRegex(deploy.DeploymentError, "rollback refused: automatic observation data exists"):
+                deploy._rollback(tx, self.systemd, self.support, self.release, object(), database=self.root / "db")
+        self.assertEqual(["services_and_timers", "verified"], restored)
+        self.assertEqual("restored-to-prestate", tx.restoration["services"])
+        self.assertEqual("restored-to-prestate", tx.restoration["timers"])
+        for timer in deploy.TIMERS:
+            self.assertEqual(prior_units[timer]["ActiveState"], self.systemd.show(timer)["ActiveState"])
+            self.assertEqual(prior_units[timer]["SubState"], self.systemd.show(timer)["SubState"])
+        self.assertEqual("rollback_refused_observation_data", records[0][0])
+
+    def test_refused_database_rollback_records_restoration_failure_after_attempt(self):
+        counts = {name: 0 for name in (*deploy.SCHEMA_TABLES, *deploy.TRACKING_TABLES)}
+        counts["plugin_tracking_observations"] = 1
+        self.support._systemd_show = lambda unit: self.units[unit]
+        tx = deploy.Transaction(directory=self.backup_dir, commit="a" * 40, items=self.items,
+                                prior_units=self.units, prior_nginx=self.nginx,
+                                database_before={"database_file_meta": {}}, database_backup=self.backup)
+        records = []
+        tx.write_record = lambda state, _support: records.append((state, dict(tx.restoration)))
+        attempts = []
+        def failed_restore(*_):
+            attempts.append("restore_attempted")
+            raise deploy.DeploymentError("fixture failure")
+        self.support._restore_units = failed_restore
+        with mock.patch.object(deploy, "_observation_counts", return_value=counts), \
+             mock.patch.object(deploy, "_verify_restored_units", side_effect=AssertionError("verify after failed restore")):
+            with self.assertRaisesRegex(deploy.DeploymentError, "restoration failed"):
+                deploy._rollback(tx, self.systemd, self.support, self.release, object(), database=self.root / "db")
+        self.assertEqual(["restore_attempted"], attempts)
+        self.assertEqual("rollback_failed", records[0][0])
+        self.assertEqual("restore_failed", tx.restoration["services"])
+        self.assertEqual("restore_failed", tx.restoration["timers"])
 
     def test_restoration_verifies_exact_active_services_and_timer_prestate(self):
         snapshot = {}

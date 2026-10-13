@@ -36,6 +36,88 @@ public class ChallengeObservationServiceTest
 			ChallengeObservationResponse.parse(500, new Gson().fromJson("{\"state\":\"server_failure\"}", JsonObject.class)).state);
 	}
 
+	@Test public void numericDoomCompletionUsesPluginTrackingContractWithoutTtkFields() throws Exception
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.DOOM_OF_MOKHAIOTL;
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(activity, "Local Name",
+			"session|doom-run|fixture", 70, 1L, Instant.parse("2026-10-13T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, 7);
+		assertNotNull(observation);
+		AtomicReference<JsonObject> sent = new AtomicReference<>();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			assertEquals(ChallengeObservationService.PLUGIN_ENDPOINT, chain.request().url().toString());
+			assertNull(chain.request().header("Authorization"));
+			okio.Buffer buffer = new okio.Buffer(); chain.request().body().writeTo(buffer);
+			sent.set(new Gson().fromJson(buffer.readUtf8(), JsonObject.class));
+			return response(chain.request(), 200, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		CountDownLatch complete = new CountDownLatch(1);
+		try
+		{
+			assertNotNull(service.submitPlugin(observation, ignored -> complete.countDown()));
+			assertTrue(complete.await(2, TimeUnit.SECONDS));
+			JsonObject payload = sent.get();
+			assertEquals("doom_of_mokhaiotl", payload.get("activity_key").getAsString());
+			assertEquals("doom_of_mokhaiotl", payload.get("mode_key").getAsString());
+			assertEquals("deepest_level", payload.get("completion_metric_key").getAsString());
+			assertEquals(7, payload.get("completion_value").getAsInt());
+			assertFalse(payload.has("overall_time_ms"));
+			assertFalse(payload.has("room_time_ms"));
+			assertEquals(1, payload.get("group_size").getAsInt());
+			assertEquals(1, payload.getAsJsonArray("roster").size());
+			assertEquals(observation.eventId, payload.get("event_id").getAsString());
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void disabledNumericPolicyKeepsLocalCompletionButDoesNotPost() throws Exception
+	{
+		String disabledCatalog = "{\"schema_version\":1,\"activities\":[{\"activity_key\":\"doom_of_mokhaiotl\","
+			+ "\"display_name\":\"Doom of Mokhaiotl\",\"aliases\":[\"Doom\"],\"modes\":[{"
+			+ "\"mode_key\":\"doom_of_mokhaiotl\",\"display_name\":\"Solo delve\","
+			+ "\"source_names\":[\"Doom of Mokhaiotl\",\"Mokhaiotl\"],\"supports_solo\":true,"
+			+ "\"supports_group\":false,\"loot_tracking_enabled\":true,\"ttk_tracking_enabled\":false,"
+			+ "\"timing_scope\":\"unconfigured\",\"challenge_boss_key\":null,"
+			+ "\"challenge_mode_key\":null,\"challenge_content_key\":null,"
+			+ "\"completion_tracking_enabled\":false,\"completion_metric_key\":null,"
+			+ "\"completion_metric_label\":null,\"completion_metric_unit\":null}]}]}";
+		assertTrue(PluginActivityCatalog.applyPublicConfig(new com.google.gson.JsonParser()
+			.parse(disabledCatalog).getAsJsonObject()));
+		AtomicInteger requests = new AtomicInteger();
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder()
+			.addInterceptor(chain ->
+			{
+				requests.incrementAndGet();
+				return response(chain.request(), 200, "{\"state\":\"accepted\"}");
+			}).build(), new Gson(), scheduler);
+		List<ChallengeObservation> locallyTracked = new CopyOnWriteArrayList<>();
+		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(),
+			service, ignored -> { }, ignored -> { }, observation -> { },
+			(observation, status) -> locallyTracked.add(observation));
+		try
+		{
+			DoomRunTracker tracker = new DoomRunTracker();
+			DoomRunTracker.Progress progress = tracker.completeLevel(7, "Local Name", "session", 77,
+				Instant.parse("2026-10-13T12:00:00Z"));
+			capture.onDoomLevelProgress(progress, true, false);
+			capture.finishDoomRun(tracker.finishByAction(DoomRunTracker.EndAction.LEAVE_DELVING), true, false);
+			assertEquals(1, locallyTracked.size());
+			assertEquals(7, locallyTracked.get(0).completionMetricValue.intValue());
+			assertEquals(0, requests.get());
+			assertEquals(0, service.pendingCount());
+		}
+		finally
+		{
+			capture.close();
+			service.close();
+			scheduler.shutdownNow();
+			PluginActivityCatalog.resetForTests();
+		}
+	}
+
 	private static ChallengeObservation observation()
 	{
 		GroupSnapshot roster = new GroupSnapshot("fixture", List.of("Local Name", "Party Name"), 2,

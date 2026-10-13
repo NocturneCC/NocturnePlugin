@@ -72,6 +72,7 @@ SCOPE_BUNDLE_PATHS = (
     *UNIT_REFERENCES,
     "dev/challenges/tests/python/test_challenge_automatic_intake.py",
     "dev/challenges/tests/python/test_plugin_tracking_catalog.py",
+    "dev/challenges/tests/test_plugin_tracking_editor.js",
     "dev/challenges/tests/python/test_deploy_automatic_observations.py",
     "dev/challenges/tests/python/test_automatic_observation_scope.py",
     "dev/challenges/integration/routes/admin_app_challenge_routes.fragment.py",

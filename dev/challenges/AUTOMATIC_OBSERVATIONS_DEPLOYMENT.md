@@ -51,8 +51,9 @@ were stopped for the database maintenance window.
 
 The migration is `challenge_automatic_intake.migrate_schema()` from the
 immutable release. It creates the Challenge observation tables and the
-independent Plugin Tracking catalog/version/draft/observation tables, indexes, and
-immutability triggers described in `AUTOMATIC_OBSERVATIONS.md`; it does not
+independent Plugin Tracking catalog/version, time observation, and numeric
+completion observation/participant tables, indexes, and immutability triggers
+described in `AUTOMATIC_OBSERVATIONS.md` and `PLUGIN_TRACKING.md`; it does not
 alter existing Challenge config, manual submissions, leaderboard tables, or
 award data. The migration is idempotent and the helper rejects partial or
 different schemas. A SQLite online backup is made after all known holders have
@@ -65,8 +66,12 @@ The root-only transaction directory is beneath
 contains mode-0600 file/SQLite backups and a private transaction record. Any
 failure before automatic-observation data exists restores the exact backed-up
 database image, files, route fragment, and captured service/timer state. If an
-observation row appears, rollback refuses to drop/replace the new schema or
-erase data and leaves the transaction record for operator recovery.
+automatic-observation or Plugin Tracking row appears, rollback refuses to
+drop/replace the new schema or erase data. It still attempts and verifies
+restoration of every captured service and timer, then records either
+`rollback_refused_observation_data` or `rollback_failed` for operator recovery.
+The additive completion-schema upgrade leaves existing timing observations and
+participant rows intact.
 
 The public Plugin Tracking policy endpoint is also checked as a read. Its
 malformed observation route receives only `{}` and must reject without rows.

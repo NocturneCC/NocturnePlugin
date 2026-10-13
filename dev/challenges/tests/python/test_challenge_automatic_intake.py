@@ -254,6 +254,40 @@ class AutomaticObservationTests(unittest.TestCase):
             self.assertEqual(0, conn.execute(
                 "SELECT COUNT(*) FROM leaderboard_observations").fetchone()[0])
 
+    def test_public_plugin_tracking_accepts_typed_numeric_doom_completion(self):
+        config = self.client.get("/api/plugin/tracking/config").get_json()["config"]
+        doom = next(row for row in config["activities"]
+                    if row["activity_key"] == "doom_of_mokhaiotl")
+        mode = doom["modes"][0]
+        self.assertTrue(mode["completion_tracking_enabled"])
+        self.assertEqual("deepest_level", mode["completion_metric_key"])
+        self.assertFalse(mode["ttk_tracking_enabled"])
+
+        payload = {
+            "schema_version": 1, "event_id": str(uuid.uuid4()),
+            "reporter_rsn": "Doctor Arden", "activity_key": "doom_of_mokhaiotl",
+            "mode_key": "doom_of_mokhaiotl", "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "completion_metric_key": "deepest_level", "completion_value": 7,
+            "roster": ["Doctor Arden"], "group_size": 1, "plugin_version": "0.3.2",
+        }
+        response = self.client.post("/api/plugin/tracking/observations", json=payload)
+        self.assertEqual(200, response.status_code, response.get_json())
+        self.assertEqual({"state": "accepted"}, response.get_json())
+        retry = self.client.post("/api/plugin/tracking/observations", json=payload)
+        self.assertEqual({"state": "duplicate"}, retry.get_json())
+        with self.db(self.challenge_path) as conn:
+            row = conn.execute("SELECT completion_metric_key,completion_value,observed_group_size "
+                               "FROM plugin_tracking_completion_observations").fetchone()
+            self.assertEqual(("deepest_level", 7, 1), row)
+            self.assertEqual(1, conn.execute(
+                "SELECT COUNT(*) FROM plugin_tracking_completion_participants").fetchone()[0])
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM plugin_tracking_observations").fetchone()[0])
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM challenge_submissions").fetchone()[0])
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM leaderboard_observations").fetchone()[0])
+
     def test_hmt_selects_overall_time(self):
         payload = self.payload("theatre_of_blood_hard_mode", "hmt_5man",
                                ["Primary One", "Party Two", "Third Clan", "Fourth Clan", "Fifth Clan"])

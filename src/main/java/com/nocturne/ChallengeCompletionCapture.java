@@ -139,6 +139,36 @@ final class ChallengeCompletionCapture
 		if (observation != null) submit(observation, diagnostics);
 	}
 
+	void onDoomLevelProgress(DoomRunTracker.Progress progress, boolean consent, boolean diagnostics)
+	{
+		if (progress == null) return;
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.find(
+			"doom_of_mokhaiotl", "doom_of_mokhaiotl");
+		if (activity == null || !activity.completionTrackingEnabled
+			|| activity.completionMetricKey == null || activity.completionMetricLabel == null
+			|| activity.completionMetricUnit == null)
+			activity = PluginActivityCatalog.DOOM_OF_MOKHAIOTL;
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(activity,
+			progress.reporterRsn, progress.runIdentity, progress.gameCycle,
+			nanoTime.getAsLong(), progress.occurredAt);
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, progress.highestLevel);
+		if (observation != null) activityTiming.accept(observation, ActivityTimingStatus.LOCAL_ONLY);
+	}
+
+	void finishDoomRun(DoomRunTracker.Result result, boolean consent, boolean diagnostics)
+	{
+		if (result == null) return;
+		PluginActivityCatalog.Entry policy = PluginActivityCatalog.find(
+			"doom_of_mokhaiotl", "doom_of_mokhaiotl");
+		PluginActivityCatalog.Entry activity = policy == null ? PluginActivityCatalog.DOOM_OF_MOKHAIOTL : policy;
+		BossCompletionContext context = BossCompletionContext.fromNumericRun(activity,
+			result.reporterRsn, result.runIdentity, result.gameCycle,
+			nanoTime.getAsLong(), result.occurredAt);
+		ChallengeObservation observation = ChallengeObservation.createTrackedNumeric(context, result.highestLevel);
+		if (observation != null && consent && policy != null && policy.completionTrackingEnabled
+			&& "deepest_level".equals(policy.completionMetricKey)) submit(observation, diagnostics);
+	}
+
 	void onSystemMessage(String category, String text, long gameCycle, boolean consent,
 		boolean diagnostics, Instant now)
 	{
@@ -181,8 +211,8 @@ final class ChallengeCompletionCapture
 			{
 				case ACCEPTED:
 					activityTiming.accept(observation, ActivityTimingStatus.ACCEPTED);
-					feedback.accept("Nocturne recorded your " + observation.displayName + " time: "
-						+ ChallengeObservation.formatTime(observation.displayDurationMillis) + "."); break;
+					feedback.accept("Nocturne recorded your " + observation.displayName + " "
+						+ observation.displayMetric() + "."); break;
 				case DUPLICATE:
 					activityTiming.accept(observation, ActivityTimingStatus.DUPLICATE);
 					feedback.accept("Nocturne already recorded this completion."); break;

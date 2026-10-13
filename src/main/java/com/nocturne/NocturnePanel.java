@@ -299,6 +299,21 @@ final class NocturnePanel extends PluginPanel
 		requireEdt();
 		if (!matchesHistorySelection(record.rsn, generation)) return;
 		applyPendingActivityNotice(record);
+		if (record.completionLinkId != null)
+		{
+			LootRecord completion = history.find(record.completionLinkId);
+			if (completion != null && completion.completionOnly)
+			{
+				LootRecord linked = completion.withCompletionLoot(record);
+				ViewportAnchor anchor = captureViewportAnchor();
+				history.replace(completion.id, linked);
+				history.updateStats(Math.max(0, totalCount - 1), bytes);
+				historyActions.mergeCompletionLoot(linked, record.id);
+				renderHistory();
+				restoreAfterLayout(anchor, beginIndependentRestore());
+				return;
+			}
+		}
 		LootRecord merged = pendingActivityTiming.merge(record);
 		if (merged != null)
 		{
@@ -321,6 +336,11 @@ final class NocturnePanel extends PluginPanel
 		if (observation == null || status == null || history.getPlayer() == null
 			|| !LootHistoryStore.normalizeRsn(history.getPlayer()).equals(
 				LootHistoryStore.normalizeRsn(observation.reporterRsn))) return;
+		if (observation.completionMetricValue != null)
+		{
+			setActivityCompletion(observation, status);
+			return;
+		}
 		if (observation.triggerLootRecordId != null)
 		{
 			LootRecord triggerRecord = history.find(observation.triggerLootRecordId);
@@ -360,6 +380,48 @@ final class NocturnePanel extends PluginPanel
 		LootRecord completion = LootRecord.completion(observation, status);
 		prepend(completion, null);
 		historyActions.completion(completion);
+	}
+
+	private void setActivityCompletion(ChallengeObservation observation, ActivityTimingStatus status)
+	{
+		LootRecord existing = history.find(observation.eventId);
+		if (existing != null)
+		{
+			applyActivityCompletion(existing, observation, status);
+			return;
+		}
+		// A claimed reward can reach local history before the async completion-card
+		// callback. Its explicit link lets the later card update merge safely without
+		// relying on a short wall-clock window or choosing the nearest activity.
+		for (LootRecord loot : history.getRecords())
+		{
+			if (!observation.eventId.equals(loot.completionLinkId)
+				|| !observation.activityKey.equals(loot.activityKey)) continue;
+			LootRecord merged = LootRecord.completion(observation, status).withCompletionLoot(loot);
+			ViewportAnchor anchor = captureViewportAnchor();
+			if (history.replace(loot.id, merged))
+			{
+				historyActions.mergeCompletionLoot(merged, loot.id);
+				renderHistory();
+				restoreAfterLayout(anchor, beginIndependentRestore());
+				return;
+			}
+		}
+		LootRecord completion = LootRecord.completion(observation, status);
+		prepend(completion, null);
+		historyActions.completion(completion);
+	}
+
+	private void applyActivityCompletion(LootRecord record, ChallengeObservation observation,
+		ActivityTimingStatus status)
+	{
+		ViewportAnchor anchor = captureViewportAnchor();
+		LootRecord updated = record.withActivityCompletion(observation.completionMetricValue,
+			observation.completionMetricLabel, observation.completionMetricUnit, status);
+		if (!history.replace(updated)) return;
+		historyActions.activityTiming(updated);
+		renderHistory();
+		restoreAfterLayout(anchor, beginIndependentRestore());
 	}
 
 	private void applyActivityTiming(LootRecord record, long durationMillis, ActivityTimingStatus status)
@@ -713,11 +775,18 @@ final class NocturnePanel extends PluginPanel
 				card.add(note(record.activityTrackingNotice, CARD));
 			}
 			card.add(label(TIME.format(record.time) + "  |  " + record.rsn, MUTED));
-			if (record.completionOnly) card.add(note("Timed activity", CARD));
+			if (record.completionOnly) card.add(note("Completed activity", CARD));
 			if (record.activityDurationMillis != null)
 			{
 				card.add(note("Completion time · "
 					+ ChallengeObservation.formatTime(record.activityDurationMillis), CARD));
+				if (record.activityTimingStatus != null)
+					card.add(note(record.activityTimingStatus.label, CARD));
+			}
+			if (record.activityNumericValue != null)
+			{
+				card.add(note(record.activityNumericLabel + " · " + record.activityNumericValue
+					+ " " + record.activityNumericUnit, CARD));
 				if (record.activityTimingStatus != null)
 					card.add(note(record.activityTimingStatus.label, CARD));
 			}

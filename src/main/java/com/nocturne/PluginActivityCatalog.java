@@ -23,8 +23,11 @@ final class PluginActivityCatalog
 	static final Entry NIGHTMARE = new Entry("nightmare", "The Nightmare", "nightmare",
 		"overall", true, true, true, true, null,
 		Arrays.asList("The Nightmare", "Nightmare"));
+	static final Entry DOOM_OF_MOKHAIOTL = new Entry("doom_of_mokhaiotl", "Doom of Mokhaiotl",
+		"doom_of_mokhaiotl", "unconfigured", true, false, true, false, null,
+		Arrays.asList("Doom of Mokhaiotl", "Mokhaiotl"), true, "deepest_level", "Deepest level", "level");
 	private static final List<Entry> DEFAULTS = Collections.unmodifiableList(
-		Arrays.asList(PHOSANIS, GAUNTLET, NIGHTMARE));
+		Arrays.asList(PHOSANIS, GAUNTLET, NIGHTMARE, DOOM_OF_MOKHAIOTL));
 	private static volatile List<Entry> entries = DEFAULTS;
 
 	private PluginActivityCatalog() { }
@@ -45,7 +48,17 @@ final class PluginActivityCatalog
 				}
 			}
 		}
+		// Keep Doom's confirmed local completion/reward identity available when a
+		// previously published server catalog does not yet include its new policy.
+		if (found == null && matches(DOOM_OF_MOKHAIOTL, key)) return DOOM_OF_MOKHAIOTL;
 		return found;
+	}
+
+	private static boolean matches(Entry entry, String key)
+	{
+		for (String alias : entry.sourceNames)
+			if (key.equals(normalize(alias))) return true;
+		return false;
 	}
 
 	static Entry find(String activityKey, String modeKey)
@@ -99,7 +112,14 @@ final class PluginActivityCatalog
 						mode.get("supports_group").getAsBoolean(),
 						mode.get("loot_tracking_enabled").getAsBoolean(), enabled,
 						mode.has("challenge_boss_key") && !mode.get("challenge_boss_key").isJsonNull()
-							? mode.get("challenge_boss_key").getAsString() : null, names));
+							? mode.get("challenge_boss_key").getAsString() : null, names,
+						mode.has("completion_tracking_enabled") && mode.get("completion_tracking_enabled").getAsBoolean(),
+						mode.has("completion_metric_key") && !mode.get("completion_metric_key").isJsonNull()
+							? mode.get("completion_metric_key").getAsString() : null,
+						mode.has("completion_metric_label") && !mode.get("completion_metric_label").isJsonNull()
+							? mode.get("completion_metric_label").getAsString() : null,
+						mode.has("completion_metric_unit") && !mode.get("completion_metric_unit").isJsonNull()
+							? mode.get("completion_metric_unit").getAsString() : null));
 				}
 			}
 			if (parsed.isEmpty()) return false;
@@ -143,10 +163,25 @@ final class PluginActivityCatalog
 		final boolean ttkTrackingEnabled;
 		final String challengeBossKey;
 		final List<String> sourceNames;
+		final boolean completionTrackingEnabled;
+		final String completionMetricKey;
+		final String completionMetricLabel;
+		final String completionMetricUnit;
 
 		Entry(String activityKey, String displayName, String modeKey, String timingScope,
 			boolean supportsSolo, boolean supportsGroup, boolean lootTrackingEnabled,
 			boolean ttkTrackingEnabled, String challengeBossKey, List<String> sourceNames)
+		{
+			this(activityKey, displayName, modeKey, timingScope, supportsSolo, supportsGroup,
+				lootTrackingEnabled, ttkTrackingEnabled, challengeBossKey, sourceNames,
+				false, null, null, null);
+		}
+
+		Entry(String activityKey, String displayName, String modeKey, String timingScope,
+			boolean supportsSolo, boolean supportsGroup, boolean lootTrackingEnabled,
+			boolean ttkTrackingEnabled, String challengeBossKey, List<String> sourceNames,
+			boolean completionTrackingEnabled, String completionMetricKey,
+			String completionMetricLabel, String completionMetricUnit)
 		{
 			this.activityKey = activityKey;
 			this.displayName = displayName;
@@ -158,6 +193,10 @@ final class PluginActivityCatalog
 			this.ttkTrackingEnabled = ttkTrackingEnabled;
 			this.challengeBossKey = challengeBossKey;
 			this.sourceNames = Collections.unmodifiableList(sourceNames);
+			this.completionTrackingEnabled = completionTrackingEnabled;
+			this.completionMetricKey = completionMetricKey;
+			this.completionMetricLabel = completionMetricLabel;
+			this.completionMetricUnit = completionMetricUnit;
 		}
 	}
 }

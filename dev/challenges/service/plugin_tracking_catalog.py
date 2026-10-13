@@ -11,7 +11,10 @@ from typing import Any
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 MAX_GROUP_SIZE = 10
 CATALOG_TABLES = ("plugin_tracking_catalog_versions", "plugin_tracking_catalog_drafts",
-                  "plugin_tracking_observations", "plugin_tracking_observation_participants")
+                  "plugin_tracking_observations", "plugin_tracking_observation_participants",
+                  "plugin_tracking_completion_observations",
+                  "plugin_tracking_completion_participants")
+BASE_CATALOG_TABLES = CATALOG_TABLES[:4]
 
 
 def default_document() -> dict[str, Any]:
@@ -24,7 +27,9 @@ def default_document() -> dict[str, Any]:
              "loot_tracking_enabled": True, "ttk_tracking_enabled": True,
              "timing_scope": "overall", "challenge_boss_key": "phosanis",
              "challenge_mode_key": "phosanis_nightmare",
-             "challenge_content_key": "phosanis_nightmare"}]},
+             "challenge_content_key": "phosanis_nightmare",
+             "completion_tracking_enabled": False, "completion_metric_key": None,
+             "completion_metric_label": None, "completion_metric_unit": None}]},
         {"activity_key": "corrupted_gauntlet", "display_name": "Corrupted Gauntlet",
          "aliases": ["CG", "Gauntlet"], "modes": [{
              "mode_key": "corrupted_gauntlet", "display_name": "Corrupted",
@@ -33,7 +38,9 @@ def default_document() -> dict[str, Any]:
              "loot_tracking_enabled": True, "ttk_tracking_enabled": True,
              "timing_scope": "overall", "challenge_boss_key": "gauntlet",
              "challenge_mode_key": "corrupted_gauntlet",
-             "challenge_content_key": "corrupted_gauntlet"}]},
+             "challenge_content_key": "corrupted_gauntlet",
+             "completion_tracking_enabled": False, "completion_metric_key": None,
+             "completion_metric_label": None, "completion_metric_unit": None}]},
         {"activity_key": "nightmare", "display_name": "The Nightmare",
          "aliases": ["Nightmare"], "modes": [{
              "mode_key": "nightmare", "display_name": "Regular",
@@ -41,7 +48,19 @@ def default_document() -> dict[str, Any]:
              "supports_solo": True, "supports_group": True,
              "loot_tracking_enabled": True, "ttk_tracking_enabled": True,
              "timing_scope": "overall", "challenge_boss_key": None,
-             "challenge_mode_key": None, "challenge_content_key": None}]},
+             "challenge_mode_key": None, "challenge_content_key": None,
+             "completion_tracking_enabled": False, "completion_metric_key": None,
+             "completion_metric_label": None, "completion_metric_unit": None}]},
+        {"activity_key": "doom_of_mokhaiotl", "display_name": "Doom of Mokhaiotl",
+         "aliases": ["Doom"], "modes": [{
+             "mode_key": "doom_of_mokhaiotl", "display_name": "Solo delve",
+             "source_names": ["Doom of Mokhaiotl", "Mokhaiotl"],
+             "supports_solo": True, "supports_group": False,
+             "loot_tracking_enabled": True, "ttk_tracking_enabled": False,
+             "timing_scope": "unconfigured", "challenge_boss_key": None,
+             "challenge_mode_key": None, "challenge_content_key": None,
+             "completion_tracking_enabled": True, "completion_metric_key": "deepest_level",
+             "completion_metric_label": "Deepest level", "completion_metric_unit": "level"}]},
     ]}
 
 
@@ -80,8 +99,12 @@ def normalize_document(value: Any) -> dict[str, Any]:
                         "supports_group", "loot_tracking_enabled", "ttk_tracking_enabled",
                         "timing_scope", "challenge_boss_key", "challenge_mode_key",
                         "challenge_content_key"}
-            if not isinstance(mode, dict) or set(mode) != expected:
+            completion_fields = {"completion_tracking_enabled", "completion_metric_key",
+                                 "completion_metric_label", "completion_metric_unit"}
+            if not isinstance(mode, dict) or set(mode) not in (expected, expected | completion_fields):
                 raise ValueError("catalog_mode_schema_invalid")
+            mode = {"completion_tracking_enabled": False, "completion_metric_key": None,
+                    "completion_metric_label": None, "completion_metric_unit": None, **mode}
             mode_key = mode["mode_key"]
             if not isinstance(mode_key, str) or not KEY_RE.fullmatch(mode_key) or mode_key in mode_keys:
                 raise ValueError("catalog_mode_key_invalid")
@@ -99,6 +122,22 @@ def normalize_document(value: Any) -> dict[str, Any]:
                 raise ValueError("catalog_timing_scope_invalid")
             if mode["ttk_tracking_enabled"] and scope == "unconfigured":
                 raise ValueError("catalog_enabled_timing_unconfigured")
+            if type(mode["completion_tracking_enabled"]) is not bool:
+                raise ValueError("catalog_completion_flag_invalid")
+            completion_values = (mode["completion_metric_key"], mode["completion_metric_label"],
+                                 mode["completion_metric_unit"])
+            if mode["completion_tracking_enabled"]:
+                metric_key, metric_label, metric_unit = completion_values
+                if (not isinstance(metric_key, str) or not KEY_RE.fullmatch(metric_key)
+                        or not isinstance(metric_label, str) or not metric_label.strip()
+                        or len(metric_label.strip()) > 80
+                        or not isinstance(metric_unit, str) or not metric_unit.strip()
+                        or len(metric_unit.strip()) > 32):
+                    raise ValueError("catalog_completion_metric_invalid")
+                mode["completion_metric_label"] = metric_label.strip()
+                mode["completion_metric_unit"] = metric_unit.strip()
+            elif any(item is not None for item in completion_values):
+                raise ValueError("catalog_completion_metric_unexpected")
             boss, challenge_mode, content = (mode["challenge_boss_key"],
                                              mode["challenge_mode_key"],
                                              mode["challenge_content_key"])
@@ -150,9 +189,9 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN IMMEDIATE")
     try:
         present = {str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?)", CATALOG_TABLES
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?,?,?)", CATALOG_TABLES
         )}
-        if present and present != set(CATALOG_TABLES):
+        if present and present not in (set(BASE_CATALOG_TABLES), set(CATALOG_TABLES)):
             raise RuntimeError("partial plugin tracking catalog schema")
         conn.execute("""CREATE TABLE IF NOT EXISTS plugin_tracking_catalog_versions(
             catalog_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,11 +241,42 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(observation_id,normalized_rsn),
             FOREIGN KEY(observation_id) REFERENCES plugin_tracking_observations(observation_id)
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS plugin_tracking_completion_observations(
+            observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schema_version INTEGER NOT NULL CHECK(schema_version=1),
+            provenance TEXT NOT NULL CHECK(provenance='nocturne_runelite_tracking'),
+            client_event_id TEXT NOT NULL UNIQUE,
+            canonical_payload_sha256 TEXT NOT NULL CHECK(length(canonical_payload_sha256)=64),
+            reporter_normalized_rsn TEXT NOT NULL,
+            activity_key TEXT NOT NULL,
+            mode_key TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            completion_metric_key TEXT NOT NULL,
+            completion_value INTEGER NOT NULL CHECK(completion_value BETWEEN 1 AND 10000),
+            observed_group_size INTEGER NOT NULL CHECK(observed_group_size BETWEEN 1 AND 10),
+            catalog_version_id INTEGER NOT NULL,
+            plugin_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(catalog_version_id) REFERENCES plugin_tracking_catalog_versions(catalog_version_id)
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plugin_tracking_completion_created ON plugin_tracking_completion_observations(created_at)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS plugin_tracking_completion_participants(
+            observation_id INTEGER NOT NULL,
+            participant_order INTEGER NOT NULL CHECK(participant_order BETWEEN 1 AND 10),
+            normalized_rsn TEXT NOT NULL CHECK(length(normalized_rsn) BETWEEN 1 AND 12),
+            PRIMARY KEY(observation_id,participant_order),
+            UNIQUE(observation_id,normalized_rsn),
+            FOREIGN KEY(observation_id) REFERENCES plugin_tracking_completion_observations(observation_id)
+        )""")
         for name, table, operation in (
             ("plugin_tracking_observations_no_update", "plugin_tracking_observations", "UPDATE"),
             ("plugin_tracking_observations_no_delete", "plugin_tracking_observations", "DELETE"),
             ("plugin_tracking_participants_no_update", "plugin_tracking_observation_participants", "UPDATE"),
             ("plugin_tracking_participants_no_delete", "plugin_tracking_observation_participants", "DELETE"),
+            ("plugin_tracking_completion_no_update", "plugin_tracking_completion_observations", "UPDATE"),
+            ("plugin_tracking_completion_no_delete", "plugin_tracking_completion_observations", "DELETE"),
+            ("plugin_tracking_completion_participants_no_update", "plugin_tracking_completion_participants", "UPDATE"),
+            ("plugin_tracking_completion_participants_no_delete", "plugin_tracking_completion_participants", "DELETE"),
         ):
             conn.execute(f"CREATE TRIGGER IF NOT EXISTS {name} BEFORE {operation} ON {table} "
                          "BEGIN SELECT RAISE(ABORT,'Plugin Tracking observations are immutable'); END")
@@ -238,6 +308,15 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             "plugin_tracking_observation_participants": {
                 "observation_id", "participant_order", "normalized_rsn",
             },
+            "plugin_tracking_completion_observations": {
+                "observation_id", "schema_version", "provenance", "client_event_id",
+                "canonical_payload_sha256", "reporter_normalized_rsn", "activity_key", "mode_key",
+                "occurred_at", "completion_metric_key", "completion_value", "observed_group_size",
+                "catalog_version_id", "plugin_version", "created_at",
+            },
+            "plugin_tracking_completion_participants": {
+                "observation_id", "participant_order", "normalized_rsn",
+            },
         }
         for table, columns in expected.items():
             actual = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -258,7 +337,7 @@ def rollback_schema(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN IMMEDIATE")
     try:
         present = {str(row[0]) for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?)", CATALOG_TABLES
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?,?,?)", CATALOG_TABLES
         )}
         if not present:
             if owns_transaction:
@@ -268,12 +347,16 @@ def rollback_schema(conn: sqlite3.Connection) -> None:
             raise RuntimeError("partial Plugin Tracking schema prevents rollback")
         if conn.execute("SELECT 1 FROM plugin_tracking_observations LIMIT 1").fetchone():
             raise RuntimeError("Plugin Tracking observations prevent rollback")
+        if conn.execute("SELECT 1 FROM plugin_tracking_completion_observations LIMIT 1").fetchone():
+            raise RuntimeError("Plugin Tracking completion observations prevent rollback")
         versions = conn.execute("SELECT catalog_json FROM plugin_tracking_catalog_versions").fetchall()
         if len(versions) != 1 or json.loads(versions[0][0]) != normalize_document(default_document()):
             raise RuntimeError("published Plugin Tracking catalog prevents rollback")
         draft = conn.execute("SELECT catalog_json FROM plugin_tracking_catalog_drafts WHERE draft_id=1").fetchone()
         if not draft or json.loads(draft[0]) != normalize_document(default_document()):
             raise RuntimeError("edited Plugin Tracking draft prevents rollback")
+        conn.execute("DROP TABLE plugin_tracking_completion_participants")
+        conn.execute("DROP TABLE plugin_tracking_completion_observations")
         conn.execute("DROP TABLE plugin_tracking_observation_participants")
         conn.execute("DROP TABLE plugin_tracking_observations")
         conn.execute("DROP TABLE plugin_tracking_catalog_drafts")
@@ -470,6 +553,108 @@ def process_tracking_observation(conn: sqlite3.Connection, members: sqlite3.Conn
     observation_id = int(cursor.lastrowid)
     conn.executemany("INSERT INTO plugin_tracking_observation_participants VALUES(?,?,?)",
                      ((observation_id, index, rsn) for index, rsn in enumerate(sorted(roster), 1)))
+    return {"state": "accepted"}
+
+
+def process_tracking_completion(conn: sqlite3.Connection, members: sqlite3.Connection,
+                                value: Any, *, now=None) -> dict[str, str]:
+    """Persist a typed numeric completion fact, separate from duration/TTK rows."""
+    from datetime import datetime, timezone
+    from challenge_automatic_intake import EVENT_RE, RSN_RE, VERSION_RE, _iso_time, _resolve_member
+    from challenge_shadow_common import normalize_rsn
+
+    def reject(reason: str) -> None:
+        raise TrackingObservationError(reason)
+
+    if not conn.in_transaction:
+        raise RuntimeError("tracking completion requires caller transaction")
+    required = {"schema_version", "event_id", "reporter_rsn", "activity_key", "mode_key",
+                "occurred_at", "completion_metric_key", "completion_value", "roster",
+                "group_size", "plugin_version"}
+    if not isinstance(value, dict) or set(value) != required:
+        reject("invalid_schema")
+    if type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+        reject("unsupported_schema")
+    event_id = value.get("event_id")
+    if not isinstance(event_id, str) or not EVENT_RE.fullmatch(event_id):
+        reject("invalid_event_id")
+    raw_reporter = value.get("reporter_rsn")
+    if not isinstance(raw_reporter, str) or not RSN_RE.fullmatch(raw_reporter.strip()):
+        reject("invalid_reporter")
+    reporter = normalize_rsn(raw_reporter.strip())
+    activity_key, mode_key = value.get("activity_key"), value.get("mode_key")
+    if not isinstance(activity_key, str) or not isinstance(mode_key, str):
+        reject("unsupported_activity")
+    active = active_document(conn)
+    matches = [(activity, mode) for activity in active["activities"]
+               for mode in activity["modes"]
+               if activity["activity_key"] == activity_key and mode["mode_key"] == mode_key]
+    if len(matches) != 1:
+        reject("unsupported_activity")
+    _activity, mode = matches[0]
+    if not mode["completion_tracking_enabled"]:
+        return {"state": "ignored", "reason": "disabled"}
+    metric_key = value.get("completion_metric_key")
+    if not isinstance(metric_key, str) or metric_key != mode["completion_metric_key"]:
+        reject("unsupported_completion_metric")
+    completion_value = value.get("completion_value")
+    if type(completion_value) is not int or not 1 <= completion_value <= 10_000:
+        reject("invalid_completion_value")
+    group_size = value.get("group_size")
+    if type(group_size) is not int or not 1 <= group_size <= MAX_GROUP_SIZE:
+        reject("invalid_group_size")
+    roster_raw = value.get("roster")
+    if not isinstance(roster_raw, list) or len(roster_raw) != group_size:
+        reject("incomplete_roster")
+    roster = []
+    for name in roster_raw:
+        if not isinstance(name, str) or not RSN_RE.fullmatch(name.strip()):
+            reject("invalid_roster")
+        roster.append(normalize_rsn(name.strip()))
+    if len(set(roster)) != len(roster):
+        reject("duplicate_participant")
+    if roster.count(reporter) != 1:
+        reject("reporter_not_in_roster")
+    if group_size == 1 and not mode["supports_solo"] or group_size > 1 and not mode["supports_group"]:
+        reject("invalid_group_size")
+    plugin_version = value.get("plugin_version")
+    if not isinstance(plugin_version, str) or not VERSION_RE.fullmatch(plugin_version):
+        reject("invalid_plugin_version")
+    now = now or datetime.now(timezone.utc)
+    occurred = _iso_time(value.get("occurred_at"), now)
+    member_id, _canonical, _method = _resolve_member(members, reporter)
+    if member_id is None:
+        reject("reporter_not_eligible")
+    payload = {"schema_version": 1, "event_id": event_id, "reporter_rsn": reporter,
+               "activity_key": activity_key, "mode_key": mode_key, "occurred_at": occurred,
+               "completion_metric_key": metric_key, "completion_value": completion_value,
+               "roster": sorted(roster), "group_size": group_size, "plugin_version": plugin_version}
+    digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    previous = conn.execute(
+        "SELECT canonical_payload_sha256 FROM plugin_tracking_completion_observations WHERE client_event_id=?",
+        (event_id,),
+    ).fetchone()
+    if previous:
+        if str(previous[0]) != digest:
+            raise TrackingObservationError("event_id_payload_conflict", "idempotency_conflict")
+        return {"state": "duplicate"}
+    # An event ID is globally unique across the independent time and numeric
+    # Plugin Tracking records, even though their metric tables are separate.
+    if conn.execute("SELECT 1 FROM plugin_tracking_observations WHERE client_event_id=?", (event_id,)).fetchone():
+        raise TrackingObservationError("event_id_payload_conflict", "idempotency_conflict")
+    cursor = conn.execute(
+        """INSERT INTO plugin_tracking_completion_observations(
+           schema_version,provenance,client_event_id,canonical_payload_sha256,
+           reporter_normalized_rsn,activity_key,mode_key,occurred_at,completion_metric_key,
+           completion_value,observed_group_size,catalog_version_id,plugin_version,created_at)
+           VALUES(1,'nocturne_runelite_tracking',?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (event_id, digest, reporter, activity_key, mode_key, occurred, metric_key,
+         completion_value, group_size, active["version_id"], plugin_version,
+         datetime.now(timezone.utc).isoformat(timespec="milliseconds")),
+    )
+    observation_id = int(cursor.lastrowid)
+    conn.executemany("INSERT INTO plugin_tracking_completion_participants VALUES(?,?,?)",
+                     ((observation_id, index, name) for index, name in enumerate(sorted(roster), 1)))
     return {"state": "accepted"}
 
 
