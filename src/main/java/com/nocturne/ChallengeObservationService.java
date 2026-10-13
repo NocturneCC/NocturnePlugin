@@ -23,7 +23,7 @@ final class ChallengeObservationService implements AutoCloseable
 {
 	static final String ENDPOINT = "https://nocturne.events/api/challenges/intake/observations";
 	static final String PLUGIN_ENDPOINT = "https://nocturne.events/api/plugin/tracking/observations";
-	static final int MAX_PENDING = 4;
+	static final int MAX_PENDING = 16;
 	static final int MAX_RESPONSE_BYTES = 1024;
 	static final int MAX_ATTEMPTS = 3;
 	private static final long[] RETRY_SECONDS = {1, 3};
@@ -43,25 +43,46 @@ final class ChallengeObservationService implements AutoCloseable
 
 	synchronized String submit(ChallengeObservation observation, Consumer<ChallengeObservationResponse> callback)
 	{
-		if (closed || observation == null || pending.size() >= MAX_PENDING) return null;
+		return submit(observation, observation != null && observation.challengeProjection
+			? Route.CHALLENGE : Route.PLUGIN, callback);
+	}
+
+	synchronized String submitPlugin(ChallengeObservation observation,
+		Consumer<ChallengeObservationResponse> callback)
+	{
+		return submit(observation, Route.PLUGIN, callback);
+	}
+
+	synchronized String submitChallengeProjection(ChallengeObservation observation,
+		Consumer<ChallengeObservationResponse> callback)
+	{
+		return submit(observation, Route.CHALLENGE, callback);
+	}
+
+	private synchronized String submit(ChallengeObservation observation, Route route,
+		Consumer<ChallengeObservationResponse> callback)
+	{
+		if (closed || observation == null) return null;
 		String id = observation.eventId;
-		Pending existing = pending.get(id);
+		String key = route.name() + ':' + id;
+		Pending existing = pending.get(key);
 		if (existing != null) return id;
+		if (pending.size() >= MAX_PENDING) return null;
 		String body = gson.toJson(observation.payload(gson, id));
-		Pending item = new Pending(id, body, observation, callback);
-		pending.put(id, item);
+		Pending item = new Pending(key, id, body, observation, route, callback);
+		pending.put(key, item);
 		send(item);
 		return id;
 	}
 
 	private void send(Pending item)
 	{
-		Request request = new Request.Builder().url(item.observation.challengeProjection ? ENDPOINT : PLUGIN_ENDPOINT).post(RequestBody.create(
+		Request request = new Request.Builder().url(item.route == Route.CHALLENGE ? ENDPOINT : PLUGIN_ENDPOINT).post(RequestBody.create(
 			MediaType.parse("application/json; charset=utf-8"), item.body)).build();
 		Call call = http.newCall(request);
 		synchronized (this)
 		{
-			if (closed || item.cancelled || pending.get(item.id) != item) { call.cancel(); return; }
+			if (closed || item.cancelled || pending.get(item.key) != item) { call.cancel(); return; }
 			item.attempts++;
 			item.call = call;
 			call.enqueue(new Callback()
@@ -103,7 +124,7 @@ final class ChallengeObservationService implements AutoCloseable
 	{
 		synchronized (this)
 		{
-			if (closed || item.cancelled || !pending.containsKey(item.id)) return;
+			if (closed || item.cancelled || !pending.containsKey(item.key)) return;
 			if (retryable && item.attempts < MAX_ATTEMPTS)
 			{
 				long delay = RETRY_SECONDS[Math.min(item.attempts - 1, RETRY_SECONDS.length - 1)];
@@ -122,7 +143,7 @@ final class ChallengeObservationService implements AutoCloseable
 
 	private void finish(Pending item, ChallengeObservationResponse result)
 	{
-		synchronized (this) { if (pending.remove(item.id) == null || item.cancelled) return; }
+		synchronized (this) { if (pending.remove(item.key) == null || item.cancelled) return; }
 		item.callback.accept(result);
 	}
 
@@ -142,11 +163,14 @@ final class ChallengeObservationService implements AutoCloseable
 
 	private static final class Pending
 	{
-		final String id, body; final ChallengeObservation observation;
+		final String key, id, body; final ChallengeObservation observation; final Route route;
 		final Consumer<ChallengeObservationResponse> callback;
 		int attempts; boolean cancelled; Call call; ScheduledFuture<?> retry;
-		Pending(String id, String body, ChallengeObservation observation,
+		Pending(String key, String id, String body, ChallengeObservation observation, Route route,
 			Consumer<ChallengeObservationResponse> callback)
-		{ this.id = id; this.body = body; this.observation = observation; this.callback = callback; }
+		{ this.key = key; this.id = id; this.body = body; this.observation = observation;
+			this.route = route; this.callback = callback; }
 	}
+
+	private enum Route { PLUGIN, CHALLENGE }
 }

@@ -23,7 +23,7 @@ final class LootHistory
 		if (Objects.equals(player, rsn))
 		{
 			return false;
-		}
+	}
 		player = rsn;
 		records.clear();
 		count = 0;
@@ -67,6 +67,30 @@ final class LootHistory
 		count = totalCount;
 		storageBytes = bytes;
 		storageFailure = false;
+	}
+
+	boolean replace(LootRecord updated)
+	{
+		return replace(updated.id, updated);
+	}
+
+	boolean replace(String oldId, LootRecord updated)
+	{
+		for (int i = 0; i < records.size(); i++)
+		{
+			if (records.get(i).id.equals(oldId))
+			{
+				records.set(i, updated);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	LootRecord find(String id)
+	{
+		for (LootRecord record : records) if (record.id.equals(id)) return record;
+		return null;
 	}
 
 	void markStorageFailure() { storageFailure = true; }

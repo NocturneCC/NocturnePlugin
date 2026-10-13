@@ -133,10 +133,16 @@ public class NocturnePlugin extends Plugin
 		challengeObservations = observations;
 		challengeCapture = new ChallengeCompletionCapture(new ChallengeCompletionCorrelator(), observations,
 			message -> clientThread.invoke(() -> { if (lifecycle == token) client.addChatMessage(ChatMessageType.GAMEMESSAGE, "Nocturne", message, null); }),
-			message -> log.debug("{}", message), observation -> clientThread.invoke(() ->
+			message -> log.debug("{}", message), System::nanoTime, observation -> clientThread.invoke(() ->
 			{
 				if (lifecycle == token) withPanel(view -> view.markActivityAccountUnlinked(
 					observation.activityKey, observation.reporterRsn, observation.occurredAt));
+			}), (observation, status) -> clientThread.invoke(() ->
+			{
+				if (lifecycle == token) withPanel(view -> view.setActivityTiming(observation, status));
+			}), context -> clientThread.invoke(() ->
+			{
+				if (lifecycle == token) withPanel(view -> view.activityContextStarted(context));
 			}));
 		raidPresence = new RaidPresenceService(http, gson);
 		EmojiRenderer createdEmojiRenderer = new EmojiRenderer(client, chatIconManager, result ->
@@ -203,6 +209,10 @@ public class NocturnePlugin extends Plugin
 				@Override public void loadOlder(String rsn, int offset) { loadHistory(rsn, offset, true, historyGeneration); }
 				@Override public void clear(String rsn) { clearHistory(rsn); }
 				@Override public void localOnly(LootRecord record) { persist(record, true); }
+				@Override public void activityTiming(LootRecord record) { persist(record, true); }
+				@Override public void completion(LootRecord record) { persist(record, false); }
+				@Override public void mergeCompletionLoot(LootRecord merged, String replacedLootId)
+				{ persistCompletionLootMerge(merged, replacedLootId); }
 			});
 			panel.setTracking(true);
 			panel.setDiagnostics(config.showDiagnostics());
@@ -319,12 +329,14 @@ public class NocturnePlugin extends Plugin
 			if (groups != null) groups.reset();
 			if (challengeCapture != null) challengeCapture.reset();
 			if (challengeObservations != null) challengeObservations.cancelPending();
+			withPanel(NocturnePanel::clearPendingActivityLinks);
 			raidVerification = RaidVerificationStatus.INACTIVE;
 			if (submissions != null) submissions.cancelPending();
 			withPanel(NocturnePanel::setLoggedOut);
 		}
 		else if (event.getGameState() == GameState.HOPPING)
 		{
+			withPanel(NocturnePanel::clearPendingActivityLinks);
 			if (groups != null) groups.reset();
 			if (challengeCapture != null) challengeCapture.reset();
 			if (challengeObservations != null) challengeObservations.cancelPending();
@@ -572,7 +584,7 @@ public class NocturnePlugin extends Plugin
 			// Reuse the exact group snapshot used by the loot record; nearby-player data
 			// is never promoted to a submission roster.
 			capture.onActivityCompletion(source, rsn, group, clientSessionId, gameTick,
-				true, config.showDiagnostics(), java.time.Instant.now());
+					true, config.showDiagnostics(), java.time.Instant.now(), record.id);
 		}
 		SubmissionService sender = submissions;
 		Object token = lifecycle;
@@ -669,6 +681,30 @@ public class NocturnePlugin extends Plugin
 			{
 				log.debug("Unable to persist local loot history", e);
 				if (!update) withPanel(view -> view.recordUnsavedLoot(record, generation));
+			}
+		}, executor);
+	}
+
+	private synchronized void persistCompletionLootMerge(LootRecord merged, String replacedLootId)
+	{
+		LootHistoryStore store = historyStore;
+		if (store == null) return;
+		long generation = historyGeneration;
+		historyWork = historyWork.handle((ignored, error) -> null).thenRunAsync(() ->
+		{
+			try
+			{
+				if (!store.mergeCompletionLoot(merged.completionLinkId, replacedLootId, merged)) store.append(merged);
+				LootHistoryStore.Page stats = store.load(merged.rsn, 0, 1);
+				withPanel(view ->
+				{
+					if (matchesHistorySelection(merged.rsn, generation))
+						view.updateHistoryStats(merged.rsn, stats.totalCount, stats.storageBytes);
+				});
+			}
+			catch (java.io.IOException e)
+			{
+				log.debug("Unable to persist completion-linked activity history", e);
 			}
 		}, executor);
 	}

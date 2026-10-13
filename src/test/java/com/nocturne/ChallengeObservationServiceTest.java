@@ -206,18 +206,55 @@ public class ChallengeObservationServiceTest
 		finally { service.close(); scheduler.shutdownNow(); }
 	}
 
-	@Test public void gauntletCompletionSubmitsBeforeChestAndDuplicateOrDelayedLootCannotResubmit() throws Exception
+	@Test public void challengeMappedCatalogCompletionStillUsesIndependentPluginTrackingRoute() throws Exception
+	{
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Local Name", "session", 48,
+			1_000_000_000L, Instant.parse("2026-10-12T12:00:00Z"));
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		assertNotNull(observation);
+		assertEquals("gauntlet", context.bossKey);
+		assertFalse(observation.challengeProjection);
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		CountDownLatch complete = new CountDownLatch(1);
+		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
+		{
+			assertEquals(ChallengeObservationService.PLUGIN_ENDPOINT, chain.request().url().toString());
+			okio.Buffer body = new okio.Buffer(); chain.request().body().writeTo(body);
+			JsonObject payload = new Gson().fromJson(body.readUtf8(), JsonObject.class);
+			assertEquals("corrupted_gauntlet", payload.get("activity_key").getAsString());
+			assertEquals("corrupted_gauntlet", payload.get("mode_key").getAsString());
+			assertEquals(513_000L, payload.get("overall_time_ms").getAsLong());
+			assertEquals(1, payload.get("group_size").getAsInt());
+			assertEquals(1, payload.getAsJsonArray("roster").size());
+			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+		}).build(), new Gson(), scheduler);
+		try
+		{
+			assertNotNull(service.submit(observation, result -> complete.countDown()));
+			assertTrue(complete.await(3, TimeUnit.SECONDS));
+		}
+		finally { service.close(); scheduler.shutdownNow(); }
+	}
+
+	@Test public void gauntletCompletionSubmitsIndependentlyBeforeChestAndUsesPluginTrackingRoute() throws Exception
 	{
 		AtomicInteger requests = new AtomicInteger();
-		AtomicReference<String> eventId = new AtomicReference<>();
+		java.util.Set<String> destinations = java.util.concurrent.ConcurrentHashMap.newKeySet();
+		java.util.Set<String> eventIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+		CountDownLatch requestsComplete = new CountDownLatch(2);
 		CountDownLatch finished = new CountDownLatch(1);
+		AtomicReference<ActivityTimingStatus> finalStatus = new AtomicReference<>();
 		AtomicLong nanos = new AtomicLong(1_000_000_000L);
 		Instant now = Instant.parse("2026-10-12T12:00:00Z");
 		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
 		{
 			requests.incrementAndGet();
-			assertEquals(ChallengeObservationService.ENDPOINT, chain.request().url().toString());
+			String destination = chain.request().url().encodedPath();
+			assertTrue(destination.equals("/api/plugin/tracking/observations")
+				|| destination.equals("/api/challenges/intake/observations"));
+			destinations.add(destination);
 			assertNull(chain.request().header("Authorization"));
 			okio.Buffer requestBody = new okio.Buffer();
 			chain.request().body().writeTo(requestBody);
@@ -228,12 +265,15 @@ public class ChallengeObservationServiceTest
 			assertFalse(payload.has("room_time_ms"));
 			assertEquals(1, payload.get("group_size").getAsInt());
 			assertEquals("Local Name", payload.getAsJsonArray("roster").get(0).getAsString());
-			eventId.set(payload.get("event_id").getAsString());
-			return response(chain.request(), 201, "{\"state\":\"accepted\"}");
+			eventIds.add(payload.get("event_id").getAsString());
+			requestsComplete.countDown();
+			return destination.equals("/api/challenges/intake/observations")
+				? response(chain.request(), 200, "{\"state\":\"ignored\",\"reason\":\"manual_only\"}")
+				: response(chain.request(), 201, "{\"state\":\"accepted\"}");
 		}).build(), new Gson(), scheduler);
 		ChallengeCompletionCapture capture = new ChallengeCompletionCapture(
 			new ChallengeCompletionCorrelator(), service, ignored -> finished.countDown(), ignored -> { },
-			nanos::get, ignored -> { });
+			nanos::get, ignored -> { }, (observation, status) -> finalStatus.set(status));
 		try
 		{
 			String completion = "Corrupted challenge duration: 9:12. Personal best: 7:15.";
@@ -248,8 +288,13 @@ public class ChallengeObservationServiceTest
 			nanos.set(2_700_000_001L);
 			capture.onTick(true, false, now);
 			assertTrue(finished.await(3, TimeUnit.SECONDS));
-			assertNotNull(eventId.get());
-			assertEquals(1, requests.get());
+			assertTrue(requestsComplete.await(3, TimeUnit.SECONDS));
+			assertEquals(2, requests.get());
+			assertEquals(java.util.Set.of("/api/plugin/tracking/observations",
+				"/api/challenges/intake/observations"), destinations);
+			assertEquals(1, eventIds.size());
+			assertEquals("a manual-only Challenge overlay does not erase primary Plugin Tracking success",
+				ActivityTimingStatus.ACCEPTED, finalStatus.get());
 			assertFalse("The later reward chest is not a completion trigger",
 				PluginActivityCatalog.completionComesFromLoot(PluginActivityCatalog.GAUNTLET));
 		}
@@ -325,7 +370,7 @@ public class ChallengeObservationServiceTest
 			clock.set(2_700_000_001L);
 			capture.onTick(true, false, now);
 			assertTrue(logged.await(3, TimeUnit.SECONDS));
-			assertEquals("automatic Challenge observation response http_status=422 state=invalid reason=reporter_not_eligible",
+			assertEquals("Plugin Tracking observation response http_status=422 state=invalid reason=reporter_not_eligible",
 				diagnostic.get());
 			assertEquals("Local only — account not linked", feedback.get());
 			assertNotNull(unlinked.get());
@@ -346,7 +391,7 @@ public class ChallengeObservationServiceTest
 		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 		ChallengeObservationService service = new ChallengeObservationService(new OkHttpClient.Builder().addInterceptor(chain ->
 		{
-			assertEquals(ChallengeObservationService.ENDPOINT, chain.request().url().toString());
+			assertEquals(ChallengeObservationService.PLUGIN_ENDPOINT, chain.request().url().toString());
 			okio.Buffer requestBody = new okio.Buffer();
 			chain.request().body().writeTo(requestBody);
 			JsonObject payload = new Gson().fromJson(requestBody.readUtf8(), JsonObject.class);

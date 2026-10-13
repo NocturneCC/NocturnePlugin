@@ -14,12 +14,19 @@ final class LootRecord
 	SubmissionStatus submission = SubmissionStatus.LOCAL;
 	// Updated only on the Swing event thread after authoritative tracking feedback.
 	String activityTrackingNotice;
+	// Completion capture is independent of the drop submission state above.
+	Long activityDurationMillis;
+	ActivityTimingStatus activityTimingStatus;
+	// In-memory bridge used only while merging the completion and reward rows.
+	String completionLinkId;
+	String activityEventId;
 	final String rsn;
 	final String source;
 	final String activityKey;
 	final String activityDisplayName;
 	final String modeKey;
 	final boolean ordinaryNpcLoot;
+	final boolean completionOnly;
 	final List<LootItem> items;
 	final GroupSnapshot group;
 	final LocalTime time;
@@ -49,7 +56,7 @@ final class LootRecord
 			SubmissionStatus.LOCAL, activity, ordinaryNpcLoot);
 	}
 
-	private LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
+	LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
 		GroupSnapshot group, SubmissionStatus submission, PluginActivityCatalog.Entry activity,
 		boolean ordinaryNpcLoot)
 	{
@@ -86,6 +93,14 @@ final class LootRecord
 		GroupSnapshot group, SubmissionStatus submission, String activityKey,
 		String activityDisplayName, String modeKey, boolean ordinaryNpcLoot)
 	{
+		this(id, occurredAt, rsn, source, items, group, submission, activityKey,
+			activityDisplayName, modeKey, ordinaryNpcLoot, false);
+	}
+
+	LootRecord(String id, String occurredAt, String rsn, String source, List<LootItem> items,
+		GroupSnapshot group, SubmissionStatus submission, String activityKey,
+		String activityDisplayName, String modeKey, boolean ordinaryNpcLoot, boolean completionOnly)
+	{
 		this.id = id;
 		this.occurredAt = occurredAt;
 		this.rsn = rsn;
@@ -94,6 +109,7 @@ final class LootRecord
 		this.activityDisplayName = activityDisplayName;
 		this.modeKey = modeKey;
 		this.ordinaryNpcLoot = ordinaryNpcLoot;
+		this.completionOnly = completionOnly;
 		this.items = LootItem.consolidate(items);
 		this.group = group;
 		this.submission = submission;
@@ -103,8 +119,48 @@ final class LootRecord
 	LootRecord withSubmission(SubmissionStatus status)
 	{
 		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, status,
-			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot);
+			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
 		updated.activityTrackingNotice = activityTrackingNotice;
+		updated.activityDurationMillis = activityDurationMillis;
+		updated.activityTimingStatus = activityTimingStatus;
+		updated.completionLinkId = completionLinkId;
+		updated.activityEventId = activityEventId;
 		return updated;
+	}
+
+	LootRecord withActivityTiming(long durationMillis, ActivityTimingStatus status)
+	{
+		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, submission,
+			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
+		updated.activityTrackingNotice = activityTrackingNotice;
+		updated.activityDurationMillis = durationMillis;
+		updated.activityTimingStatus = status;
+		updated.completionLinkId = completionLinkId;
+		updated.activityEventId = activityEventId;
+		return updated;
+	}
+
+	static LootRecord completion(ChallengeObservation observation, ActivityTimingStatus status)
+	{
+		LootRecord record = new LootRecord(observation.eventId, observation.occurredAt.toString(),
+			observation.reporterRsn, observation.displayName, List.of(),
+			GroupSnapshot.unavailable("Completion-only activity."), SubmissionStatus.LOCAL,
+			observation.activityKey, observation.displayName, observation.modeKey, false, true)
+			.withActivityTiming(observation.displayDurationMillis, status);
+		record.activityEventId = observation.eventId;
+		return record;
+	}
+
+	LootRecord withCompletionLoot(LootRecord loot)
+	{
+		LootRecord merged = new LootRecord(loot.id, occurredAt, loot.rsn, loot.source, loot.items,
+			loot.group, loot.submission, activityKey, activityDisplayName, modeKey,
+			loot.ordinaryNpcLoot, false);
+		merged.activityTrackingNotice = loot.activityTrackingNotice;
+		merged.activityDurationMillis = activityDurationMillis;
+		merged.activityTimingStatus = activityTimingStatus;
+		merged.completionLinkId = id;
+		merged.activityEventId = activityEventId == null ? id : activityEventId;
+		return merged;
 	}
 }

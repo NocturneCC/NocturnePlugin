@@ -36,12 +36,17 @@ final class ChallengeObservation
 	final long displayDurationMillis;
 	final String displayName;
 	final String eventId;
+	final String encounterIdentity;
 	final boolean challengeProjection;
+	final boolean challengeCandidate;
+	final boolean pluginTrackingCandidate;
+	final String triggerLootRecordId;
 
 	private ChallengeObservation(String activityKey, String modeKey, String reporterRsn,
 		List<String> roster, Long roomTimeMillis, Long overallTimeMillis,
 		Integer completionCount, Instant occurredAt, long displayDurationMillis, String displayName,
-		String encounterIdentity, boolean challengeProjection)
+		String encounterIdentity, boolean challengeProjection, boolean challengeCandidate,
+		boolean pluginTrackingCandidate, String triggerLootRecordId)
 	{
 		this.activityKey = activityKey;
 		this.modeKey = modeKey;
@@ -54,7 +59,11 @@ final class ChallengeObservation
 		this.occurredAt = occurredAt;
 		this.displayDurationMillis = displayDurationMillis;
 		this.displayName = displayName;
+		this.encounterIdentity = encounterIdentity;
 		this.challengeProjection = challengeProjection;
+		this.challengeCandidate = challengeCandidate;
+		this.pluginTrackingCandidate = pluginTrackingCandidate;
+		this.triggerLootRecordId = triggerLootRecordId;
 		String identity = encounterIdentity + '|' + activityKey + '|' + modeKey + '|'
 			+ roomTimeMillis + '|' + overallTimeMillis + '|'
 			+ String.join("|", roster.stream().map(ChallengeObservation::identityKey).toArray(String[]::new));
@@ -125,12 +134,12 @@ final class ChallengeObservation
 		}
 		return new ChallengeObservation(activityKey, modeKey, reporter, normalizedRoster,
 			roomTimeMillis, overallTimeMillis, completionCount, occurredAt, displayDuration, displayName,
-			encounterIdentity, true);
+			encounterIdentity, true, true, isPluginTrackingCandidate(activityKey, modeKey), null);
 	}
 
 	static ChallengeObservation createTracked(BossCompletionContext context, long durationMillis)
 	{
-		if (context == null || context.activity == null || context.activity.challengeBossKey != null
+		if (context == null || context.activity == null
 			|| !context.activity.ttkTrackingEnabled || !"overall".equals(context.timingScope)
 			|| !validDuration(durationMillis) || context.roster == null
 			|| context.roster.status != GroupSnapshot.Status.MATCHED
@@ -154,7 +163,8 @@ final class ChallengeObservation
 		normalizedRoster.sort(Comparator.comparing(ChallengeObservation::identityKey));
 		return new ChallengeObservation(context.activityKey, context.modeKey, reporter, normalizedRoster,
 			null, durationMillis, null, context.occurredAt, durationMillis,
-			context.activity.displayName, context.encounterIdentity, false);
+			context.activity.displayName, context.encounterIdentity, false,
+			context.bossKey != null, true, context.triggerLootRecordId);
 	}
 
 	static ChallengeObservation createPhosani(long durationMillis, GroupSnapshot snapshot,
@@ -249,5 +259,11 @@ final class ChallengeObservation
 			}
 		}
 		return -1;
+	}
+
+	private static boolean isPluginTrackingCandidate(String activityKey, String modeKey)
+	{
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.find(activityKey, modeKey);
+		return activity != null && activity.ttkTrackingEnabled;
 	}
 }

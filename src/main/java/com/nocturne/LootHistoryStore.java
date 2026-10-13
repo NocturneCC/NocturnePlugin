@@ -79,8 +79,38 @@ final class LootHistoryStore
 		rewrite(path, line ->
 		{
 			LootRecord existing = parseRecord(line);
-			return existing != null && existing.id.equals(record.id) ? gson.toJson(toJson(record)) : line;
+			if (existing == null || !existing.id.equals(record.id)) return line;
+			LootRecord replacement = record;
+			if (replacement.activityDurationMillis == null && existing.activityDurationMillis != null)
+				replacement = replacement.withActivityTiming(existing.activityDurationMillis,
+					existing.activityTimingStatus);
+			if (replacement.activityEventId == null) replacement.activityEventId = existing.activityEventId;
+			return gson.toJson(toJson(replacement));
 		}, null);
+		return true;
+	}
+
+	/** Replace the appended loot event with its existing completion card in one rewrite. */
+	synchronized boolean mergeCompletionLoot(String completionId, String lootId, LootRecord merged) throws IOException
+	{
+		Path path = pathFor(merged.rsn);
+		if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) return false;
+		boolean[] foundLoot = {false};
+		boolean[] foundCompletion = {false};
+		rewrite(path, line ->
+		{
+			LootRecord existing = parseRecord(line);
+			if (existing == null) return line;
+			if (existing.id.equals(completionId))
+			{
+				foundCompletion[0] = true;
+				return gson.toJson(toJson(merged));
+			}
+			if (existing.id.equals(lootId)) { foundLoot[0] = true; return null; }
+			return line;
+		}, null);
+		if (!foundLoot[0]) return false;
+		if (!foundCompletion[0]) append(merged);
 		return true;
 	}
 
@@ -163,8 +193,12 @@ final class LootHistoryStore
 				String line;
 				while ((line = reader.readLine()) != null)
 				{
-					writer.write(transform.apply(line));
-					writer.newLine();
+					String transformed = transform.apply(line);
+					if (transformed != null)
+					{
+						writer.write(transformed);
+						writer.newLine();
+					}
 				}
 				if (appendedLine != null)
 				{
@@ -269,8 +303,14 @@ final class LootHistoryStore
 		object.add("group", gson.toJsonTree(record.group));
 		object.addProperty("submission", record.submission.name());
 		if (record.ordinaryNpcLoot) object.addProperty("ordinaryNpcLoot", true);
+		if (record.completionOnly) object.addProperty("completionOnly", true);
+		if (record.activityEventId != null) object.addProperty("activityEventId", record.activityEventId);
 		if ("Local only — account not linked".equals(record.activityTrackingNotice))
 			object.addProperty("activityTrackingNotice", record.activityTrackingNotice);
+		if (record.activityDurationMillis != null)
+			object.addProperty("activityDurationMillis", record.activityDurationMillis);
+		if (record.activityTimingStatus != null)
+			object.addProperty("activityTimingStatus", record.activityTimingStatus.name());
 		return object;
 	}
 
@@ -287,12 +327,16 @@ final class LootHistoryStore
 			String rsn = object.get("rsn").getAsString();
 			String source = object.get("source").getAsString();
 			LootItem[] items = gson.fromJson(object.get("items"), LootItem[].class);
+			boolean completionOnly = object.has("completionOnly") && object.get("completionOnly").isJsonPrimitive()
+				&& object.getAsJsonPrimitive("completionOnly").isBoolean()
+				&& object.get("completionOnly").getAsBoolean();
 			SubmissionStatus status = object.has("submission")
 				? SubmissionStatus.valueOf(object.get("submission").getAsString()) : SubmissionStatus.LOCAL;
 			GroupSnapshot group = object.has("group")
 				? gson.fromJson(object.get("group"), GroupSnapshot.class)
 				: GroupSnapshot.unavailable("Not stored by history schema v1.");
-			if (id.isEmpty() || rsn.isEmpty() || source.isEmpty() || items == null || items.length == 0
+			if (id.isEmpty() || rsn.isEmpty() || source.isEmpty() || items == null
+				|| items.length == 0 && !completionOnly
 				|| group == null || group.status == null) return null;
 			for (LootItem item : items)
 			{
@@ -311,11 +355,30 @@ final class LootHistoryStore
 				object.has("ordinaryNpcLoot") && object.get("ordinaryNpcLoot").isJsonPrimitive()
 					&& object.getAsJsonPrimitive("ordinaryNpcLoot").isBoolean()
 					&& object.get("ordinaryNpcLoot").getAsBoolean());
+			if (completionOnly)
+				record = new LootRecord(id, occurred, rsn, source, List.of(items), group, status,
+					activityKey, activityDisplayName, modeKey, false, true);
+			if (object.has("activityEventId") && object.get("activityEventId").isJsonPrimitive()
+				&& object.getAsJsonPrimitive("activityEventId").isString())
+			{
+				String activityEventId = object.get("activityEventId").getAsString();
+				if (activityEventId.length() > 64) return null;
+				record.activityEventId = activityEventId;
+			}
 			if (object.has("activityTrackingNotice") && object.get("activityTrackingNotice").isJsonPrimitive()
 				&& object.getAsJsonPrimitive("activityTrackingNotice").isString()
 				&& "Local only — account not linked".equals(object.get("activityTrackingNotice").getAsString()))
 			{
 				record.activityTrackingNotice = "Local only — account not linked";
+			}
+			if (object.has("activityDurationMillis") && object.has("activityTimingStatus"))
+			{
+				long duration = object.get("activityDurationMillis").getAsLong();
+				ActivityTimingStatus timingStatus = ActivityTimingStatus.valueOf(
+					object.get("activityTimingStatus").getAsString());
+				if (duration <= 0 || duration > ChallengeObservation.MAX_DURATION_MILLIS) return null;
+				record.activityDurationMillis = duration;
+				record.activityTimingStatus = timingStatus;
 			}
 			return record;
 		}

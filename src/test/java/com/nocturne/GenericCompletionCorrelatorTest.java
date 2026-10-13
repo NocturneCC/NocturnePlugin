@@ -27,6 +27,8 @@ public class GenericCompletionCorrelatorTest
 		assertEquals(358_200L, observation.overallTimeMillis.longValue());
 		assertEquals(List.of("Local Name"), observation.roster);
 		assertEquals(1, observation.groupSize);
+		assertFalse("catalog-driven PNM timing is independent Plugin Tracking data",
+			observation.challengeProjection);
 	}
 
 	@Test public void timingChatAfterKillAndDuplicateDeliveryProduceOneDeterministicEvent()
@@ -168,6 +170,8 @@ public class GenericCompletionCorrelatorTest
 		assertEquals(552_000L, result.overallTimeMillis.longValue());
 		assertEquals("corrupted_gauntlet", result.activityKey);
 		assertEquals(List.of("Local Name"), result.roster);
+		assertFalse("catalog timing must use Plugin Tracking even with a Challenge overlay",
+			result.challengeProjection);
 	}
 
 	@Test public void gauntletWithoutConfiguredOverallLabelFailsClosedRatherThanChoosingLatestTime()

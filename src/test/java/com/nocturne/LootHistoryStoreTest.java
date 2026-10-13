@@ -57,6 +57,69 @@ public class LootHistoryStoreTest
 		assertEquals(SubmissionStatus.ACCEPTED, loaded.submission);
 	}
 
+	@Test public void persistsCompletionTimingAndKeepsItSeparateFromDropStatus() throws Exception
+	{
+		LootRecord source = record("timed", "Tester", 12);
+		source.activityDurationMillis = 513_000L;
+		source.activityTimingStatus = ActivityTimingStatus.ACCEPTED;
+		source.submission = SubmissionStatus.ACCEPTED;
+		store().append(source);
+		LootRecord loaded = store().load("Tester", 0, 1).records.get(0);
+		assertEquals(Long.valueOf(513_000L), loaded.activityDurationMillis);
+		assertEquals(ActivityTimingStatus.ACCEPTED, loaded.activityTimingStatus);
+		assertEquals(SubmissionStatus.ACCEPTED, loaded.submission);
+		LootRecord ineligibleDrop = loaded.withSubmission(SubmissionStatus.INELIGIBLE);
+		assertEquals(ActivityTimingStatus.ACCEPTED, ineligibleDrop.activityTimingStatus);
+		assertEquals(Long.valueOf(513_000L), ineligibleDrop.activityDurationMillis);
+	}
+
+	@Test public void standaloneCompletionCardCanBeMergedWithLaterLootWithoutChangingItsIdentity() throws Exception
+	{
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Tester", "store-merge-session", 17,
+			1L, Instant.parse("2026-10-13T00:12:31Z"));
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		LootRecord completion = LootRecord.completion(observation, ActivityTimingStatus.ACCEPTED);
+		LootRecord chest = record("late-chest", "Tester", 90);
+		chest = new LootRecord(chest.id, "2026-10-13T00:14:01Z", "Tester", "Corrupted Gauntlet",
+			chest.items, context.roster, SubmissionStatus.ACCEPTED, PluginActivityCatalog.GAUNTLET);
+		LootHistoryStore store = store();
+		store.append(completion);
+		store.append(chest);
+	assertTrue(store.mergeCompletionLoot(completion.id, chest.id, completion.withCompletionLoot(chest)));
+		LootHistoryStore.Page page = store.load("Tester", 0, 10);
+		assertEquals(1, page.totalCount);
+		LootRecord merged = page.records.get(0);
+		assertEquals(chest.id, merged.id);
+		assertEquals(observation.eventId, merged.activityEventId);
+		assertFalse(merged.completionOnly);
+		assertEquals("Corrupted Gauntlet", merged.source);
+		assertEquals(1, merged.items.size());
+		assertEquals(Long.valueOf(513_000L), merged.activityDurationMillis);
+		assertEquals(ActivityTimingStatus.ACCEPTED, merged.activityTimingStatus);
+		assertEquals(SubmissionStatus.ACCEPTED, merged.submission);
+		assertTrue(store.update(chest.withSubmission(SubmissionStatus.INELIGIBLE)));
+		LootRecord afterDropUpdate = store.load("Tester", 0, 1).records.get(0);
+		assertEquals(SubmissionStatus.INELIGIBLE, afterDropUpdate.submission);
+		assertEquals(Long.valueOf(513_000L), afterDropUpdate.activityDurationMillis);
+		assertEquals(observation.eventId, afterDropUpdate.activityEventId);
+	}
+
+	@Test public void persistsTimedCompletionWithNoLootAsItsOwnHistoryRecord() throws Exception
+	{
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Tester", "store-only-session", 18,
+			1L, Instant.parse("2026-10-13T00:12:31Z"));
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		LootHistoryStore store = store();
+		store.append(LootRecord.completion(observation, ActivityTimingStatus.SENDING));
+		LootRecord loaded = store.load("Tester", 0, 1).records.get(0);
+		assertTrue(loaded.completionOnly);
+		assertTrue(loaded.items.isEmpty());
+		assertEquals(observation.eventId, loaded.id);
+		assertEquals(Long.valueOf(513_000L), loaded.activityDurationMillis);
+	}
+
 	@Test public void persistsOrdinaryNpcFeedClassification() throws Exception
 	{
 		LootRecord source = record("npc", "Tester", 12);

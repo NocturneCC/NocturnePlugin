@@ -57,6 +57,7 @@ final class NocturnePanel extends PluginPanel
 	private final JTextArea raidVerification = note("Raid verification: waiting for Chambers.", BACKGROUND);
 	private RestoreContext pendingPrependRestore;
 	private final java.util.ArrayDeque<PendingActivityNotice> pendingActivityNotices = new java.util.ArrayDeque<>();
+	private final PendingActivityTiming pendingActivityTiming = new PendingActivityTiming();
 	private long viewportGeneration;
 	private long selectedHistoryGeneration;
 
@@ -298,7 +299,77 @@ final class NocturnePanel extends PluginPanel
 		requireEdt();
 		if (!matchesHistorySelection(record.rsn, generation)) return;
 		applyPendingActivityNotice(record);
+		LootRecord merged = pendingActivityTiming.merge(record);
+		if (merged != null)
+		{
+			ViewportAnchor anchor = captureViewportAnchor();
+			boolean replaced = merged.completionLinkId != null
+				? history.replace(merged.completionLinkId, merged) : history.replace(merged);
+			if (!replaced) history.add(merged);
+			history.updateStats(Math.max(0, totalCount - 1), bytes);
+			historyActions.mergeCompletionLoot(merged, record.id);
+			renderHistory();
+			restoreAfterLayout(anchor, beginIndependentRestore());
+			return;
+		}
 		prepend(record, () -> history.updateStats(totalCount, bytes));
+	}
+
+	void setActivityTiming(ChallengeObservation observation, ActivityTimingStatus status)
+	{
+		requireEdt();
+		if (observation == null || status == null || history.getPlayer() == null
+			|| !LootHistoryStore.normalizeRsn(history.getPlayer()).equals(
+				LootHistoryStore.normalizeRsn(observation.reporterRsn))) return;
+		if (observation.triggerLootRecordId != null)
+		{
+			LootRecord triggerRecord = history.find(observation.triggerLootRecordId);
+			if (triggerRecord != null)
+			{
+				applyActivityTiming(triggerRecord, observation.displayDurationMillis, status);
+				return;
+			}
+		}
+		LootRecord existingCompletion = history.find(observation.eventId);
+		if (existingCompletion == null)
+		{
+			for (LootRecord record : history.getRecords())
+				if (observation.eventId.equals(record.activityEventId)) { existingCompletion = record; break; }
+		}
+		if (existingCompletion != null)
+		{
+			applyActivityTiming(existingCompletion, observation.displayDurationMillis, status);
+			return;
+		}
+		LootRecord best = null;
+		int matchingLootRecords = 0;
+		for (LootRecord record : history.getRecords())
+		{
+			if (record.completionOnly || !PendingActivityTiming.matches(record, observation)) continue;
+			best = record;
+			matchingLootRecords++;
+		}
+		if (best != null && matchingLootRecords == 1)
+		{
+			// Triggered loot matches by ID. Otherwise only one later activity loot
+			// record is eligible; ambiguity never picks a nearest run.
+			applyActivityTiming(best, observation.displayDurationMillis, status);
+			return;
+		}
+		pendingActivityTiming.update(observation, status, System.nanoTime());
+		LootRecord completion = LootRecord.completion(observation, status);
+		prepend(completion, null);
+		historyActions.completion(completion);
+	}
+
+	private void applyActivityTiming(LootRecord record, long durationMillis, ActivityTimingStatus status)
+	{
+		ViewportAnchor anchor = captureViewportAnchor();
+		LootRecord updated = record.withActivityTiming(durationMillis, status);
+		if (!history.replace(updated)) return;
+		historyActions.activityTiming(updated);
+		renderHistory();
+		restoreAfterLayout(anchor, beginIndependentRestore());
 	}
 
 	void recordUnsavedLoot(LootRecord record, long generation)
@@ -306,8 +377,13 @@ final class NocturnePanel extends PluginPanel
 		requireEdt();
 		if (!matchesHistorySelection(record.rsn, generation)) return;
 		applyPendingActivityNotice(record);
+		LootRecord merged = pendingActivityTiming.merge(record);
 		history.markStorageFailure();
-		prepend(record, null);
+		if (merged != null && history.replace(merged))
+		{
+			renderHistory();
+		}
+		else prepend(merged == null ? record : merged, null);
 	}
 
 	private void applyPendingActivityNotice(LootRecord record)
@@ -518,6 +594,18 @@ final class NocturnePanel extends PluginPanel
 		connection.setText(enabled ? "Test submissions on · no points awarded" : "Local capture · submissions off");
 	}
 
+	void clearPendingActivityLinks()
+	{
+		requireEdt();
+		pendingActivityTiming.clear();
+	}
+
+	void activityContextStarted(BossCompletionContext context)
+	{
+		requireEdt();
+		pendingActivityTiming.activityStarted(context);
+	}
+
 	void setSubmission(String id, SubmissionStatus status)
 	{
 		for (LootRecord record : history.getRecords())
@@ -607,6 +695,9 @@ final class NocturnePanel extends PluginPanel
 		void loadOlder(String rsn, int offset);
 		void clear(String rsn);
 		default void localOnly(LootRecord record) { }
+		default void activityTiming(LootRecord record) { }
+		default void completion(LootRecord record) { activityTiming(record); }
+		default void mergeCompletionLoot(LootRecord merged, String replacedLootId) { activityTiming(merged); }
 	}
 
 	JPanel renderRecord(LootRecord record)
@@ -622,6 +713,14 @@ final class NocturnePanel extends PluginPanel
 				card.add(note(record.activityTrackingNotice, CARD));
 			}
 			card.add(label(TIME.format(record.time) + "  |  " + record.rsn, MUTED));
+			if (record.completionOnly) card.add(note("Timed activity", CARD));
+			if (record.activityDurationMillis != null)
+			{
+				card.add(note("Completion time · "
+					+ ChallengeObservation.formatTime(record.activityDurationMillis), CARD));
+				if (record.activityTimingStatus != null)
+					card.add(note(record.activityTimingStatus.label, CARD));
+			}
 			for (LootItem item : record.items)
 			{
 				JPanel row = new JPanel(new BorderLayout(7, 0));

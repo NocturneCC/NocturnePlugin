@@ -131,6 +131,135 @@ public class NocturnePanelPrivacyTest
 	}
 
 	@Test
+	public void completionBeforeChestAttachesToMatchingRecentActivityAndKeepsDropStatusSeparate() throws Exception
+	{
+		java.util.concurrent.atomic.AtomicReference<LootRecord> persistedTiming = new java.util.concurrent.atomic.AtomicReference<>();
+		NocturnePanel panel = new NocturnePanel(null, new NocturnePanel.HistoryActions()
+		{
+			@Override public void loadOlder(String rsn, int offset) { }
+			@Override public void clear(String rsn) { }
+			@Override public void activityTiming(LootRecord record) { persistedTiming.set(record); }
+		});
+		Instant completionAt = Instant.parse("2026-10-13T00:12:31Z");
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Tester", "fixture-session", 70,
+			1_000_000_000L, completionAt);
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		assertNotNull(observation);
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("Corrupted Gauntlet");
+		LootRecord chest = new LootRecord("cg-chest", "2026-10-13T00:12:36Z", "Tester",
+			"Corrupted Gauntlet", List.of(), context.roster, SubmissionStatus.ACCEPTED, activity);
+		onEdt(() ->
+		{
+			panel.setPlayer("Tester", 7);
+			panel.showHistory("Tester", new LootHistoryStore.Page(List.of(), 0, 0, false, 0), false, 7);
+			// Completion state arrives before the asynchronous loot-history append.
+			panel.setActivityTiming(observation, ActivityTimingStatus.SENDING);
+			panel.recordPersistedLoot(chest, 1, 100, 7);
+			LootRecord attached = persistedTiming.get();
+			assertNotNull(attached);
+			assertEquals(Long.valueOf(513_000L), attached.activityDurationMillis);
+			assertEquals(ActivityTimingStatus.SENDING, attached.activityTimingStatus);
+			assertEquals(SubmissionStatus.ACCEPTED, attached.submission);
+			panel.setActivityTiming(observation, ActivityTimingStatus.ACCEPTED);
+			LootRecord updated = persistedTiming.get();
+			assertEquals(ActivityTimingStatus.ACCEPTED, updated.activityTimingStatus);
+			assertEquals(SubmissionStatus.ACCEPTED, updated.submission);
+		});
+		String visible = visibleText(panel);
+		assertTrue(visible.contains("Completion time · 8:33.00"));
+		assertTrue(visible.contains(ActivityTimingStatus.ACCEPTED.label));
+		assertTrue(visible.contains(SubmissionStatus.ACCEPTED.label));
+		assertNotNull(persistedTiming.get());
+		assertEquals(SubmissionStatus.ACCEPTED, persistedTiming.get().submission);
+	}
+
+	@Test
+	public void completionRendersWithoutLootAndMergesOnlyUnambiguousLootAfterThirtySeconds() throws Exception
+	{
+		java.util.concurrent.atomic.AtomicReference<LootRecord> completionSaved = new java.util.concurrent.atomic.AtomicReference<>();
+		java.util.concurrent.atomic.AtomicReference<LootRecord> mergedSaved = new java.util.concurrent.atomic.AtomicReference<>();
+		NocturnePanel panel = new NocturnePanel(null, new NocturnePanel.HistoryActions()
+		{
+			@Override public void loadOlder(String rsn, int offset) { }
+			@Override public void clear(String rsn) { }
+			@Override public void completion(LootRecord record) { completionSaved.set(record); }
+			@Override public void mergeCompletionLoot(LootRecord merged, String replacedLootId) { mergedSaved.set(merged); }
+		});
+		Instant completionAt = Instant.parse("2026-10-13T00:12:31Z");
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Tester", "delayed-fixture-session", 91,
+			1_000_000_000L, completionAt);
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		assertNotNull(observation);
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.matchSource("Corrupted Gauntlet");
+		LootRecord chest = new LootRecord("late-cg-chest", "2026-10-13T00:13:12Z", "Tester",
+			"Corrupted Gauntlet", List.of(), context.roster, SubmissionStatus.ACCEPTED, activity);
+		onEdt(() ->
+		{
+			panel.setPlayer("Tester", 8);
+			panel.showHistory("Tester", new LootHistoryStore.Page(List.of(), 0, 0, false, 0), false, 8);
+			panel.setActivityTiming(observation, ActivityTimingStatus.SENDING);
+		});
+		assertNotNull("completion persists before any chest reward", completionSaved.get());
+		assertTrue(completionSaved.get().completionOnly);
+		assertEquals("completion event ID is the durable activity ID", observation.eventId, completionSaved.get().id);
+		assertTrue(visibleText(panel).contains("Completion time · 8:33.00"));
+
+		onEdt(() -> panel.recordPersistedLoot(chest, 2, 200, 8)); // 41 seconds later
+		assertNotNull("late chest merges only to the unique pending completion", mergedSaved.get());
+		assertEquals(chest.id, mergedSaved.get().id);
+		assertEquals(observation.eventId, mergedSaved.get().activityEventId);
+		assertFalse(mergedSaved.get().completionOnly);
+		assertEquals(Long.valueOf(513_000L), mergedSaved.get().activityDurationMillis);
+		assertEquals(SubmissionStatus.ACCEPTED, mergedSaved.get().submission);
+		String mergedText = visibleText(panel);
+		assertTrue(mergedText.contains("Completion time · 8:33.00"));
+		assertTrue(mergedText.contains("Corrupted Gauntlet"));
+	}
+
+	@Test
+	public void delayedCompletionResultAttachesToOneLaterLootCardButNotSeveralRuns() throws Exception
+	{
+		java.util.concurrent.atomic.AtomicReference<LootRecord> persisted = new java.util.concurrent.atomic.AtomicReference<>();
+		NocturnePanel panel = new NocturnePanel(null, new NocturnePanel.HistoryActions()
+		{
+			@Override public void loadOlder(String rsn, int offset) { }
+			@Override public void clear(String rsn) { }
+			@Override public void activityTiming(LootRecord record) { persisted.set(record); }
+		});
+		Instant completionAt = Instant.parse("2026-10-13T00:12:31Z");
+		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(
+			"corrupted_gauntlet", "corrupted_gauntlet", "Tester", "response-late-session", 93,
+			1_000_000_000L, completionAt);
+		ChallengeObservation observation = ChallengeObservation.createTracked(context, 513_000L);
+		PluginActivityCatalog.Entry activity = PluginActivityCatalog.GAUNTLET;
+		LootRecord onlyLaterLoot = new LootRecord("later-one", "2026-10-13T00:13:20Z", "Tester",
+			"Corrupted Gauntlet", List.of(), context.roster, SubmissionStatus.LOCAL, activity);
+		onEdt(() ->
+		{
+			panel.setPlayer("Tester", 9);
+			panel.showHistory("Tester", new LootHistoryStore.Page(List.of(onlyLaterLoot), 1, 100, false, 0), false, 9);
+			panel.setActivityTiming(observation, ActivityTimingStatus.ACCEPTED);
+		});
+		assertEquals("completion-after-loot delivery preserves the loot identity", onlyLaterLoot.id, persisted.get().id);
+		assertEquals(Long.valueOf(513_000L), persisted.get().activityDurationMillis);
+		assertTrue(visibleText(panel).contains("Completion time · 8:33.00"));
+
+		LootRecord secondLaterLoot = new LootRecord("later-two", "2026-10-13T00:13:40Z", "Tester",
+			"Corrupted Gauntlet", List.of(), context.roster, SubmissionStatus.LOCAL, activity);
+		NocturnePanel ambiguousPanel = new NocturnePanel(null, NocturnePanel.HistoryActions.NONE);
+		onEdt(() ->
+		{
+			ambiguousPanel.setPlayer("Tester", 10);
+			ambiguousPanel.showHistory("Tester",
+				new LootHistoryStore.Page(List.of(onlyLaterLoot, secondLaterLoot), 2, 200, false, 0), false, 10);
+			ambiguousPanel.setActivityTiming(observation, ActivityTimingStatus.ACCEPTED);
+		});
+		assertEquals(1, visibleText(ambiguousPanel).split("Completion time · 8:33.00", -1).length - 1);
+	}
+
+	@Test
 	public void diagnosticsSettingRestoresHiddenTelemetryAndRaidDetails() throws Exception
 	{
 		NocturnePanel panel = panel();
