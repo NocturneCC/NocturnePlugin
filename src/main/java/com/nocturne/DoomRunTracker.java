@@ -29,9 +29,8 @@ final class DoomRunTracker
 
 	static Integer completedLevel(String raw)
 	{
-		if (raw == null || raw.length() > 256) return null;
-		String text = Text.removeTags(raw).replaceAll("(?i)&nbsp;", " ")
-			.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
+		String text = normalizeCompletionHeader(raw);
+		if (text == null) return null;
 		Matcher match = COMPLETE.matcher(text);
 		if (!match.matches()) return null;
 		try
@@ -40,6 +39,13 @@ final class DoomRunTracker
 			return level <= MAX_LEVEL ? level : null;
 		}
 		catch (NumberFormatException ignored) { return null; }
+	}
+
+	static String normalizeCompletionHeader(String raw)
+	{
+		if (raw == null || raw.length() > 256) return null;
+		return Text.removeTags(raw).replaceAll("(?i)&nbsp;", " ")
+			.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
 	}
 
 	static boolean isDeathMessage(String raw)

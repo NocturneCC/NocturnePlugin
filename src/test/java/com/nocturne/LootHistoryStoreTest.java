@@ -73,6 +73,25 @@ public class LootHistoryStoreTest
 		assertEquals(Long.valueOf(513_000L), ineligibleDrop.activityDurationMillis);
 	}
 
+	@Test public void persistsOnlyBoundedDropRejectionDetailsSeparatelyFromTiming() throws Exception
+	{
+		LootRecord record = record("rejected", "Tester", 15)
+			.withSubmission(SubmissionResult.rejected(403, "rsn_not_allowlisted"))
+			.withActivityTiming(308_400L, ActivityTimingStatus.ACCEPTED);
+		store().append(record);
+		LootRecord loaded = store().load("Tester", 0, 1).records.get(0);
+		assertEquals(Integer.valueOf(403), loaded.submissionHttpStatus);
+		assertEquals("rsn_not_allowlisted", loaded.submissionRejectionReason);
+		assertTrue(loaded.submissionLabel().contains("HTTP 403"));
+		assertEquals(Long.valueOf(308_400L), loaded.activityDurationMillis);
+		assertEquals(ActivityTimingStatus.ACCEPTED, loaded.activityTimingStatus);
+
+		LootRecord unsafe = record("unsafe-reason", "Tester", 16)
+			.withSubmission(SubmissionResult.rejected(422, "member id 42 private"));
+		assertNull(unsafe.submissionRejectionReason);
+		assertFalse(unsafe.submissionLabel().contains("member id"));
+	}
+
 	@Test public void standaloneCompletionCardCanBeMergedWithLaterLootWithoutChangingItsIdentity() throws Exception
 	{
 		BossCompletionContext context = BossCompletionContext.fromActiveSoloActivity(

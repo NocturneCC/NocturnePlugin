@@ -112,6 +112,7 @@ public class NocturnePlugin extends Plugin
 	private final AtomicBoolean emojiRegistrationDiagnosticLogged = new AtomicBoolean();
 	private final LootEventDeduplicator lootEventDeduplicator = new LootEventDeduplicator();
 	private final DoomRunTracker doomRunTracker = new DoomRunTracker();
+	private final DoomCompletionHeaderCapture doomHeaderCapture = new DoomCompletionHeaderCapture();
 
 	// The lifecycle token prevents queued UI work from reviving a disabled plugin.
 	private volatile Object lifecycle;
@@ -247,6 +248,7 @@ public class NocturnePlugin extends Plugin
 		lifecycle = null;
 		clientSessionId = null;
 		lootEventDeduplicator.clear();
+		doomHeaderCapture.clear();
 		doomRunTracker.reset();
 		PluginTrackingConfigService catalog = trackingConfig;
 		trackingConfig = null;
@@ -299,6 +301,7 @@ public class NocturnePlugin extends Plugin
 	public void onGameTick(GameTick event)
 	{
 		gameTick++;
+		pollDoomCompletionHeader();
 		updatePlayer();
 		GroupTracker tracker = groups;
 		if (tracker != null)
@@ -331,6 +334,7 @@ public class NocturnePlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
+			doomHeaderCapture.clear();
 			finishDoomRun();
 			doomRunTracker.reset();
 			activeRsn = null;
@@ -344,6 +348,7 @@ public class NocturnePlugin extends Plugin
 		}
 		else if (event.getGameState() == GameState.HOPPING)
 		{
+			doomHeaderCapture.clear();
 			finishDoomRun();
 			doomRunTracker.reset();
 			withPanel(NocturnePanel::clearPendingActivityLinks);
@@ -363,15 +368,40 @@ public class NocturnePlugin extends Plugin
 	{
 		if (event.getGroupId() != (InterfaceID.DomEndLevelUi.UNIVERSE >>> 16)
 			|| client.getGameState() != GameState.LOGGED_IN) return;
+		String text = doomHeaderText();
+		Integer completed = DoomRunTracker.completedLevel(text);
+		if (completed != null)
+		{
+			captureDoomLevel(completed);
+		}
+		// The header can still be populated or revised by the UI script after the
+		// widget-loaded event. Keep a short baseline window even when an initial
+		// value was readable, so a subsequent floor completion is not missed.
+		doomHeaderCapture.arm(text);
+	}
+
+	private String doomHeaderText()
+	{
 		Widget header = client.getWidget(InterfaceID.DomEndLevelUi.DELVE_HEADER);
+		return header == null ? null : header.getText();
+	}
+
+	private void pollDoomCompletionHeader()
+	{
+		if (!doomHeaderCapture.isPending()) return;
+		Integer completed = doomHeaderCapture.poll(doomHeaderText());
+		if (completed != null) captureDoomLevel(completed);
+	}
+
+	private void captureDoomLevel(int completed)
+	{
 		Player local = client.getLocalPlayer();
-		if (header == null || local == null || local.getName() == null) return;
-		Integer completed = DoomRunTracker.completedLevel(header.getText());
-		if (completed == null) return;
+		if (client.getGameState() != GameState.LOGGED_IN || local == null || local.getName() == null) return;
 		DoomRunTracker.Progress progress = doomRunTracker.completeLevel(completed, local.getName(),
 			clientSessionId, gameTick, java.time.Instant.now());
 		ChallengeCompletionCapture capture = challengeCapture;
-		if (capture != null) capture.onDoomLevelProgress(progress, config.submitChallengeTimes(), config.showDiagnostics());
+		if (capture != null) capture.onDoomLevelProgress(progress,
+			config.submitChallengeTimes(), config.showDiagnostics());
 	}
 
 	@Subscribe
@@ -381,9 +411,15 @@ public class NocturnePlugin extends Plugin
 		if (widget == null) return;
 		int id = widget.getId();
 		if (id == InterfaceID.DomEndLevelUi.BTN_CLAIM)
+		{
+			doomHeaderCapture.clear();
 			finishDoomRun(DoomRunTracker.EndAction.CLAIM_REWARDS);
+		}
 		else if (id == InterfaceID.DomEndLevelUi.BTN_LEAVE)
+		{
+			doomHeaderCapture.clear();
 			finishDoomRun(DoomRunTracker.EndAction.LEAVE_DELVING);
+		}
 	}
 
 	@Subscribe
@@ -632,12 +668,12 @@ public class NocturnePlugin extends Plugin
 		Object token = lifecycle;
 		if (sender != null && config.submitTestDrops() && eligible)
 		{
-			Consumer<SubmissionStatus> update = status ->
+			Consumer<SubmissionResult> update = result ->
 			{
-				persist(record.withSubmission(status), true);
+				persist(record.withSubmission(result), true);
 				if (lifecycle == token) withPanel(view ->
 				{
-					view.setSubmission(record.id, status);
+					view.setSubmission(record.id, result);
 				});
 			};
 			if (config.attachScreenshots())

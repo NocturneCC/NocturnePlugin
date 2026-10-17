@@ -22,7 +22,7 @@ final class SubmissionService
 	private static final String ENDPOINT = "https://nocturne.events/api/plugin/dev/drops";
 	private final OkHttpClient http;
 	private final Gson gson;
-	private final Map<Call, Consumer<SubmissionStatus>> pending = new HashMap<>();
+	private final Map<Call, Consumer<SubmissionResult>> pending = new HashMap<>();
 	private boolean closed;
 
 	SubmissionService(OkHttpClient http, Gson gson)
@@ -78,40 +78,40 @@ final class SubmissionService
 		return body;
 	}
 
-	synchronized void submit(LootRecord record, Consumer<SubmissionStatus> update)
+	synchronized void submit(LootRecord record, Consumer<SubmissionResult> update)
 	{
 		submit(record, null, update);
 	}
 
 	synchronized void submit(LootRecord record, SubmissionScreenshot screenshot,
-		Consumer<SubmissionStatus> update)
+		Consumer<SubmissionResult> update)
 	{
-		if (closed) { update.accept(SubmissionStatus.CANCELLED); return; }
-		if (pending.size() >= 8) { update.accept(SubmissionStatus.BUSY); return; }
+		if (closed) { update.accept(SubmissionResult.of(SubmissionStatus.CANCELLED)); return; }
+		if (pending.size() >= 8) { update.accept(SubmissionResult.of(SubmissionStatus.BUSY)); return; }
 		Request request = new Request.Builder().url(ENDPOINT)
 			.post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"),
 				gson.toJson(payload(record, screenshot))))
 			.build();
 		Call call = http.newCall(request);
 		pending.put(call, update);
-		update.accept(SubmissionStatus.SENDING);
+		update.accept(SubmissionResult.of(SubmissionStatus.SENDING));
 		call.enqueue(new Callback()
 		{
 			@Override
 			public void onFailure(Call failed, IOException error)
 			{
-				finish(failed, SubmissionStatus.UNCERTAIN);
+				finish(failed, SubmissionResult.of(SubmissionStatus.UNCERTAIN));
 			}
 
 			@Override
 			public void onResponse(Call completed, Response response)
 			{
-				SubmissionStatus status = SubmissionStatus.UNCERTAIN;
+				SubmissionResult result = SubmissionResult.of(SubmissionStatus.UNCERTAIN);
 				try (Response ignored = response)
 				{
 					if (response.code() >= 400 && response.code() < 500)
 					{
-						status = SubmissionStatus.REJECTED;
+						result = SubmissionResult.rejected(response.code(), rejectionReason(response));
 					}
 					else if (response.body() != null && (response.code() == 200 || response.code() == 201))
 					{
@@ -120,7 +120,7 @@ final class SubmissionService
 						if (response.body().source().getBuffer().size() <= 1024)
 						{
 							JsonObject reply = gson.fromJson(response.body().source().readUtf8(), JsonObject.class);
-							if (acknowledges(reply, record.id)) status = SubmissionStatus.ACCEPTED;
+							if (acknowledges(reply, record.id)) result = SubmissionResult.of(SubmissionStatus.ACCEPTED);
 						}
 					}
 				}
@@ -128,9 +128,22 @@ final class SubmissionService
 				{
 					// A timeout or malformed response cannot establish whether storage happened.
 				}
-				finish(completed, status);
+				finish(completed, result);
 			}
 		});
+	}
+
+	private String rejectionReason(Response response)
+	{
+		if (response.body() == null) return null;
+		try
+		{
+			response.body().source().request(1025);
+			if (response.body().source().getBuffer().size() > 1024) return null;
+			JsonObject body = gson.fromJson(response.body().source().readUtf8(), JsonObject.class);
+			return SubmissionResult.safeReason(body);
+		}
+		catch (IOException | RuntimeException ignored) { return null; }
 	}
 
 	static boolean acknowledges(JsonObject reply, String id)
@@ -146,10 +159,10 @@ final class SubmissionService
 		catch (RuntimeException ignored) { return false; }
 	}
 
-	private synchronized void finish(Call call, SubmissionStatus status)
+	private synchronized void finish(Call call, SubmissionResult result)
 	{
-		Consumer<SubmissionStatus> update = pending.remove(call);
-		if (update != null) update.accept(status);
+		Consumer<SubmissionResult> update = pending.remove(call);
+		if (update != null) update.accept(result);
 	}
 
 	synchronized void cancelPending()
@@ -157,7 +170,7 @@ final class SubmissionService
 		pending.forEach((call, update) ->
 		{
 			call.cancel();
-			update.accept(SubmissionStatus.CANCELLED);
+			update.accept(SubmissionResult.of(SubmissionStatus.CANCELLED));
 		});
 		pending.clear();
 	}

@@ -680,12 +680,18 @@ final class NocturnePanel extends PluginPanel
 
 	void setSubmission(String id, SubmissionStatus status)
 	{
+		setSubmission(id, SubmissionResult.of(status));
+	}
+
+	void setSubmission(String id, SubmissionResult result)
+	{
 		for (LootRecord record : history.getRecords())
 		{
 			if (record.id.equals(id))
 			{
 				ViewportAnchor anchor = captureViewportAnchor();
-				record.submission = status;
+				LootRecord updated = record.withSubmission(result);
+				history.replace(updated);
 				renderHistory();
 				restoreAfterLayout(anchor, beginIndependentRestore());
 				break;
@@ -818,7 +824,7 @@ final class NocturnePanel extends PluginPanel
 			}
 			if (diagnostics || hasActionableDeliveryState(record.submission))
 			{
-				card.add(note(record.submission.label, CARD));
+				card.add(note(record.submissionLabel(), CARD));
 			}
 			if (diagnostics)
 			{

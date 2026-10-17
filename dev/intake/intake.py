@@ -232,8 +232,20 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
         return [raw]
 
     def application(environ, start_response):
-        def error(code):
-            return reply(start_response, code, {"status": "not_accepted", "storage": "development"})
+        def error(code, reason=None):
+            bounded_reasons = {
+                400: "invalid_request", 403: "rsn_not_allowlisted",
+                404: "route_not_found", 405: "method_not_allowed",
+                409: "event_id_conflict", 411: "content_length_required",
+                413: "request_too_large", 415: "json_required",
+                429: "rate_limited", 503: "intake_unavailable",
+                507: "storage_capacity",
+            }
+            return reply(start_response, code, {
+                "status": "not_accepted", "storage": "development",
+                "reason": reason if reason in bounded_reasons.values()
+                    else bounded_reasons.get(code, "invalid_request"),
+            })
         path = environ.get("PATH_INFO")
         if path == EMOJI_MANIFEST_PATH or EMOJI_ASSET_PATH.fullmatch(path or ""):
             if not emoji_public_root:
@@ -279,7 +291,7 @@ def create_app(state_dir=None, allowed_rsns=None, clock=None, handoff=None,
             stored = storage_payload(data, name)
             digest = screenshot_digest(data)
         except PermissionError:
-            return error(403)
+            return error(403, "rsn_not_allowlisted")
         except sqlite3.Error:
             return error(503)
         except (ValueError, TypeError, OverflowError, RecursionError, AttributeError):

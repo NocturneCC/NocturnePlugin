@@ -14,6 +14,22 @@ public class DoomRunTrackerTest
 		assertNull(DoomRunTracker.completedLevel("Level 10001 Complete!"));
 	}
 
+	@Test public void delayedCompletionHeaderIsRetriedButStaleHeaderAndExpiredWaitFailClosed()
+	{
+		DoomCompletionHeaderCapture capture = new DoomCompletionHeaderCapture();
+		capture.arm("Delve");
+		assertNull(capture.poll("Delve"));
+		assertEquals(Integer.valueOf(7), capture.poll("<col=ff0000>Level&nbsp;7 Complete!</col>"));
+		assertFalse(capture.isPending());
+
+		capture.arm("Level 7 Complete!");
+		assertNull("the value present at widget-load is not replayed as a new completion",
+			capture.poll("Level 7 Complete!"));
+		assertNull(capture.poll("Level 7 Complete!"));
+		assertNull(capture.poll("Level 7 Complete!"));
+		assertFalse(capture.isPending());
+	}
+
 	@Test public void successiveLevelsAndDeathDuringNextLevelRetainHighestCompleted()
 	{
 		DoomRunTracker tracker = new DoomRunTracker();

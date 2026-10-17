@@ -6,7 +6,7 @@ enum SubmissionStatus
 	UNPRICED("Not accepted — price unavailable"),
 	INELIGIBLE("Not accepted — below 500,000 gp per unit"),
 	SENDING("Sending to test intake…"),
-	ACCEPTED("Received by test intake"),
+	ACCEPTED("Stored by test intake · pending review"),
 	UNCERTAIN("Delivery unconfirmed"),
 	REJECTED("Not accepted by test intake"),
 	BUSY("Not sent — queue full"),

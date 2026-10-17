@@ -12,6 +12,8 @@ final class LootRecord
 	final String occurredAt;
 	// Updated only on the Swing event thread.
 	SubmissionStatus submission = SubmissionStatus.LOCAL;
+	Integer submissionHttpStatus;
+	String submissionRejectionReason;
 	// Updated only on the Swing event thread after authoritative tracking feedback.
 	String activityTrackingNotice;
 	// Completion capture is independent of the drop submission state above.
@@ -123,6 +125,28 @@ final class LootRecord
 	{
 		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, status,
 			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
+		copyActivityAndSubmissionDetails(updated);
+		updated.submissionHttpStatus = submissionHttpStatus;
+		updated.submissionRejectionReason = submissionRejectionReason;
+		return updated;
+	}
+
+	LootRecord withSubmission(SubmissionResult result)
+	{
+		LootRecord updated = withSubmission(result.status);
+		updated.submissionHttpStatus = result.httpStatus;
+		updated.submissionRejectionReason = SubmissionResult.isSafeReason(result.reason)
+			? result.reason : null;
+		return updated;
+	}
+
+	String submissionLabel()
+	{
+		return new SubmissionResult(submission, submissionHttpStatus, submissionRejectionReason).displayLabel();
+	}
+
+	private void copyActivityAndSubmissionDetails(LootRecord updated)
+	{
 		updated.activityTrackingNotice = activityTrackingNotice;
 		updated.activityDurationMillis = activityDurationMillis;
 		updated.activityNumericValue = activityNumericValue;
@@ -131,13 +155,15 @@ final class LootRecord
 		updated.activityTimingStatus = activityTimingStatus;
 		updated.completionLinkId = completionLinkId;
 		updated.activityEventId = activityEventId;
-		return updated;
+		updated.submissionHttpStatus = submissionHttpStatus;
+		updated.submissionRejectionReason = submissionRejectionReason;
 	}
 
 	LootRecord withActivityTiming(long durationMillis, ActivityTimingStatus status)
 	{
 		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, submission,
 			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
+		copyActivityAndSubmissionDetails(updated);
 		updated.activityTrackingNotice = activityTrackingNotice;
 		updated.activityDurationMillis = durationMillis;
 		updated.activityNumericValue = activityNumericValue;
@@ -153,6 +179,7 @@ final class LootRecord
 	{
 		LootRecord updated = new LootRecord(id, occurredAt, rsn, source, items, group, submission,
 			activityKey, activityDisplayName, modeKey, ordinaryNpcLoot, completionOnly);
+		copyActivityAndSubmissionDetails(updated);
 		updated.activityTrackingNotice = activityTrackingNotice;
 		updated.activityDurationMillis = activityDurationMillis;
 		updated.activityTimingStatus = status;
@@ -184,6 +211,7 @@ final class LootRecord
 		LootRecord merged = new LootRecord(loot.id, occurredAt, loot.rsn, loot.source, loot.items,
 			loot.group, loot.submission, activityKey, activityDisplayName, modeKey,
 			loot.ordinaryNpcLoot, false);
+		loot.copyActivityAndSubmissionDetails(merged);
 		merged.activityTrackingNotice = loot.activityTrackingNotice;
 		merged.activityDurationMillis = activityDurationMillis;
 		merged.activityNumericValue = activityNumericValue;

@@ -84,6 +84,10 @@ final class LootHistoryStore
 			if (replacement.activityDurationMillis == null && existing.activityDurationMillis != null)
 				replacement = replacement.withActivityTiming(existing.activityDurationMillis,
 					existing.activityTimingStatus);
+		if (replacement.submissionHttpStatus == null)
+			replacement.submissionHttpStatus = existing.submissionHttpStatus;
+		if (replacement.submissionRejectionReason == null)
+			replacement.submissionRejectionReason = existing.submissionRejectionReason;
 			if (replacement.activityNumericValue == null && existing.activityNumericValue != null)
 				replacement = replacement.withActivityCompletion(existing.activityNumericValue,
 					existing.activityNumericLabel, existing.activityNumericUnit,
@@ -306,6 +310,10 @@ final class LootHistoryStore
 		object.add("items", gson.toJsonTree(record.items));
 		object.add("group", gson.toJsonTree(record.group));
 		object.addProperty("submission", record.submission.name());
+		if (record.submissionHttpStatus != null)
+			object.addProperty("submissionHttpStatus", record.submissionHttpStatus);
+		if (SubmissionResult.isSafeReason(record.submissionRejectionReason))
+			object.addProperty("submissionRejectionReason", record.submissionRejectionReason);
 		if (record.ordinaryNpcLoot) object.addProperty("ordinaryNpcLoot", true);
 		if (record.completionOnly) object.addProperty("completionOnly", true);
 		if (record.activityEventId != null) object.addProperty("activityEventId", record.activityEventId);
@@ -368,6 +376,17 @@ final class LootHistoryStore
 			if (completionOnly)
 				record = new LootRecord(id, occurred, rsn, source, List.of(items), group, status,
 					activityKey, activityDisplayName, modeKey, false, true);
+			if (object.has("submissionHttpStatus") && object.get("submissionHttpStatus").isJsonPrimitive())
+			{
+				int statusCode = object.get("submissionHttpStatus").getAsInt();
+				if (statusCode >= 400 && statusCode <= 599) record.submissionHttpStatus = statusCode;
+			}
+			if (object.has("submissionRejectionReason")
+				&& object.get("submissionRejectionReason").isJsonPrimitive())
+			{
+				String reason = object.get("submissionRejectionReason").getAsString();
+				if (SubmissionResult.isSafeReason(reason)) record.submissionRejectionReason = reason;
+			}
 			if (object.has("activityEventId") && object.get("activityEventId").isJsonPrimitive()
 				&& object.getAsJsonPrimitive("activityEventId").isString())
 			{

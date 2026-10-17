@@ -81,7 +81,8 @@ class IntakeTest(unittest.TestCase):
     def test_reused_id_with_changed_payload_conflicts(self):
         self.send()
         self.body["items"][0]["quantity"] = 2
-        self.assertEqual(409, self.send()[0])
+        code, receipt = self.send()
+        self.assertEqual((409, "event_id_conflict"), (code, receipt["reason"]))
 
     def test_distinct_ids_preserve_identical_kills(self):
         self.send()
@@ -90,7 +91,9 @@ class IntakeTest(unittest.TestCase):
 
     def test_unlisted_rsn_rejected_and_alias_normalization(self):
         self.body["rsn"] = "Other Player"
-        self.assertEqual(403, self.send()[0])
+        code, receipt = self.send()
+        self.assertEqual(403, code)
+        self.assertEqual("rsn_not_allowlisted", receipt["reason"])
         self.body["rsn"] = "SIMONS_ALT"
         self.assertEqual(201, self.send()[0])
 
@@ -99,12 +102,18 @@ class IntakeTest(unittest.TestCase):
         self.assertEqual(400, self.send()[0])
 
     def test_request_limits_and_bad_json(self):
-        self.assertEqual(413, self.send(raw=b" " * (MAX_BODY + 1))[0])
-        self.assertEqual(400, self.send(raw=b"{")[0])
-        self.assertEqual(411, self.send(CONTENT_LENGTH="")[0])
-        self.assertEqual(415, self.send(CONTENT_TYPE="text/plain")[0])
-        self.assertEqual(405, self.send(REQUEST_METHOD="GET")[0])
-        self.assertEqual(404, self.send(PATH_INFO="/api/plugin/dev/drops/other")[0])
+        code, body = self.send(raw=b" " * (MAX_BODY + 1))
+        self.assertEqual((413, "request_too_large"), (code, body["reason"]))
+        code, body = self.send(raw=b"{")
+        self.assertEqual((400, "invalid_request"), (code, body["reason"]))
+        code, body = self.send(CONTENT_LENGTH="")
+        self.assertEqual((411, "content_length_required"), (code, body["reason"]))
+        code, body = self.send(CONTENT_TYPE="text/plain")
+        self.assertEqual((415, "json_required"), (code, body["reason"]))
+        code, body = self.send(REQUEST_METHOD="GET")
+        self.assertEqual((405, "method_not_allowed"), (code, body["reason"]))
+        code, body = self.send(PATH_INFO="/api/plugin/dev/drops/other")
+        self.assertEqual((404, "route_not_found"), (code, body["reason"]))
 
     def test_item_types_and_duplicates(self):
         for items in [[], [{"item_id": True, "quantity": 1, "unit_price_gp": 1}],

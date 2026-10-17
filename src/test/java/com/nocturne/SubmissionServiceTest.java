@@ -113,15 +113,28 @@ public class SubmissionServiceTest
 	@Test
 	public void asyncDeliveryRequiresReceiptAndHandlesErrors() throws Exception
 	{
-		assertDelivery(201, "receipt", SubmissionStatus.ACCEPTED);
+		SubmissionResult accepted = assertDelivery(201, "receipt", SubmissionStatus.ACCEPTED);
+		assertEquals("Stored by test intake · pending review", accepted.displayLabel());
 		assertDelivery(200, "<html>Website</html>", SubmissionStatus.UNCERTAIN);
-		assertDelivery(400, "{}", SubmissionStatus.REJECTED);
+		SubmissionResult rejected = assertDelivery(403,
+			"{\"reason\":\"rsn_not_allowlisted\"}", SubmissionStatus.REJECTED);
+		assertEquals(Integer.valueOf(403), rejected.httpStatus);
+		assertEquals("rsn_not_allowlisted", rejected.reason);
+		assertTrue(rejected.displayLabel().contains("HTTP 403"));
+		assertTrue(rejected.displayLabel().contains("RSN not on test allowlist"));
+		SubmissionResult unsafe = assertDelivery(422,
+			"{\"reason\":\"secret user payload\",\"detail\":\"must not leak\"}",
+			SubmissionStatus.REJECTED);
+		assertEquals(Integer.valueOf(422), unsafe.httpStatus);
+		assertNull(unsafe.reason);
+		assertFalse(unsafe.displayLabel().contains("secret"));
+		assertFalse(unsafe.displayLabel().contains("must not leak"));
 		assertDelivery(503, "{}", SubmissionStatus.UNCERTAIN);
 		assertDelivery(200, "x".repeat(2048), SubmissionStatus.UNCERTAIN);
 		assertDelivery(0, "", SubmissionStatus.UNCERTAIN);
 	}
 
-	private void assertDelivery(int code, String body, SubmissionStatus expected) throws Exception
+	private SubmissionResult assertDelivery(int code, String body, SubmissionStatus expected) throws Exception
 	{
 		LootRecord record = record();
 		OkHttpClient http = new OkHttpClient.Builder().addInterceptor(chain ->
@@ -137,13 +150,19 @@ public class SubmissionServiceTest
 		{
 			CountDownLatch done = new CountDownLatch(1);
 			List<SubmissionStatus> states = new ArrayList<>();
-			service.submit(record, status ->
+			List<SubmissionResult> results = new ArrayList<>();
+			service.submit(record, result ->
 			{
-				states.add(status);
-				if (status != SubmissionStatus.SENDING) done.countDown();
+				states.add(result.status);
+				if (result.status != SubmissionStatus.SENDING)
+				{
+					results.add(result);
+					done.countDown();
+				}
 			});
 			assertTrue(done.await(3, TimeUnit.SECONDS));
 			assertEquals(List.of(SubmissionStatus.SENDING, expected), states);
+			return results.get(0);
 		}
 		finally
 		{
